@@ -38,6 +38,10 @@ def main():
     ap.add_argument('--w-veh', type=float, default=0.36)
     ap.add_argument('--kappa-bound', type=float, default=1.6)
     ap.add_argument('--stepsize', type=float, default=0.10)
+    ap.add_argument('--centerline-only', action='store_true',
+                    help='no lateral optimization: follow the centerline with a '
+                         'curvature-limited speed profile. Safest line when the '
+                         'corridor is too narrow to optimize into.')
     args = ap.parse_args()
     out = args.out or args.centerline.replace('_centerline.csv', '_raceline')
 
@@ -55,10 +59,14 @@ def main():
     coeffs_x, coeffs_y, M, normvec = tph.calc_splines.calc_splines(
         path=refline_cl, use_dist_scaling=False)
 
-    alpha = tph.opt_min_curv.opt_min_curv(
-        reftrack=reftrack, normvectors=normvec, A=M,
-        kappa_bound=args.kappa_bound, w_veh=args.w_veh,
-        closed=True, print_debug=False)[0]
+    if args.centerline_only:
+        alpha = np.zeros(len(reftrack))
+        print('centerline-only: no lateral shift')
+    else:
+        alpha = tph.opt_min_curv.opt_min_curv(
+            reftrack=reftrack, normvectors=normvec, A=M,
+            kappa_bound=args.kappa_bound, w_veh=args.w_veh,
+            closed=True, print_debug=False)[0]
 
     # Light circular smoothing of the lateral shift: isolated single-point
     # solutions show up as curvature spikes that crater the velocity profile.
