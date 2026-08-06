@@ -2,7 +2,9 @@
 upstream/
 
 # Recorded data, maps, rosbags (large binaries — keep out of git)
-data/
+data/logs/
+data/bags/
+data/screens/
 *.bag
 *.mcap
 *.db3
