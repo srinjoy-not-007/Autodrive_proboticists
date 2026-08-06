@@ -37,15 +37,20 @@ class Arbiter(Node):
         p = self.declare_parameters('', [
             ('min_loc_score', 0.12),      # below -> reactive
             ('pose_timeout', 0.6),        # s without a pose -> reactive
-            ('ttc_brake', 0.55),          # s to impact -> emergency
-            ('min_clearance', 0.32),      # m ahead -> emergency regardless
+            ('ttc_brake', 0.45),          # s to impact -> enter BRAKE
+            ('ttc_clear', 0.90),          # s to impact -> may leave BRAKE
+            ('min_clearance', 0.30),      # m ahead -> enter BRAKE regardless
+            ('clear_clearance', 0.55),    # m ahead -> may leave BRAKE
             ('brake_throttle', -0.3),
             ('corridor_half_width', 0.22),  # m; beams within this are "ahead"
-            ('resume_clear_s', 0.6),      # s of clear road before resuming
+            ('min_dwell_s', 0.4),         # min time in a mode before leaving it
+            ('brake_dwell_s', 0.5),       # min time braking once engaged
         ])
-        (self.min_score, self.pose_timeout, self.ttc_brake, self.min_clear,
-         self.brake_throttle, self.corridor_hw, self.resume_clear) = \
+        (self.min_score, self.pose_timeout, self.ttc_brake, self.ttc_clear,
+         self.min_clear, self.clear_clear, self.brake_throttle,
+         self.corridor_hw, self.min_dwell, self.brake_dwell) = \
             [x.value for x in p]
+        self.mode_since = 0.0
 
         self.pp = None            # (steer, throttle, stamp)
         self.ftg = None
@@ -53,7 +58,6 @@ class Arbiter(Node):
         self.last_pose_t = 0.0
         self.speed = 0.0
         self.mode = 'REACTIVE'
-        self._clear_since = None
         self._front = 10.0
         self._gap_steer = 0.0
 
@@ -115,36 +119,53 @@ class Arbiter(Node):
         self.decide()
 
     def decide(self):
+        """Pick a mode with hysteresis and a dwell time.
+
+        Deciding afresh each scan makes the modes chatter: an earlier version
+        logged ~3200 RACELINE->BRAKE and ~3200 REACTIVE->RACELINE switches in a
+        single run, so the car alternately accelerated and braked and ground
+        along the wall. Entering a mode is therefore cheap, leaving it is not:
+        separate enter/exit thresholds, plus a minimum time in mode.
+        """
         now = self.now()
         ttc = self._front / max(self.speed, 0.05)
-        emergency = (self._front < self.min_clear) or (ttc < self.ttc_brake)
         loc_ok = (self.loc_score >= self.min_score and
                   (now - self.last_pose_t) < self.pose_timeout)
+        in_mode = now - self.mode_since
 
-        if emergency:
-            self._clear_since = None
-            mode = 'BRAKE'
+        danger = (self._front < self.min_clear) or (ttc < self.ttc_brake)
+        still_risky = (self._front < self.clear_clear) or (ttc < self.ttc_clear)
+
+        if self.mode == 'BRAKE':
+            # Leave only once genuinely clear and after the dwell time
+            mode = 'BRAKE' if (still_risky or in_mode < self.brake_dwell) \
+                else ('RACELINE' if loc_ok and self.pp is not None else 'REACTIVE')
+        elif danger:
+            mode = 'BRAKE'                      # entry is always immediate
+        elif self.mode == 'RACELINE':
+            mode = 'RACELINE' if (loc_ok or in_mode < self.min_dwell) else 'REACTIVE'
+        else:                                    # REACTIVE
+            mode = 'RACELINE' if (loc_ok and self.pp is not None and
+                                  in_mode >= self.min_dwell) else 'REACTIVE'
+
+        if mode == 'BRAKE':
             steer = vehicle.steer_to_cmd(self._gap_steer)
             throttle = self.brake_throttle
+        elif mode == 'RACELINE' and self.pp is not None:
+            steer, throttle = self.pp
+        elif self.ftg is not None:
+            mode = 'REACTIVE'
+            steer, throttle = self.ftg
         else:
-            if self._clear_since is None:
-                self._clear_since = now
-            recovered = (now - self._clear_since) > self.resume_clear
-            if loc_ok and self.pp is not None and recovered:
-                mode = 'RACELINE'
-                steer, throttle = self.pp
-            elif self.ftg is not None:
-                mode = 'REACTIVE'
-                steer, throttle = self.ftg
-            else:
-                mode = 'REACTIVE'
-                steer, throttle = 0.0, 0.0
+            mode = 'REACTIVE'
+            steer, throttle = 0.0, 0.0
 
         if mode != self.mode:
             self.get_logger().info(
                 f'{self.mode} -> {mode} (front {self._front:.2f} m, '
                 f'ttc {ttc:.2f} s, loc {self.loc_score:.2f})')
             self.mode = mode
+            self.mode_since = now
 
         self.pub_steer.publish(Float32(data=float(np.clip(steer, -1, 1))))
         self.pub_throttle.publish(Float32(data=float(np.clip(throttle, -1, 1))))

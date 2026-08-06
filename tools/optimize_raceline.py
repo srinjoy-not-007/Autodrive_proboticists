@@ -26,6 +26,38 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Body box relative to the rear axle (the pose point), from the tech guide:
+# length 0.500 m, width 0.270 m.
+REAR_OVERHANG = 0.088
+FRONT = 0.500 - REAR_OVERHANG
+HALF_W = 0.270 / 2.0
+
+
+def corner_sweep(kappa):
+    """Extra width the body sweeps beyond the rear-axle path, per point.
+
+    The pose point is the rear axle, but the car is 0.5 m long: on a curve of
+    radius R the outer front corner rides on a larger radius, so a path whose
+    centre clears the wall can still put a corner through it. Measured on real
+    runs this costs up to 0.45 m, which is why a raceline planned with only the
+    vehicle width collided while staying nominally clear.
+    """
+    R = 1.0 / np.maximum(np.abs(kappa), 1e-3)
+    swing = np.sqrt((R + HALF_W) ** 2 + FRONT ** 2) - R
+    return np.clip(swing, HALF_W, 0.60)
+
+
+def curvature_of(reftrack, normvec, alpha, stepsize):
+    """Curvature of the candidate line, sampled back at reference points."""
+    rl, _, cx, cy, inds, tv, _, _, _ = tph.create_raceline.create_raceline(
+        refline=reftrack[:, :2], normvectors=normvec, alpha=alpha,
+        stepsize_interp=stepsize)
+    _, kap = tph.calc_head_curv_an.calc_head_curv_an(
+        coeffs_x=cx, coeffs_y=cy, ind_spls=inds, t_spls=tv)
+    kap = ndimage.median_filter(kap, size=5, mode='wrap')
+    idx = np.linspace(0, len(kap) - 1, len(reftrack)).astype(int)
+    return kap[idx]
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -35,9 +67,12 @@ def main():
     ap.add_argument('--ay', type=float, default=3.0)
     ap.add_argument('--ax', type=float, default=3.0)
     ap.add_argument('--brake', type=float, default=4.0)
-    ap.add_argument('--w-veh', type=float, default=0.36)
+    ap.add_argument('--w-veh', type=float, default=0.16,
+                    help='extra safety on top of the swept footprint')
     ap.add_argument('--kappa-bound', type=float, default=1.6)
     ap.add_argument('--stepsize', type=float, default=0.10)
+    ap.add_argument('--sweep-iters', type=int, default=2,
+                    help='corridor shrink / re-optimize passes for body sweep')
     ap.add_argument('--centerline-only', action='store_true',
                     help='no lateral optimization: follow the centerline with a '
                          'curvature-limited speed profile. Safest line when the '
@@ -63,10 +98,26 @@ def main():
         alpha = np.zeros(len(reftrack))
         print('centerline-only: no lateral shift')
     else:
-        alpha = tph.opt_min_curv.opt_min_curv(
-            reftrack=reftrack, normvectors=normvec, A=M,
-            kappa_bound=args.kappa_bound, w_veh=args.w_veh,
-            closed=True, print_debug=False)[0]
+        # Iterate: optimize, measure how far the body sweeps at the resulting
+        # curvature, shrink the corridor by that, re-optimize. One pass with a
+        # constant w_veh cannot express this because the sweep depends on the
+        # solution's own curvature.
+        work = reftrack.copy()
+        alpha = None
+        for it in range(args.sweep_iters):
+            alpha = tph.opt_min_curv.opt_min_curv(
+                reftrack=work, normvectors=normvec, A=M,
+                kappa_bound=args.kappa_bound, w_veh=args.w_veh,
+                closed=True, print_debug=False)[0]
+            k_ref = curvature_of(work, normvec, alpha, args.stepsize)
+            sweep = corner_sweep(k_ref)
+            # `sweep` already includes the body half-width, so the usable
+            # half-corridor for the *path* is the wall distance minus it.
+            keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
+            shrink = float(np.mean(reftrack[:, 2:4] - keep))
+            work = np.column_stack([reftrack[:, :2], keep])
+            print(f'  sweep pass {it+1}: corridor shrunk by {shrink:.3f} m '
+                  f'(max sweep {sweep.max():.3f} m)')
 
     # Light circular smoothing of the lateral shift: isolated single-point
     # solutions show up as curvature spikes that crater the velocity profile.
