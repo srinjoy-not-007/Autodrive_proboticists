@@ -53,11 +53,13 @@ class ParticleFilter(Node):
             ('init_spread', 0.6),
             ('lost_threshold', 0.22),     # normalized score below = lost
             ('lost_patience', 5),         # consecutive bad scans before reinit
+            ('throttle_to_mps', 25.0),    # 1/0.040, from calibration
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
-         self.init_spread, self.lost_thresh, self.lost_patience) = \
-            [x.value for x in p]
+         self.init_spread, self.lost_thresh, self.lost_patience,
+         self.throttle_to_mps) = [x.value for x in p]
+        self.speed_cmd = 0.0
 
         self.load_map(map_prefix)
         self.load_centerline(centerline_csv)
@@ -78,6 +80,7 @@ class ParticleFilter(Node):
         self.create_subscription(JointState, f'{ns}/right_encoder',
                                  lambda m: self.on_enc('R', m), qos)
         self.create_subscription(LaserScan, f'{ns}/lidar', self.on_scan, qos)
+        self.create_subscription(Float32, f'{ns}/throttle', self.on_throttle, qos)
         self.pub_pose = self.create_publisher(PoseStamped, '/pit_crew/pose', 10)
         self.pub_particles = self.create_publisher(PoseArray,
                                                    '/pit_crew/particles', 1)
@@ -142,9 +145,15 @@ class ParticleFilter(Node):
     # -------------------------------------------------------------- sensors
 
     def on_enc(self, wheel, msg: JointState):
-        if msg.position:
-            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.speed_est.update(wheel, t, msg.position[0])
+        # Encoder speed is unusable here (see vehicle.SpeedEstimator); speed
+        # comes from the applied throttle via the calibrated curve instead.
+        pass
+
+    def on_throttle(self, msg: Float32):
+        # Applied-throttle feedback -> speed. A random-walk motion model can
+        # keep up at 1 m/s mapping pace but not at racing pace, where the car
+        # covers ~0.25 m between 10 Hz scans.
+        self.speed_cmd = max(0.0, float(msg.data)) * self.throttle_to_mps
 
     def on_imu(self, msg: Imu):
         self.imu_yaw = yaw_from_quat(msg.orientation)
@@ -159,11 +168,6 @@ class ParticleFilter(Node):
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
         self.last_t = t
 
-        if self.speed_est.jumped:
-            self.speed_est.jumped = False
-            self.get_logger().warn('encoder jump: teleport suspected')
-            self.init_particles_global()
-
         self.predict(dt)
         self.update(scan)
         self.publish(scan.header.stamp)
@@ -172,7 +176,7 @@ class ParticleFilter(Node):
         head = self.imu_yaw + self.pth
         # Cap per-update travel: a bad speed sample must not fling the whole
         # particle set off the map (from which there is no recovery).
-        step = float(np.clip(self.speed_est.speed * dt, -0.6, 0.6))
+        step = float(np.clip(self.speed_cmd * dt, -0.6, 0.6))
         self.px += step * np.cos(head) + np.random.normal(0, self.noise_xy, self.n_p)
         self.py += step * np.sin(head) + np.random.normal(0, self.noise_xy, self.n_p)
         self.pth += np.random.normal(0, self.noise_th, self.n_p)
