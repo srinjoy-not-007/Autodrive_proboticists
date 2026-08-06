@@ -1,12 +1,14 @@
 follow_the_gap:
   ros__parameters:
-    v_max: 2.0
+    v_max: 1.5
     v_min: 0.8
     clearance_for_vmax: 4.0
     steer_slowdown: 0.5
     disparity_threshold: 0.4
-    extend_margin: 0.20
-    bubble_radius: 0.30
+    extend_margin: 0.30
+    bubble_radius: 0.35
     fov_limit_deg: 90.0
     range_clip: 8.0
     steer_sign: 1.0           # flip to -1.0 if steering is mirrored in sim
+    steer_alpha: 0.5
+    center_gain: 0.25

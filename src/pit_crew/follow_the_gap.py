@@ -33,10 +33,14 @@ class FollowTheGap(Node):
             ('fov_limit_deg', 100.0),       # gap search restricted to ±this
             ('range_clip', 8.0),            # m; ignore structure farther out
             ('steer_sign', 1.0),            # flip if sim convention is mirrored
+            ('steer_alpha', 0.5),           # steering low-pass (1.0 = no filter)
+            ('center_gain', 0.25),          # corridor-centering blend [rad]
         ])
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
          self.disp_thresh, self.extend_margin, self.bubble_r,
-         fov_deg, self.range_clip, self.steer_sign) = [x.value for x in p]
+         fov_deg, self.range_clip, self.steer_sign,
+         self.steer_alpha, self.center_gain) = [x.value for x in p]
+        self._steer_filt = 0.0
 
         self.fov_limit = math.radians(fov_deg)
         self.angles = vehicle.LIDAR_ANGLE_MIN + \
@@ -113,8 +117,21 @@ class FollowTheGap(Node):
 
         steer_angle = float(angles[best_idx])
 
+        # Corridor centering: bias away from the closer side wall
+        left = (angles > math.radians(60)) & (angles < math.radians(120))
+        right = (angles < math.radians(-60)) & (angles > math.radians(-120))
+        d_left = float(np.median(r[left]))
+        d_right = float(np.median(r[right]))
+        denom = d_left + d_right
+        if denom > 1e-3:
+            steer_angle += self.center_gain * (d_left - d_right) / denom
+
+        # Low-pass the steering to tame 10 Hz jitter
+        self._steer_filt += self.steer_alpha * (steer_angle - self._steer_filt)
+        steer_angle = self._steer_filt
+
         # Speed from straight-ahead clearance, shed speed while steering
-        ahead = np.abs(angles) <= math.radians(10.0)
+        ahead = np.abs(angles) <= math.radians(25.0)
         front_clear = float(np.min(r[ahead]))
         v = self.v_min + (self.v_max - self.v_min) * \
             min(1.0, front_clear / self.clear_vmax)
@@ -124,16 +141,28 @@ class FollowTheGap(Node):
         self._publish(steer_angle, v)
 
     def _best_gap_point(self, free: np.ndarray, proc: np.ndarray):
-        """Index of the deepest beam inside the widest contiguous free gap."""
+        """Deepest beam inside the best free gap, preferring forward gaps.
+
+        Score = width * forward_preference(gap center). Without the forward
+        bias the widest gap can be behind the car (after a collision reset),
+        which produced U-turns and wrong-way driving.
+        """
         padded = np.concatenate(([0], free.astype(np.int8), [0]))
         d = np.diff(padded)
         starts = np.flatnonzero(d == 1)
         ends = np.flatnonzero(d == -1)      # exclusive
         if starts.size == 0:
             return None
-        widths = ends - starts
-        lo, hi = starts[np.argmax(widths)], ends[np.argmax(widths)]
-        return lo + int(np.argmax(proc[lo:hi]))
+        best_score = -1.0
+        best = None
+        for lo, hi in zip(starts, ends):
+            center_angle = self.angles[(lo + hi) // 2] if hi <= self.angles.size \
+                else 0.0
+            score = (hi - lo) * (0.35 + 0.65 * math.cos(center_angle))
+            if score > best_score:
+                best_score = score
+                best = lo + int(np.argmax(proc[lo:hi]))
+        return best
 
     def _publish(self, steer_angle: float, v_target: float):
         steer = Float32()

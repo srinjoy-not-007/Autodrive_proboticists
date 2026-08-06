@@ -41,7 +41,11 @@ class SpeedEstimator:
             dt = stamp_sec - last[0]
             if 1e-4 < dt < 0.5:
                 v = WHEEL_RADIUS * (position_rad - last[1]) / dt
-                self.speed += self.alpha * (v - self.speed)
+                # Reject teleports/encoder resets (checkpoint resets zero the
+                # encoders → derivative explodes); track can't exceed top speed
+                if abs(v) <= TOP_SPEED * 1.1:
+                    inn = max(-2.0, min(2.0, v - self.speed))
+                    self.speed += self.alpha * inn
         return self.speed
 
 
