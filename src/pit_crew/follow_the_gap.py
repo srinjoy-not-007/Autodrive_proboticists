@@ -39,13 +39,14 @@ class FollowTheGap(Node):
             ('stuck_clearance', 0.45),      # m ahead that counts as stuck
             ('stuck_seconds', 1.5),         # how long before reversing out
             ('escape_seconds', 1.2),        # how long to reverse
+            ('output_ns', ''),              # set to route via the arbiter
         ])
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
          self.disp_thresh, self.extend_margin, self.bubble_r,
          fov_deg, self.range_clip, self.steer_sign,
          self.steer_alpha, self.center_gain, throttle_gain,
          self.stuck_clearance, self.stuck_seconds,
-         self.escape_seconds) = [x.value for x in p]
+         self.escape_seconds, output_ns) = [x.value for x in p]
         self._steer_filt = 0.0
         self._stuck_since = None
         self._escape_until = None
@@ -66,8 +67,10 @@ class FollowTheGap(Node):
                                  lambda m: self.on_encoder('L', m), qos)
         self.create_subscription(JointState, f'{ns}/right_encoder',
                                  lambda m: self.on_encoder('R', m), qos)
-        self.pub_steer = self.create_publisher(Float32, f'{ns}/steering_command', 1)
-        self.pub_throttle = self.create_publisher(Float32, f'{ns}/throttle_command', 1)
+        st = f'{output_ns}/steering' if output_ns else f'{ns}/steering_command'
+        th = f'{output_ns}/throttle' if output_ns else f'{ns}/throttle_command'
+        self.pub_steer = self.create_publisher(Float32, st, 1)
+        self.pub_throttle = self.create_publisher(Float32, th, 1)
 
         self.get_logger().info('Follow-the-Gap ready (v_max=%.1f m/s)' % self.v_max)
 

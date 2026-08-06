@@ -29,6 +29,7 @@ setup(
             'odometry = pit_crew.odometry:main',
             'localization = pit_crew.localization:main',
             'pure_pursuit = pit_crew.pure_pursuit:main',
+            'arbiter = pit_crew.arbiter:main',
         ],
     },
 )

@@ -41,10 +41,11 @@ class PurePursuit(Node):
             ('steer_alpha', 0.75),
             ('min_loc_score', 0.15),     # below this, stop commanding
             ('pose_timeout', 0.5),       # s without a pose = unhealthy
+            ('output_ns', ''),           # set to route via the arbiter
         ])
         (raceline_csv, self.la_min, self.la_max, self.la_per_mps,
          self.speed_scale, throttle_gain, self.steer_alpha,
-         self.min_score, self.pose_timeout) = [x.value for x in p]
+         self.min_score, self.pose_timeout, output_ns) = [x.value for x in p]
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
         self.rl_xy = rl[:, 1:3]
@@ -62,8 +63,12 @@ class PurePursuit(Node):
         self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 10)
         self.create_subscription(Float32, '/pit_crew/loc_score',
                                  lambda m: setattr(self, 'loc_score', m.data), 10)
-        self.pub_steer = self.create_publisher(Float32, f'{ns}/steering_command', 1)
-        self.pub_throttle = self.create_publisher(Float32, f'{ns}/throttle_command', 1)
+        # Publish to the arbiter when output_ns is set; only the arbiter is
+        # allowed to touch the actuators when the safety layer is running.
+        st = f'{output_ns}/steering' if output_ns else f'{ns}/steering_command'
+        th = f'{output_ns}/throttle' if output_ns else f'{ns}/throttle_command'
+        self.pub_steer = self.create_publisher(Float32, st, 1)
+        self.pub_throttle = self.create_publisher(Float32, th, 1)
         self.pub_healthy = self.create_publisher(Bool, '/pit_crew/pp_active', 1)
         self.get_logger().info(
             f'pure pursuit ready: {len(self.rl_xy)} raceline pts, '
