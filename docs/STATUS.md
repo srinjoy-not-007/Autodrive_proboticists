@@ -27,7 +27,8 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 | What | Result |
 |---|---|
 | Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
-| Localization vs IPS truth | median **0.09 m**, p95 0.31 m, max 0.53 m, 0 relocalizations |
+| Localization, replaying the mapping bag | median 0.09 m, p95 0.31 m (flattering: that bag built the map) |
+| Localization, **live at racing pace** | median **0.19 m**, p95 0.35 m — this is the number that matters |
 | Pure pursuit tracking error | median 0.12 m, p95 0.36 m |
 | Pure pursuit lap time | 20.7 s (but not yet collision-free) |
 | Optimized raceline | 27.0 m, ideal lap ~10.4 s |
