@@ -6,11 +6,13 @@ set +e
 cd "$(dirname "$0")/.."
 SCALE="${1:-0.5}"
 MAP="${2:-track_v2}"
+# Which line to follow: "raceline" (fast) or "safe" (centerline, more margin).
+LINE="${3:-raceline}"
 
 INIT=$(head -2 data/maps/${MAP}_traj.csv | tail -1 | cut -d, -f2,3)
 IX=$(echo "$INIT" | cut -d, -f1)
 IY=$(echo "$INIT" | cut -d, -f2)
-echo "map=$MAP  init=($IX,$IY)  speed_scale=$SCALE"
+echo "map=$MAP  line=$LINE  init=($IX,$IY)  speed_scale=$SCALE"
 
 ./scripts/sim_restart_connect.sh || exit 1
 
@@ -24,7 +26,7 @@ docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew loc
     -p init_x:=${IX} -p init_y:=${IY} > /tmp/loc.log 2>&1"
 sleep 6
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew pure_pursuit --ros-args \
-    -p raceline_csv:=/home/data/racelines/${MAP}_raceline.csv \
+    -p raceline_csv:=/home/data/racelines/${MAP}_${LINE}.csv \
     -p speed_scale:=${SCALE} -p output_ns:=/pit_crew/pp > /tmp/pp.log 2>&1"
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew follow_the_gap --ros-args \
     --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml \

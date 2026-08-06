@@ -1,5 +1,8 @@
 # Winning Plan — RoboRacer Sim Racing League @ IROS 2026
 
+> **Status: see [STATUS.md](STATUS.md)** for what is built, what is measured, and
+> what is still open. This document is the strategy; STATUS is the ground truth.
+
 ## 1. What the race actually rewards
 
 - **Qualification (Porto, known track, due Sep 12):** 10 clean laps. Speed irrelevant. → optimize for *zero risk*.
