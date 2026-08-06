@@ -27,12 +27,23 @@ def steer_to_cmd(angle_rad: float) -> float:
 
 
 class SpeedEstimator:
-    """Vehicle speed from cumulative wheel encoder angles (rad)."""
+    """Vehicle speed from wheel encoder angles.
+
+    DO NOT USE on this platform. Measured against IPS ground truth over a
+    200 s bag, this signal correlates with true speed at |r| < 0.2 for every
+    interpretation tried (raw, unwrapped at 2*pi, unwrapped at 360): the
+    simulator's encoder angle aliases at the ~10 Hz publish rate, so the
+    derivative is noise. Kept only so the finding stays documented.
+
+    Use ThrottleController's open-loop map, or differentiate the localization
+    pose, instead.
+    """
 
     def __init__(self, alpha: float = 0.35):
         self.alpha = alpha          # low-pass factor for the derivative
         self.speed = 0.0            # m/s, filtered
         self._last = {}             # wheel -> (stamp_sec, position_rad)
+        self.jumped = False         # set when a sample implies a teleport
 
     def update(self, wheel: str, stamp_sec: float, position_rad: float) -> float:
         last = self._last.get(wheel)
@@ -46,26 +57,33 @@ class SpeedEstimator:
                 if abs(v) <= TOP_SPEED * 1.1:
                     inn = max(-2.0, min(2.0, v - self.speed))
                     self.speed += self.alpha * inn
+                else:
+                    # Checkpoint resets zero the encoders, so an impossible
+                    # derivative means the car was teleported, not accelerated.
+                    self.jumped = True
         return self.speed
 
 
 class ThrottleController:
-    """Feedforward + proportional throttle controller tracking a target speed.
+    """Open-loop throttle from a target speed.
 
-    The feedforward gain assumes roughly linear throttle->steady-state speed;
-    replace with the measured curve once calibration (task #3) is done.
+    Open loop on purpose: there is no trustworthy speed feedback on this
+    platform (see SpeedEstimator), and closing the loop on the encoder signal
+    made the car surge back and forth. `ff_gain` is a placeholder until the
+    throttle->steady-state-speed curve is measured; pass `v_meas` only once a
+    real speed estimate (localization-derived) exists.
     """
 
-    def __init__(self, kp: float = 0.25, ff_gain: float = 1.0 / TOP_SPEED,
-                 brake_gain: float = 0.6):
+    def __init__(self, kp: float = 0.0, ff_gain: float = 0.075,
+                 brake_gain: float = 0.6, idle: float = 0.02):
         self.kp = kp
         self.ff = ff_gain
         self.brake_gain = brake_gain
+        self.idle = idle
 
-    def command(self, v_target: float, v_meas: float) -> float:
-        err = v_target - v_meas
-        if err < -0.5:  # need to shed speed: actively brake, scaled by overshoot
-            u = self.brake_gain * err  # negative
-        else:
-            u = self.ff * v_target + self.kp * err
+    def command(self, v_target: float, v_meas: float = None) -> float:
+        u = self.ff * v_target + self.idle
+        if v_meas is not None and self.kp > 0.0:
+            err = v_target - v_meas
+            u = self.brake_gain * err if err < -0.5 else u + self.kp * err
         return max(-1.0, min(1.0, u))

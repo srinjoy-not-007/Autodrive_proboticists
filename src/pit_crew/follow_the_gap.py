@@ -64,9 +64,9 @@ class FollowTheGap(Node):
         self.get_logger().info('Follow-the-Gap ready (v_max=%.1f m/s)' % self.v_max)
 
     def on_encoder(self, wheel, msg: JointState):
-        if msg.position:
-            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.speed_est.update(wheel, t, msg.position[0])
+        # Encoder speed is unusable on this platform (see vehicle.SpeedEstimator);
+        # throttle runs open loop. Kept subscribed for diagnostics only.
+        pass
 
     # ------------------------------------------------------------------ #
 
@@ -168,7 +168,7 @@ class FollowTheGap(Node):
         steer = Float32()
         steer.data = self.steer_sign * vehicle.steer_to_cmd(steer_angle)
         throttle = Float32()
-        throttle.data = self.throttle_ctl.command(v_target, self.speed_est.speed)
+        throttle.data = self.throttle_ctl.command(v_target)
         self.pub_steer.publish(steer)
         self.pub_throttle.publish(throttle)
 

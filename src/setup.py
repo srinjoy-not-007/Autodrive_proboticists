@@ -27,6 +27,7 @@ setup(
             'follow_the_gap = pit_crew.follow_the_gap:main',
             'calibrator = pit_crew.calibrator:main',
             'odometry = pit_crew.odometry:main',
+            'localization = pit_crew.localization:main',
         ],
     },
 )
