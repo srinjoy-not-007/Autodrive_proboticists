@@ -33,12 +33,12 @@ class PurePursuit(Node):
         super().__init__('pure_pursuit')
         p = self.declare_parameters('', [
             ('raceline_csv', '/home/data/racelines/track_v2_raceline.csv'),
-            ('lookahead_min', 0.45),
-            ('lookahead_max', 1.40),
-            ('lookahead_per_mps', 0.22),
+            ('lookahead_min', 0.35),
+            ('lookahead_max', 1.00),
+            ('lookahead_per_mps', 0.15),
             ('speed_scale', 0.6),        # global scale on the profile
             ('throttle_gain', 0.040),     # open-loop throttle per m/s
-            ('steer_alpha', 0.6),
+            ('steer_alpha', 0.75),
             ('min_loc_score', 0.15),     # below this, stop commanding
             ('pose_timeout', 0.5),       # s without a pose = unhealthy
         ])

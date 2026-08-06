@@ -28,6 +28,7 @@ setup(
             'calibrator = pit_crew.calibrator:main',
             'odometry = pit_crew.odometry:main',
             'localization = pit_crew.localization:main',
+            'pure_pursuit = pit_crew.pure_pursuit:main',
         ],
     },
 )
