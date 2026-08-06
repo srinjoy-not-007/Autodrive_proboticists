@@ -40,13 +40,13 @@ class ParticleFilter(Node):
     def __init__(self):
         super().__init__('localization')
         p = self.declare_parameters('', [
-            ('map_prefix', '/home/data/maps/track_v1'),
-            ('centerline_csv', '/home/data/racelines/track_v1_centerline.csv'),
+            ('map_prefix', '/home/data/maps/track_v2'),
+            ('centerline_csv', '/home/data/racelines/track_v2_centerline.csv'),
             ('n_particles', 800),
             ('n_beams', 60),
-            ('sigma_hit', 0.16),          # m, likelihood field width
+            ('sigma_hit', 0.06),          # m, likelihood field width
             ('beam_temp', 8.0),           # damping on summed beam log-likelihood
-            ('motion_noise_xy', 0.035),   # m per update
+            ('motion_noise_xy', 0.18),   # m per update
             ('motion_noise_theta', 0.02), # rad per update
             ('init_x', 0.0),
             ('init_y', 0.0),

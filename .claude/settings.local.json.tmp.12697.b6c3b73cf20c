@@ -57,7 +57,12 @@
       "Bash(git commit -q -m 'Localization core + offline tuning harness; drop unusable encoder speed *)",
       "Bash(sed -i 's/ff_gain: float = 0.075/ff_gain: float = 0.040/; s/idle: float = 0.02/idle: float = 0.005/' src/pit_crew/vehicle.py)",
       "Bash(sed -i \"s/\\('throttle_gain', 0.14\\)/\\('throttle_gain', 0.040\\)/\" src/pit_crew/pure_pursuit.py)",
-      "Bash(git commit -q -m 'Calibrate throttle, add pure pursuit tracker and FTG unstick behavior *)"
+      "Bash(git commit -q -m 'Calibrate throttle, add pure pursuit tracker and FTG unstick behavior *)",
+      "Bash(sed -i \"s/    sigma_hit=0.16,/    sigma_hit=0.06,/; s/    motion_noise_xy=0.035,/    motion_noise_xy=0.18,/\" src/pit_crew/pf_core.py)",
+      "Bash(sed -i \"s/\\('sigma_hit', 0.16\\)/\\('sigma_hit', 0.06\\)/; s/\\('motion_noise_xy', 0.035\\)/\\('motion_noise_xy', 0.18\\)/\" src/pit_crew/localization.py)",
+      "Bash(git commit -q -m 'Clean map v2 + tuned localization: median error 0.21 m -> 0.09 m *)",
+      "Bash(sed -i \"s|maps/track_v1|maps/track_v2|; s|racelines/track_v1_centerline.csv|racelines/track_v2_centerline.csv|\" src/pit_crew/localization.py)",
+      "Bash(sed -i \"s|racelines/track_v1_raceline.csv|racelines/track_v2_raceline.csv|\" src/pit_crew/pure_pursuit.py)"
     ]
   }
 }

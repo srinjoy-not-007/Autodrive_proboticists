@@ -32,7 +32,7 @@ class PurePursuit(Node):
     def __init__(self):
         super().__init__('pure_pursuit')
         p = self.declare_parameters('', [
-            ('raceline_csv', '/home/data/racelines/track_v1_raceline.csv'),
+            ('raceline_csv', '/home/data/racelines/track_v2_raceline.csv'),
             ('lookahead_min', 0.45),
             ('lookahead_max', 1.40),
             ('lookahead_per_mps', 0.22),

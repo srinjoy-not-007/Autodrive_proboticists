@@ -12,6 +12,15 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 docker rm -f autodrive_roboracer_api 2>/dev/null || true
 
+# Extra deps our stack needs. Installed at container start because the base
+# image lacks them and a restart discards anything pip-installed by hand.
+# (These must also go into the submission Dockerfile — task #12.)
+install_deps() {
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "python3 -c 'import scipy' 2>/dev/null || pip3 install -q scipy >/dev/null 2>&1; \
+         which xdotool >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq xdotool imagemagick) >/dev/null 2>&1; true"
+}
+
 COMMON_ARGS=(
     --network=host --ipc=host
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw
@@ -24,6 +33,7 @@ case "$MODE" in
     headless)
         docker run --name autodrive_roboracer_api --rm -d "${COMMON_ARGS[@]}" "$IMAGE" \
             -c "source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash && ros2 launch autodrive_roboracer bringup_headless.launch.py"
+        install_deps
         echo "Devkit bridge running headless (container: autodrive_roboracer_api)."
         ;;
     graphics)

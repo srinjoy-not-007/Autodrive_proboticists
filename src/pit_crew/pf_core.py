@@ -14,9 +14,9 @@ import yaml
 DEFAULTS = dict(
     n_particles=800,
     n_beams=60,
-    sigma_hit=0.16,
+    sigma_hit=0.06,
     beam_temp=8.0,
-    motion_noise_xy=0.035,
+    motion_noise_xy=0.18,
     motion_noise_theta=0.02,
     init_spread=0.6,
     lost_threshold=0.22,

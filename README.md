@@ -43,6 +43,25 @@ Inside the sim GUI: click **Connection** to link to the bridge (WebSocket :4567)
 - Steering: ±0.5236 rad, rate-limited 3.2 rad/s; top speed 22.88 m/s; wheelbase 0.324 m
 - **Runtime-restricted topics (do not use while racing): IPS pose, odom, collision count, lap info, TF from sim**
 
+## Platform gotchas (learned the hard way — read before debugging)
+
+- **Headless sim freezes the LiDAR.** `-batchmode -nographics` keeps publishing a
+  *stale* scan; the LiDAR is GPU-raytraced and needs real rendering. Run the sim
+  windowed via `scripts/sim_restart_connect.sh` (it also clicks *Connection*).
+- **LiDAR arrives at ~10 Hz**, not the 40 Hz in the spec sheet.
+- **Wheel-encoder speed is unusable.** The encoder angle aliases at the publish
+  rate — correlation with true speed is |r| < 0.2 however you unwrap it. Throttle
+  runs open loop (**~0.040 throttle per m/s**, measured); real speed feedback must
+  come from differentiating the localization pose.
+- **Commands latch.** Publish zeros to stop; a stale command keeps being applied.
+- **`/autodrive/reset_command`** returns the car to the last checkpoint and does
+  not clear a wedged/beached vehicle — restart the sim container for that.
+- **`pkill -f` inside `docker exec bash -c`** matches the wrapper's own command
+  line and kills the script. Use bracket patterns (`[i]nstall/pit_crew`) or PIDs.
+- **`ros2 bag play` signals its process group** on completion, killing sibling
+  nodes launched from the same shell — start those with `docker exec -d`.
+- Humble's `ros2 bag play` has **no duration flag**; use `src/tools/trim_bag.py`.
+
 ## Rules digest
 
 - Build our stack as separate ROS 2 package(s); never modify `autodrive_roboracer` devkit package or the sim.
