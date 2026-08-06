@@ -26,7 +26,7 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 
 | What | Result |
 |---|---|
-| Follow-the-Gap alone | **3 laps, 0 collisions**, 33.6 s/lap |
+| Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
 | Localization vs IPS truth | median **0.09 m**, p95 0.31 m, max 0.53 m, 0 relocalizations |
 | Pure pursuit tracking error | median 0.12 m, p95 0.36 m |
 | Pure pursuit lap time | 20.7 s (but not yet collision-free) |
@@ -59,16 +59,27 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
    position is the *reset* point, not the impact point — look ~0.4 s earlier.
 8. TUM's `psi` column is **north-zero**, not standard math angles.
 
+## Qualification: met
+
+Follow-the-Gap alone ran **11 consecutive laps with 0 collisions**, lap times
+33.43-33.57 s (spread under 0.15 s). Qualification requires 10 clean laps and
+ignores speed, so this configuration clears it. The submission image runs it
+with `PIT_CREW_MODE=reactive`, needs no map, and therefore works on a track we
+have never seen — which also makes it the safe finals fallback.
+
 ## Open
 
-- Pure pursuit is fast (20.7 s vs FTG's 33.6 s) but not yet collision-free.
-  The footprint correction and the reworked arbiter are the current attempt.
-- Qualification only needs 10 clean laps and ignores speed, so **FTG alone is a
-  valid fallback entry** if the raceline stack is not clean in time.
+- The raceline stack is fast (20.7 s vs 33.4 s) but not yet collision-free.
+  The cause is quantified: localization 0.19 m + tracking 0.12 m ~ 0.31 m of
+  error against 0.146 m of corner clearance on the optimized line. The safe
+  line (0.325 m clearance) roughly covers it and got much closer (1 lap, then
+  8 collisions over several laps) but is not clean either.
+- Cutting the live localization error is the single change that unlocks the
+  fast line — see task #16.
 
 ## Next
 
-1. Confirm the reworked arbiter + sweep-corrected raceline runs clean, then
-   raise `speed_scale` gradually.
-2. Containerize (#12) so a submittable image exists well before Sep 12.
+1. Push the qualification image to DockerHub and submit Phase 1 early (#13).
+2. Reduce live localization error (#16); then raise `speed_scale` on the safe
+   line, then move to the optimized line.
 3. Rehearse the new-track drill end to end (#14).
