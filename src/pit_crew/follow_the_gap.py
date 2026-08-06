@@ -35,19 +35,27 @@ class FollowTheGap(Node):
             ('steer_sign', 1.0),            # flip if sim convention is mirrored
             ('steer_alpha', 0.5),           # steering low-pass (1.0 = no filter)
             ('center_gain', 0.25),          # corridor-centering blend [rad]
+            ('throttle_gain', 0.040),        # open-loop throttle per m/s
+            ('stuck_clearance', 0.45),      # m ahead that counts as stuck
+            ('stuck_seconds', 1.5),         # how long before reversing out
+            ('escape_seconds', 1.2),        # how long to reverse
         ])
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
          self.disp_thresh, self.extend_margin, self.bubble_r,
          fov_deg, self.range_clip, self.steer_sign,
-         self.steer_alpha, self.center_gain) = [x.value for x in p]
+         self.steer_alpha, self.center_gain, throttle_gain,
+         self.stuck_clearance, self.stuck_seconds,
+         self.escape_seconds) = [x.value for x in p]
         self._steer_filt = 0.0
+        self._stuck_since = None
+        self._escape_until = None
+        self._escape_steer = 0.0
 
         self.fov_limit = math.radians(fov_deg)
         self.angles = vehicle.LIDAR_ANGLE_MIN + \
             np.arange(vehicle.LIDAR_N) * vehicle.LIDAR_ANGLE_INC
 
-        self.speed_est = vehicle.SpeedEstimator()
-        self.throttle_ctl = vehicle.ThrottleController()
+        self.throttle_ctl = vehicle.ThrottleController(ff_gain=throttle_gain)
 
         qos = QoSProfile(depth=1,
                          reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -108,6 +116,33 @@ class FollowTheGap(Node):
             lo, hi = max(0, closest - n_beams), min(n, closest + n_beams + 1)
             proc[lo:hi] = 0.0
 
+        # Nose-in against a wall: at low speed full steering lock cannot pull
+        # the car off, so back out with opposite lock instead of grinding.
+        now = self.get_clock().now().nanoseconds * 1e-9
+        ahead_narrow = np.abs(angles) <= math.radians(15.0)
+        clear_ahead = float(np.min(r[ahead_narrow]))
+        if self._escape_until is not None:
+            if now < self._escape_until:
+                self._publish_raw(self._escape_steer, -0.25)
+                return
+            self._escape_until = None
+            self._stuck_since = None
+        if clear_ahead < self.stuck_clearance:
+            if self._stuck_since is None:
+                self._stuck_since = now
+            elif now - self._stuck_since > self.stuck_seconds:
+                self._escape_until = now + self.escape_seconds
+                # Reverse turning away from whichever side is tighter
+                left = float(np.median(r[(angles > math.radians(20)) &
+                                         (angles < math.radians(90))]))
+                right = float(np.median(r[(angles < math.radians(-20)) &
+                                          (angles > math.radians(-90))]))
+                self._escape_steer = -1.0 if left > right else 1.0
+                self.get_logger().warn('stuck: reversing out')
+                return
+        else:
+            self._stuck_since = None
+
         # Pick the deepest point of the widest free gap within the FOV
         free = (proc > self.bubble_r) & fov_mask
         best_idx = self._best_gap_point(free, proc)
@@ -165,12 +200,12 @@ class FollowTheGap(Node):
         return best
 
     def _publish(self, steer_angle: float, v_target: float):
-        steer = Float32()
-        steer.data = self.steer_sign * vehicle.steer_to_cmd(steer_angle)
-        throttle = Float32()
-        throttle.data = self.throttle_ctl.command(v_target)
-        self.pub_steer.publish(steer)
-        self.pub_throttle.publish(throttle)
+        self._publish_raw(self.steer_sign * vehicle.steer_to_cmd(steer_angle),
+                          self.throttle_ctl.command(v_target))
+
+    def _publish_raw(self, steer_cmd: float, throttle_cmd: float):
+        self.pub_steer.publish(Float32(data=float(steer_cmd)))
+        self.pub_throttle.publish(Float32(data=float(throttle_cmd)))
 
 
 def main():

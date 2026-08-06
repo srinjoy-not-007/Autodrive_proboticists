@@ -12,3 +12,7 @@ follow_the_gap:
     steer_sign: 1.0
     steer_alpha: 0.4
     center_gain: 0.30
+    throttle_gain: 0.040
+    stuck_clearance: 0.45
+    stuck_seconds: 1.5
+    escape_seconds: 1.2

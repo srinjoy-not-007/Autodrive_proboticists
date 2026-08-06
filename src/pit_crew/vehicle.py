@@ -74,8 +74,8 @@ class ThrottleController:
     real speed estimate (localization-derived) exists.
     """
 
-    def __init__(self, kp: float = 0.0, ff_gain: float = 0.075,
-                 brake_gain: float = 0.6, idle: float = 0.02):
+    def __init__(self, kp: float = 0.0, ff_gain: float = 0.040,
+                 brake_gain: float = 0.6, idle: float = 0.005):
         self.kp = kp
         self.ff = ff_gain
         self.brake_gain = brake_gain
