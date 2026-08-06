@@ -34,7 +34,18 @@
       "Bash(./scripts/record_mapping_run.sh)",
       "Bash(./scripts/stop_run.sh)",
       "Bash(python3 *)",
-      "Bash(git commit -q -m 'First track map: known-pose occupancy mapping from recorded bag *)"
+      "Bash(git commit -q -m 'First track map: known-pose occupancy mapping from recorded bag *)",
+      "Bash(pip3 --version)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python -c \"import numpy, scipy, skimage, matplotlib; print\\('venv ready'\\)\")",
+      "Bash(sudo -n true)",
+      "Bash(.venv/bin/python tools/extract_centerline.py data/maps/track_v1 data/racelines/track_v1_centerline)",
+      "Bash(grep -vE \"^$|WARNING\")",
+      "Bash(.venv/bin/python -c \"import trajectory_planning_helpers as tph; print\\('tph', tph.__file__\\)\")",
+      "Bash(.venv/bin/python -c \"import trajectory_planning_helpers as tph; print\\('tph OK'\\)\")",
+      "Bash(.venv/bin/python tools/optimize_raceline.py data/racelines/track_v1_centerline.csv)",
+      "Bash(.venv/bin/python *)",
+      "Bash(git commit -q -m 'Raceline pipeline: centerline extraction + TUM min-curvature optimization *)"
     ]
   }
 }
