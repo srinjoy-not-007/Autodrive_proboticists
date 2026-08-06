@@ -1,0 +1,18 @@
+# Upstream reference clone (re-fetch with scripts/setup notes in README)
+upstream/
+
+# Recorded data, maps, rosbags (large binaries — keep out of git)
+data/
+*.bag
+*.mcap
+*.db3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# ROS 2 build artifacts
+build/
+install/
+log/
