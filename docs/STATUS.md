@@ -59,7 +59,14 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 7. Collisions **teleport the car to a checkpoint**, so a logged collision
    position is the *reset* point, not the impact point — look ~0.4 s earlier.
 8. TUM's `psi` column is **north-zero**, not standard math angles.
-9. **Feeding a velocity input into the filter made it worse.** The calibrated
+9. **The safety arbiter caused the crashes it was meant to prevent.** With the
+   arbiter in the loop the safe line collided constantly (18-29 collisions, no
+   completed laps); with the identical line, speed and localization but pure
+   pursuit publishing directly, it ran clean. Handing control back and forth
+   between two controllers with different steering states destabilises the car
+   far more than the hazards it was reacting to. Any safety layer must be
+   re-earned with evidence, not assumed to help.
+10. **Feeding a velocity input into the filter made it worse.** The calibrated
    throttle->speed curve is a straight-line fit, so it over-predicts through
    corners: the estimate led reality by ~50 ms and median error degraded
    monotonically with the gain (0.093 m at zero, 0.157 m at k=32). The
