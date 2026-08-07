@@ -95,6 +95,22 @@ have never seen — which also makes it the safe finals fallback.
 ~1 collision/lap it costs +10 s each, so it loses on total race time; worth
 revisiting once tracking at speed improves.
 
+## New-track drill: 4.5 minutes, verified on an unseen circuit
+
+`scripts/new_track_drill.sh <name> <sim_tag> <seconds>` runs the whole pipeline
+as one timed procedure: reconnaissance (drive blind with FTG and record) → map
+→ centerline → racing lines → footprint clearance check.
+
+Validated against the **2026-icra-compete** image, which ships a different and
+much larger circuit this stack had never seen (57.9 m loop vs Porto's 28.6 m,
+min corridor 1.33 m vs 0.88 m). **Total: 271 s** — against a three-day window
+between the finals track release and the deadline. The generated safe line has
+0.414 m worst-corner clearance; the optimized line came out at 0.075 m, which
+the footprint check flags as undrivable *before* we ever drive it.
+
+Past competition images are useful unseen tracks for practice: `*-compete` tags
+carry the real competition circuits, while every `*-practice` tag is Porto.
+
 ## Open
 
 - Find the highest collision-free `speed_scale`, then move from the safe line
