@@ -21,6 +21,7 @@ import math
 
 import numpy as np
 import rclpy
+from scipy import ndimage
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
@@ -50,7 +51,9 @@ class StanleyTracker(Node):
             ('k_soft', 0.6),             # m/s, keeps gain finite at low speed
             ('k_heading', 1.0),          # heading-error gain
             ('k_ff', 1.0),               # curvature feedforward gain
-            ('k_damp', 0.12),            # damping on steering rate
+            ('k_damp', 0.18),            # damping on steering rate
+            ('pose_blend', 0.55),        # how hard a new fix corrects prediction
+            ('steer_rate_limit', 3.2),   # rad/s, the actuator's real slew rate
             ('control_hz', 50.0),
             ('brake_horizon_s', 0.35),   # short: the profile already brakes
             ('throttle_gain', 0.040),
@@ -58,9 +61,10 @@ class StanleyTracker(Node):
             ('steer_alpha', 0.6),
         ])
         (raceline_csv, self.speed_scale, self.k_cte, self.k_soft,
-         self.k_heading, self.k_ff, self.k_damp, control_hz,
-         self.brake_horizon, throttle_gain, self.max_predict,
-         self.steer_alpha) = [x.value for x in p]
+         self.k_heading, self.k_ff, self.k_damp, self.pose_blend,
+         self.steer_rate, control_hz, self.brake_horizon, throttle_gain,
+         self.max_predict, self.steer_alpha) = [x.value for x in p]
+        self.control_dt = 1.0 / control_hz
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
         self.xy = rl[:, 1:3]
@@ -68,10 +72,17 @@ class StanleyTracker(Node):
         self.v_prof = rl[:, 5]
         seg = np.hypot(np.diff(self.xy[:, 0]), np.diff(self.xy[:, 1]))
         self.spacing = float(np.median(seg)) if len(seg) else 0.1
-        # Path heading per point, taken from the geometry (TUM's psi column is
-        # north-zero, not standard math angles).
-        d = np.diff(np.vstack([self.xy, self.xy[:1]]), axis=0)
-        self.path_yaw = np.arctan2(d[:, 1], d[:, 0])
+        # Path heading per point, from the geometry (TUM's psi column is
+        # north-zero, not standard math angles). Taken over a ~0.5 m baseline
+        # rather than between adjacent points: at 0.1 m spacing the spline's
+        # centimetre-level wiggle dominates the heading estimate, and that noise
+        # goes straight into the steering command as visible left-right swing.
+        span = max(1, int(round(0.5 / max(self.spacing, 1e-3))))
+        fwd = np.roll(self.xy, -span, axis=0) - np.roll(self.xy, span, axis=0)
+        self.path_yaw = np.unwrap(np.arctan2(fwd[:, 1], fwd[:, 0]))
+        # Curvature likewise smoothed over the same baseline
+        self.kappa = ndimage.uniform_filter1d(self.kappa, size=2 * span + 1,
+                                              mode='wrap')
 
         self.throttle_ctl = vehicle.ThrottleController(ff_gain=throttle_gain)
         self.pose = None          # (x, y, yaw, stamp_monotonic)
@@ -99,8 +110,25 @@ class StanleyTracker(Node):
         self.gyro_z = float(msg.angular_velocity.z)
 
     def on_pose(self, msg: PoseStamped):
-        self.pose = (msg.pose.position.x, msg.pose.position.y,
-                     yaw_from_quat(msg.pose.orientation), self.now())
+        """Blend a new fix into the running state rather than snapping to it.
+
+        The filter publishes a weighted mean of resampled particles at 10 Hz, so
+        consecutive fixes differ by centimetres. Snapping made the cross-track
+        error jump every 100 ms and the car visibly swung left-right chasing it.
+        Correcting a fraction of the innovation keeps the state continuous.
+        """
+        mx, my = msg.pose.position.x, msg.pose.position.y
+        myaw = yaw_from_quat(msg.pose.orientation)
+        t = self.now()
+        if self.pose is None:
+            self.pose = (mx, my, myaw, t)
+            return
+        px, py, pyaw = self.predicted_state()
+        a = self.pose_blend
+        self.pose = (px + a * (mx - px),
+                     py + a * (my - py),
+                     pyaw + a * wrap(myaw - pyaw),
+                     t)
 
     def predicted_state(self):
         """Dead-reckon the last filter pose forward to now."""
@@ -135,7 +163,12 @@ class StanleyTracker(Node):
                  + self.k_ff * math.atan(vehicle.WHEELBASE * float(self.kappa[i]))
                  - self.k_damp * self.gyro_z)
 
-        self.steer += self.steer_alpha * (delta - self.steer)
+        # Never command faster than the actuator can move (3.2 rad/s):
+        # commanding past the slew rate just adds phase lag, and phase lag in a
+        # feedback loop is what turns a correction into an oscillation.
+        target = float(self.steer + self.steer_alpha * (delta - self.steer))
+        max_step = self.steer_rate * self.control_dt
+        self.steer += float(np.clip(target - self.steer, -max_step, max_step))
         self.steer = float(np.clip(self.steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
 
         # A short defensive horizon only. The tph velocity profile already
