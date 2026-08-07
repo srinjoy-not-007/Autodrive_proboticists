@@ -53,6 +53,8 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 
 | What | Result |
 |---|---|
+| **Porto, MPC, scale 1.0** | **22 laps, 0 collisions**, best 11.32 s ← shipping |
+| **ICRA (unseen), MPC, scale 1.0** | **13 laps, 0 collisions**, 20.9 s/lap |
 | Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
 | Localization, offline on an unseen bag | median 0.093 m, p95 0.299 m |
 | Localization, **live** | median **0.092 m**, p95 0.298 m, within 10 cm 55% |
@@ -151,7 +153,16 @@ the drill end-to-end on an unfamiliar circuit.
 
 `scripts/run_stanley.sh 1.0 track_v2 safe` — localization + Stanley tracker,
 full profile speed: **3 laps, 0 collisions, best 11.21 s**, cross-track error
-~7 mm. This is the shipping configuration.
+~7 mm.
+
+**Superseded (Aug 7): the shipping controller is now MPC**, via
+`CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe`. It measures 22
+laps / 0 collisions / best 11.32 s on Porto, and it is the only controller
+verified on a track it was not tuned on (ICRA, 13 laps, 0 collisions, full
+speed). Stanley has neither the distance-based horizon nor stuck detection, so
+it has not been validated on an unseen circuit; it stays available through
+`PIT_CREW_CONTROLLER=stanley`. Everything below still applies — MPC inherits
+the curvature feedforward, pose prediction and 50 Hz loop.
 
 What made the difference, in order:
 1. **Curvature feedforward.** Most of the steering now comes from the plan
