@@ -50,6 +50,10 @@ class MPCTracker(Node):
             ('speed_scale', 1.0),
             ('horizon', 12),             # steps
             ('step_dt', 0.06),           # s per step (~0.7 s horizon)
+            ('min_step_m', 0.10),        # ...but never preview less than this
+            ('stuck_seconds', 1.5),      # commanded to move but barely moving
+            ('stuck_distance', 0.20),    # m of travel that counts as moving
+            ('escape_seconds', 1.2),     # how long to reverse out
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -62,9 +66,10 @@ class MPCTracker(Node):
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
         ])
-        (raceline_csv, self.speed_scale, self.N, self.dt, self.w_lat,
-         self.w_yaw, self.w_steer, self.w_rate, self.n_cand, control_hz,
-         self.steer_rate, self.pose_blend, self.max_predict,
+        (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
+         self.stuck_seconds, self.stuck_distance, self.escape_seconds,
+         self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
+         control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
         self.control_dt = 1.0 / control_hz
 
@@ -84,6 +89,10 @@ class MPCTracker(Node):
         self.gyro_z = 0.0
         self.speed = 0.0
         self.steer = 0.0
+        self._trail = []            # (t, x, y) of the localized pose
+        self._escape_until = None
+        self._escape_steer = 0.0
+        self._stuck_count = 0
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
@@ -114,6 +123,22 @@ class MPCTracker(Node):
         a = self.pose_blend
         self.pose = (px + a * (mx - px), py + a * (my - py),
                      pyaw + a * wrap(myaw - pyaw), t)
+        # Measured travel, for stuck detection. `self.speed` is the *commanded*
+        # profile speed, so it keeps reading 1.5 m/s while the car sits wedged
+        # against a wall — it can never reveal that the car is not moving.
+        self._trail.append((t, mx, my))
+        while self._trail and t - self._trail[0][0] > self.stuck_seconds:
+            self._trail.pop(0)
+
+    def is_stuck(self):
+        """Commanded to drive, but the pose has hardly moved."""
+        if len(self._trail) < 5 or self.speed < 0.3:
+            return False
+        t0, x0, y0 = self._trail[0]
+        _, x1, y1 = self._trail[-1]
+        if self._trail[-1][0] - t0 < self.stuck_seconds * 0.9:
+            return False
+        return math.hypot(x1 - x0, y1 - y0) < self.stuck_distance
 
     def predicted_state(self):
         x, y, yaw, t = self.pose
@@ -137,12 +162,21 @@ class MPCTracker(Node):
         prev = self.steer
         idx = i0
         s_travelled = 0.0
+        # A fixed *time* horizon shrinks to nothing spatially as the car slows:
+        # at 0.5 m/s, 12 x 0.06 s previews only 0.36 m, which is less than the
+        # radius of a hairpin, so the controller cannot see the corner at all
+        # and turns in far too late. Measured on ICRA: slowing from scale 0.5
+        # to 0.3 made things WORSE (17 -> 83 collisions), which is the opposite
+        # of what a grip or actuator limit would do. Hold a minimum arc length
+        # per step instead; at racing speed step_dt is already the longer of
+        # the two, so fast tracks are unaffected.
+        ds = max(v * self.dt, self.min_step_m)
         for k in range(self.N):
             kap = float(self.kappa[idx % len(self.kappa)])
             denom = max(1.0 - kap * e_lat, 0.2)
-            e_lat = e_lat + v * math.sin(e_yaw) * self.dt
-            e_yaw = e_yaw + v * (math.tan(delta) / vehicle.WHEELBASE
-                                 - kap * math.cos(e_yaw) / denom) * self.dt
+            e_lat = e_lat + math.sin(e_yaw) * ds
+            e_yaw = e_yaw + (math.tan(delta) / vehicle.WHEELBASE
+                             - kap * math.cos(e_yaw) / denom) * ds
             e_yaw = wrap(e_yaw)
             cost += (self.w_lat * e_lat ** 2 + self.w_yaw * e_yaw ** 2
                      + self.w_steer * delta ** 2
@@ -151,7 +185,7 @@ class MPCTracker(Node):
             # after the first step, relax towards the feedforward steer
             ff = math.atan(vehicle.WHEELBASE * kap)
             delta = delta + 0.5 * (ff - delta)
-            s_travelled += v * self.dt
+            s_travelled += ds
             idx = i0 + int(s_travelled / max(self.spacing, 1e-3))
         return cost
 
@@ -166,6 +200,27 @@ class MPCTracker(Node):
         dx, dy = x - self.xy[i0, 0], y - self.xy[i0, 1]
         e_lat = -math.sin(path_yaw) * dx + math.cos(path_yaw) * dy
         e_yaw = wrap(yaw - path_yaw)
+
+        # Wedged against a wall: no amount of forward steering frees the car,
+        # it just grinds. Reverse out and re-approach. Reversing flips the sign
+        # of the yaw rate, so steering towards +e_yaw is what rotates the nose
+        # back onto the path.
+        now = self.now()
+        if self._escape_until is not None and now < self._escape_until:
+            self.publish(self._escape_steer, -0.25)
+            return
+        if self._escape_until is not None:
+            self._escape_until = None
+            self._trail.clear()
+        if self.is_stuck():
+            self._escape_until = now + self.escape_seconds
+            self._stuck_count += 1
+            turn = e_yaw if abs(e_yaw) > 0.1 else e_lat
+            self._escape_steer = math.copysign(vehicle.MAX_STEER, turn)
+            self.get_logger().warn(
+                f'stuck at ({x:.2f},{y:.2f}) e_lat={e_lat:.2f} '
+                f'e_yaw={e_yaw:.2f} — reversing out (#{self._stuck_count})')
+            return
 
         v = max(self.speed, 0.4)
         # Feasible first steps: within the actuator's reach this cycle
@@ -193,6 +248,11 @@ class MPCTracker(Node):
         self.pub_throttle.publish(
             Float32(data=float(self.throttle_ctl.command(self.speed))))
         self.pub_cte.publish(Float32(data=float(e_lat)))
+
+    def publish(self, steer, throttle):
+        self.steer = float(np.clip(steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
+        self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
+        self.pub_throttle.publish(Float32(data=float(throttle)))
 
 
 def main():

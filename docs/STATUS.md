@@ -394,24 +394,53 @@ generator trade lap time for margin wherever the corridor allows, targeting
 corner clearance comfortably above the measured localization p95. That is task
 #24 and is now the single thing between us and a working unseen-track stack.
 
-## Unseen track (ICRA): still open, but narrowed to speed
+## Unseen track (ICRA): SOLVED — 13 clean laps at full speed (Aug 7)
 
-State at the last session boundary, with encoder odometry and the
-measurement-chosen line (0.414 m worst-corner clearance):
+**Result: 13 consecutive laps, 0 collisions, speed_scale 1.0, 20.9 s/lap**
+(spread 20.37-21.53 s) with MPC on the 56.7 m ICRA circuit. The same setting
+previously produced 134 collisions.
 
-| speed_scale | collisions | note |
-|---|---|---|
-| 1.0 | 134 over 3 laps | |
-| 0.5 | 17 over 2 laps | |
-| 0.3 | not yet tested | **next thing to run** |
+It was never speed, and never the error budget this section used to claim.
+**The centerline had a skeleton spur**: at one point it ran into open track,
+dead-ended, and doubled back on itself, the two legs sitting 0.11-0.17 m apart
+for 1.6 m. The car was being commanded to drive somewhere, stop, and reverse
+direction. It wedged there every lap and ground against the wall for 20-100 s.
+That single point produced *every* collision — 83 of 83 in one run, 47 of 48 in
+the next, all inside a 2.5 m circle at (-5.2,-2.9).
 
-Halving the speed cut collisions ~8x, so pace is the dominant remaining factor
-on this circuit, not localization (now stable: 0 relocalizations, p95 0.549 m)
-and not the line (0.414 m clearance, chosen by measurement).
+**Why it hid for so long, and the lesson**: the line measured a perfectly
+healthy 0.414 m worst-corner clearance. Every geometry check we had looks at
+clearance, and clearance cannot see a path that folds back on itself. The
+misleading evidence was the speed sweep — collisions fell 8x when speed halved,
+which looked like a pace problem, so "reduce speed" became the hypothesis. It
+was a *dwell* effect: slower means fewer wedging attempts per minute, not a
+more drivable line. The tell that should have caught it earlier: scale 0.3 was
+*worse* than 0.5 (83 vs 17). No grip or actuator limit behaves that way. **When
+lowering speed makes things worse, stop tuning speed.**
 
-Porto runs clean at scale 1.0; ICRA does not. The profiles differ — ICRA allows
-6.3 m/s against Porto's 5.25 — so a single global scale is not transferable.
-**The drill should end with an automatic speed-scale sweep**: run 2 laps at
-descending scales and keep the fastest that is collision-free. That is a small
-script and it removes the last hand-tuned, track-specific number from the
-pipeline.
+Three fixes, all track-agnostic:
+
+1. `tools/extract_centerline.py: excise_spurs()` — removes there-and-back
+   excursions from the ordered loop. It tells a spur from a real hairpin by leg
+   separation, so it cannot eat a genuine corner. ICRA clearance 0.414 ->
+   **0.564 m**; Porto rebuilt bit-identical at 0.325 m (no-op where there are
+   no spurs).
+2. `tools/make_track_lines.py: drivability()` — hard-rejects any line with a
+   direction reversal or a radius tighter than the 0.561 m steering lock,
+   *before* clearance is considered. A line can be roomy and still undrivable.
+3. `src/pit_crew/mpc.py` — two independent controller defects found on the way:
+   - **The horizon was measured in time, not distance.** 12 x 0.06 s previews
+     1.1 m at racing speed but only 0.36 m at 0.5 m/s, less than a corner
+     radius, so the controller could not see the corner at all. Each step now
+     advances at least 0.10 m of arc; at Porto speeds `step_dt` is still the
+     binding term, so that verified config is untouched.
+   - **No stuck detection.** `self.speed` is the *commanded* profile speed, so
+     it reads 1.5 m/s while the car sits motionless against a wall — the
+     controller had no signal anything was wrong. Now detects it from actual
+     pose travel and reverses out, the same escape FTG already uses. Raised
+     ICRA throughput from 3 laps to 11 in the same 5.5 minutes even before the
+     spur was fixed.
+
+Note the sim's `lap_count` and `collision_count` are **cumulative across runs**
+and only reset when the simulator container restarts. Two runs here were first
+misread because of that; always difference them against the run's first row.

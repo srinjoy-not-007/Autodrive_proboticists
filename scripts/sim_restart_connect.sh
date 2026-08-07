@@ -11,7 +11,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 "${REPO_DIR}/scripts/run_devkit.sh" headless
 echo "Reinstalling X tools in devkit container (for window clicking)..."
 docker exec autodrive_roboracer_api /bin/bash -c \
-    "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq xdotool x11-apps imagemagick >/dev/null 2>&1" || true
+    "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq xdotool x11-apps imagemagick wmctrl >/dev/null 2>&1" || true
 
 docker rm -f autodrive_roboracer_sim 2>/dev/null || true
 docker run --name autodrive_roboracer_sim --rm -d \
@@ -37,17 +37,27 @@ connected() {
 }
 
 echo "Clicking Connection button (window $WID)..."
-docker exec autodrive_roboracer_api /bin/bash -c "xdotool windowactivate $WID" || true
-sleep 1
+# The clicks are delivered at the pointer, so the sim window must actually be on
+# top: with a browser covering it the clicks land in the browser instead, and
+# `xdotool windowactivate` does not raise it under this WM. wmctrl does.
+# Coordinates are absolute (window origin + offset) for the same reason.
+GEO=$(docker exec autodrive_roboracer_api /bin/bash -c "xdotool getwindowgeometry $WID | grep Position")
+OX=$(echo "$GEO" | sed 's/.*Position: \([0-9]*\),\([0-9]*\).*/\1/')
+OY=$(echo "$GEO" | sed 's/.*Position: \([0-9]*\),\([0-9]*\).*/\2/')
+click_at() {   # hover first: the button only reacts to a click it has seen enter
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "xdotool mousemove $((OX + $1)) $((OY + $2)); sleep 1; xdotool click 1"
+}
 for attempt in 1 2 3; do
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "wmctrl -i -a $(printf '0x%08x' "$WID")" 2>/dev/null || true
+    sleep 2
     # The sidebar may be open or collapsed; the hamburger (51,64) toggles it.
     # Try Connection directly first, then toggle the sidebar and try again.
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "xdotool mousemove --window $WID 51 302 click 1"
+    click_at 51 302
     sleep 3
     if connected; then echo "CONNECTED (IPS data flowing)"; exit 0; fi
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "xdotool mousemove --window $WID 51 64 click 1"
+    click_at 51 64
     sleep 2
 done
 echo "WARNING: could not verify connection — click the Connection button in the sim window manually"

@@ -56,6 +56,47 @@ def prune_to_cycle(skel):
     return s
 
 
+def excise_spurs(pts, min_gap=0.5, max_len=6.0):
+    """Remove there-and-back excursions from an ordered closed loop.
+
+    A skeleton spur reaches into a dead end and the traced order walks out and
+    straight back, so the loop reverses direction and the two legs sit almost
+    on top of each other. A real hairpin also reverses direction, but its legs
+    are separated by the track width — that separation is what tells them
+    apart, so this cannot eat a genuine corner.
+
+    Found the hard way on the ICRA circuit: one spur at a single point made the
+    car drive into open track, stop, and grind against the wall for 20-100 s a
+    lap (83 collisions), while the line measured a healthy 0.414 m clearance
+    everywhere. Geometry checks that only look at clearance cannot see this.
+    """
+    n = len(pts)
+    if n < 20:
+        return pts
+    d = np.diff(np.vstack([pts, pts[:1]]), axis=0)
+    head = np.arctan2(d[:, 1], d[:, 0])
+    dh = np.abs((np.diff(np.concatenate([head, head[:1]])) + np.pi)
+                % (2 * np.pi) - np.pi)
+    drop = np.zeros(n, dtype=bool)
+    step = float(np.median(np.hypot(d[:, 0], d[:, 1]))) or 0.01
+    for a in np.flatnonzero(dh > 2.0):          # >115 deg = doubling back
+        k = 1
+        while k < min(int(max_len / step), n // 3):
+            gap = np.hypot(*(pts[(a - k) % n] - pts[(a + 1 + k) % n]))
+            if gap > min_gap:
+                break
+            k += 1
+        else:
+            continue                            # never separates: not a spur
+        if k < 3:
+            continue                            # too short to matter
+        drop[[(a - j) % n for j in range(k)]] = True
+        drop[[(a + 1 + j) % n for j in range(k)]] = True
+        print(f'  excised spur at idx {a}: {2 * k} pts '
+              f'(~{k * step:.2f} m out and back)')
+    return pts[~drop] if drop.any() else pts
+
+
 def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
     """Order the centerline by chaining skeleton shortest paths through
     waypoints taken from the driven trajectory (in driving order).
@@ -225,6 +266,7 @@ def main():
         pts = centerline_from_trajectory(tx, ty, corridor, res, ox, oy)
         print(f'centerline (trajectory-anchored): {len(pts)} pts '
               f'(~{np.hypot(*np.diff(pts, axis=0).T).sum():.1f} m loop)')
+    pts = excise_spurs(pts)
     win = 15
     kernel = np.ones(win) / win
     for c in range(2):
