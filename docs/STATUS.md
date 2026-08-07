@@ -321,16 +321,55 @@ expected payoff:
 
 ## Open
 
-- Find the highest collision-free `speed_scale`, then move from the safe line
-  to the sweep-corrected optimized line (ideal lap ~10.4 s, so there is a lot
-  left on the table).
+- **Build the winners' stack and benchmark against it directly** — see NEXT
+  below. This is the one thing standing between us and the 6.53 s target.
 - The arbiter needs rebuilding or dropping (#11).
 
-## Next
+Closed since this section was written: `speed_scale` is 1.0 and clean on both
+tracks, and the optimized line was driven and **rejected on measurement** (57
+collisions, 6 zones) — it is not "left on the table", it does not work here.
 
-1. Push the qualification image to DockerHub and submit Phase 1 early (#13).
-2. Raise `speed_scale` to the clean limit; then switch to the optimized line.
-3. Rehearse the new-track drill end to end (#14).
+
+## NEXT SESSION — START HERE
+
+**Implement the winners' stack and compare it against ours on the same track,
+same sim, same vehicle.** Decided Aug 8 after mapping our own speed frontier and
+finding it tops out at ~10.5-11.3 s against their published 6.53 s.
+
+Why this and not more tuning: every lever we own has been swept and measured
+(see "Closing on the winners" below). ay, corridor margin, curvature bound, and
+line choice all trade collisions for time along a frontier that does not reach
+6.53 s. We track our own plan to 2.4%, so the tracker is not the problem. The
+remaining gap must be something structural in how they plan, and the only
+honest way to find it is to run their code and measure the difference rather
+than keep guessing at ours.
+
+Order of work:
+
+1. **Validate the benchmark first — cheapest and it may reset the target.**
+   Confirm 6.53 s is the same track, same vehicle model, same sim version.
+   Their average of 4.38 m/s over a line whose tightest corner is R = 0.98 m
+   implies lateral accelerations of 9-20 m/s2; our car visibly slides at 5-7.
+   If their sim grips differently, the gap is partly an artefact and the whole
+   plan changes. Do not skip this.
+2. **Get VAUL's stack running** (github.com/vaul-ulaval, 1st at ICRA 2025 and
+   CDC-TF 2025). We already know from the earlier code comparison that every
+   block matches ours except odometry (they run wheel odometry AND kiss-icp).
+3. **Diff the artefacts, not the prose**: their raceline vs ours on the same
+   map — path length, peak curvature, curvature p99, worst-corner clearance,
+   and the velocity profile's ay ceiling. Our numbers to beat, all on Porto:
+   ideal 11.05 s, peak kappa 1.019, clearance 0.325 m, ay cap 3.0.
+4. **Drive their line with our controller, and our line with theirs.** That
+   separates "better plan" from "better tracker" in two runs. Our controller
+   tracks to ~7 mm, so if their line is faster on our stack, the win is in the
+   planner.
+
+The specific thing to look for: our optimized line's *peak* curvature (1.717)
+comes out **worse** than the plain centerline's (1.019). Min-curvature reduces
+the integral of kappa and is free to spike locally, and those spikes are what
+saturate the steering at exactly the two corners where ay 4.0 fails. If they
+bound peak curvature, or use a different objective, that alone could be the
+difference.
 
 ## What the winners do differently (VAUL, 1st at ICRA 2025 and CDC-TF 2025)
 
