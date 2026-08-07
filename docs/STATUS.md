@@ -236,7 +236,26 @@ identical controller and gains.
 grip limit (ay ~3), throttle calibration (0.040 per m/s), localization
 parameters, braking horizon. None of these were re-tuned per track.
 
-**Rewrite did not fix it either — recon quality is the blocker.** Anchoring the
+**Root cause found: the error budget does not fit on ICRA.** Localization there
+is far worse than on Porto — without a velocity input the filter *diverges*
+(mean 1.48 m, p95 7.9 m, 5 relocalizations), because the car covers ~0.3 m
+between 10 Hz scans on a track twice Porto's size and a random walk cannot keep
+up. Re-enabling the velocity input fixes the divergence (mean 0.236 m, p95
+0.54 m, 0 relocalizations) — **disabling it had been overfitted to Porto, and
+that default is now corrected.** But driving still fails, because:
+
+| Track | localization p95 | safe-line corner clearance | fits? |
+|---|---|---|---|
+| Porto | 0.30 m | 0.325 m | yes — clean |
+| ICRA | 0.54 m | 0.215 m | **no — 2.5x over** |
+
+So ICRA needs *both* better localization and more clearance. Concrete levers,
+untried: raise map resolution (0.025 m may be coarse for a 58 m track), more
+particles with the velocity input, and a line that gives up lap time for
+clearance where the corridor is tight. Recon quality still matters but is no
+longer the leading suspect.
+
+**Earlier hypothesis, now superseded — the rewrite did not fix it:** Anchoring the
 centerline to the driven trajectory produced clean geometry (uniform 0.153 m
 spacing, closes to 0.154 m, no discontinuities, 1.33 m corridor) and better
 clearance (0.075 -> 0.215 m), but driving it was *worse*: 581 collisions, no
