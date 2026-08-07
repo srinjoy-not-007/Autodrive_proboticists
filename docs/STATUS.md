@@ -360,3 +360,36 @@ Sources: [vaul-ulaval](https://github.com/vaul-ulaval),
 [KISS-ICP](https://github.com/PRBonn/kiss-icp),
 [f1tenth/particle_filter](https://github.com/f1tenth/particle_filter),
 [f1tenth_benchmarks](https://github.com/BDEvan5/f1tenth_benchmarks)
+
+## LiDAR odometry: implemented, measured, not adopted
+
+`src/pit_crew/scan_odometry.py` — translation-only 2D ICP between consecutive
+scans, with yaw taken from the IMU so only the translation is unknown. Runs
+inside the 10 Hz budget.
+
+**It does not work on a racetrack, for a geometric reason.** Measured against
+IPS: median 0.16 m/s against a true 0.87 m/s — a 5.7x underestimate, correlation
+0.225. Through the filter: median 2.74 m versus 0.199 m with encoders.
+
+The cause is the **aperture problem**. A racetrack is long, smooth walls running
+parallel to the direction of travel; sliding along such a wall barely changes
+the scan, so forward translation is close to unobservable from wall geometry
+alone. This is exactly why the winning team runs wheel odometry *and* KISS-ICP
+rather than scan matching alone — the wheels supply the forward speed that scan
+matching cannot see.
+
+The module is kept: fused with encoder speed it would still be the right tool
+for correcting lateral drift and slip, which is where scan geometry *is*
+informative.
+
+**The real result of chasing this was discovering the encoders work.** That was
+the missing odometry all along; it is now the filter's motion source.
+
+## Remaining gap on unseen tracks
+
+ICRA localization is now stable (0 relocalizations, p95 0.549 m) but still
+exceeds the 0.215 m corner clearance of its generated line. With odometry no
+longer the suspect, the remaining lever is **clearance**: make the line
+generator trade lap time for margin wherever the corridor allows, targeting
+corner clearance comfortably above the measured localization p95. That is task
+#24 and is now the single thing between us and a working unseen-track stack.
