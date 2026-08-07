@@ -53,13 +53,15 @@ class ParticleFilter(Node):
             ('init_spread', 0.6),
             ('lost_threshold', 0.22),     # normalized score below = lost
             ('lost_patience', 5),         # consecutive bad scans before reinit
-            # 0 disables the velocity input. Measured on a bag the map was
-            # NOT built from: random walk gives median 0.093 m, while feeding
-            # the calibrated throttle->speed curve degrades it monotonically
-            # (0.108 at k=12.5 up to 0.157 at k=32) and makes the estimate lead
-            # reality by ~50 ms, because the straight-line calibration ignores
-            # cornering drag. The likelihood field is strong enough without it.
-            ('throttle_to_mps', 0.0),
+            # Velocity input from the calibrated throttle curve (1/0.040).
+            # On slow, small Porto a plain random walk is slightly better
+            # (0.093 m vs 0.136 m median) and disabling this was tuned to that
+            # track — a mistake. On the larger, faster ICRA circuit the car
+            # covers ~0.3 m between 10 Hz scans and the random walk cannot keep
+            # up: it diverges (mean 1.48 m, p95 7.9 m, 5 relocalizations) where
+            # the velocity input stays locked on (mean 0.236 m, p95 0.54 m, 0).
+            # Keep it on: a small cost on slow tracks buys stability on fast ones.
+            ('throttle_to_mps', 25.0),
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
