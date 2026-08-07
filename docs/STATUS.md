@@ -9,8 +9,10 @@ Published results, **same Porto practice track we develop on**:
 | CDC-TF 2025 | Mamba 65.41 s | **6.53 s** | VAUL 7.74 s |
 | ICRA 2025 | AGV 67.86 s | 6.77 s | VAUL 11.28 s |
 
-Podium teams post **zero collisions**, so cleanliness is table stakes, not an
-edge. Our best clean lap is 32.43 s — about **5x off the winning pace**. Note
+Qualification uses the **Porto practice track — the same one we develop on**,
+so those best-lap figures are directly comparable to ours. The finals figures
+are on each event's own unseen track and are not comparable. Podium teams post
+**zero collisions**, so cleanliness is table stakes, not an edge. Our best clean lap is 32.43 s — about **5x off the winning pace**. Note
 our own velocity profile's "ideal" lap was ~11 s, i.e. slower than their real
 6.5 s: the grip assumptions (ax = ay = 3 m/s^2) are far too conservative. A
 6.5 s lap on a 28.6 m loop is 4.4 m/s average, which needs roughly 10 m/s^2 of
@@ -175,6 +177,28 @@ Two lessons worth keeping: the **safe (centerline) line beats the optimized
 raceline** on this track because clearance matters more than path length once
 collisions cost 10 s; and a **long braking horizon double-counts** the profile's
 own braking distance (52 s/lap at 1.2 s horizon vs 11 s at 0.35 s).
+
+## Generalization: what transfers and what does not
+
+Tested by regenerating everything for the **ICRA 2026 competition circuit**
+(different, larger, and never seen by this stack) and racing it with the
+identical controller and gains.
+
+**Transfers (vehicle properties, not track properties):** Stanley gains, the
+grip limit (ay ~3), throttle calibration (0.040 per m/s), localization
+parameters, braking horizon. None of these were re-tuned per track.
+
+**Did NOT transfer: the centerline extraction.** The skeleton method assumes
+the drivable area is a simple loop. The ICRA circuit has an inner passage, so
+the flood-filled corridor merged regions that are not connected in the driving
+sense and the skeleton cut across the infield — the car followed a line through
+a wall (18 collisions; slowing to half speed made it *worse*, 116, which is what
+ruled out speed). Fixed by anchoring the centerline to the driven trajectory,
+which is evidence of what is actually drivable. **Not yet re-verified by
+driving** — that is the next run.
+
+**Caveat on the headline number:** 11.21 s is measured on Porto only. Treat it
+as a Porto result until the ICRA rerun confirms the pipeline end to end.
 
 ## Historical: where the 5x gap was
 
