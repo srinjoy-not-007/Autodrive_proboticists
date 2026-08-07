@@ -11,8 +11,8 @@ cd /home/autodrive_devkit
 MAP="${PIT_CREW_MAP:-/home/data/maps/track_v2}"
 LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/track_v2_centerline.csv}"
-SCALE="${PIT_CREW_SPEED_SCALE:-0.30}"
-MODE="${PIT_CREW_MODE:-full}"      # full | reactive
+SCALE="${PIT_CREW_SPEED_SCALE:-0.30}"   # highest scale measured collision-free
+MODE="${PIT_CREW_MODE:-raceline}"   # raceline | reactive
 
 # The bridge to the simulator
 ros2 launch autodrive_roboracer bringup_headless.launch.py &
@@ -24,17 +24,19 @@ if [ "$MODE" = "reactive" ]; then
     ros2 run pit_crew follow_the_gap --ros-args \
         --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml &
 else
+    # Localization + pure pursuit, driving the car directly.
+    #
+    # The arbiter is deliberately NOT started. Measured on this track it caused
+    # the collisions it was meant to prevent: with it in the loop the same line,
+    # speed and localization produced 18-29 collisions and no completed laps,
+    # while pure pursuit publishing directly ran 3 clean laps at 32.43 s.
+    # Swapping control between two controllers with independent steering state
+    # destabilises the car more than the hazards it reacts to.
     ros2 run pit_crew localization --ros-args \
         -p map_prefix:="${MAP}" -p centerline_csv:="${CENTER}" &
     sleep 4
     ros2 run pit_crew pure_pursuit --ros-args \
-        -p raceline_csv:="${LINE}" -p speed_scale:="${SCALE}" \
-        -p output_ns:=/pit_crew/pp &
-    ros2 run pit_crew follow_the_gap --ros-args \
-        --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml \
-        -p output_ns:=/pit_crew/ftg &
-    # Only the arbiter publishes to the actuators
-    ros2 run pit_crew arbiter &
+        -p raceline_csv:="${LINE}" -p speed_scale:="${SCALE}" &
 fi
 
 wait
