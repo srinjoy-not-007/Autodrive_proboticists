@@ -19,6 +19,7 @@ import numpy as np
 from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import LaserScan, Imu, JointState
 from geometry_msgs.msg import Point
+from std_msgs.msg import Float32
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from pit_crew.pf_core import ParticleFilterCore, load_map   # noqa: E402
@@ -31,6 +32,7 @@ TOPICS = {
     '/autodrive/roboracer_1/ips': Point,
     '/autodrive/roboracer_1/left_encoder': JointState,
     '/autodrive/roboracer_1/right_encoder': JointState,
+    '/autodrive/roboracer_1/throttle': Float32,
 }
 
 
@@ -64,7 +66,9 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--param', action='append', default=[])
     ap.add_argument('--speed-source', default='encoder',
-                    choices=['encoder', 'none', 'imu'])
+                    choices=['encoder', 'none', 'imu', 'throttle'])
+    ap.add_argument('--throttle-to-mps', type=float, default=25.0,
+                    help='1/ff_gain; scale the calibrated throttle->speed curve')
     ap.add_argument('--dump', default=None)
     ap.add_argument('--quiet', action='store_true')
     args = ap.parse_args()
@@ -91,6 +95,7 @@ def main():
 
     imu_speed = 0.0
     imu_last_t = None
+    thr_speed = 0.0
 
     for t, name, m in msgs:
         if name.endswith('imu'):
@@ -104,6 +109,8 @@ def main():
                 imu_last_t = t
         elif name.endswith('ips'):
             truth = (m.x, m.y)
+        elif name.endswith('throttle'):
+            thr_speed = max(0.0, float(m.data)) * args.throttle_to_mps
         elif name.endswith('encoder'):
             stamp = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
             if m.position:
@@ -124,6 +131,8 @@ def main():
                 speed = speed_est.speed
             elif args.speed_source == 'imu':
                 speed = imu_speed
+            elif args.speed_source == 'throttle':
+                speed = thr_speed
             else:
                 speed = 0.0
             pf.predict(speed, dt, imu_yaw)
