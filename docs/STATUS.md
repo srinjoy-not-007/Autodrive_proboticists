@@ -83,11 +83,17 @@ have never seen — which also makes it the safe finals fallback.
 
 ## Raceline stack: clean, and faster than FTG
 
-`scripts/run_pp_only.sh` (localization + pure pursuit, **no arbiter**) on the
-safe line at `speed_scale` 0.30: **3 laps, 0 collisions, best 32.43 s** — under
-FTG's 33.43 s. At 0.50 it collides and is *slower* overall (40.7 s best),
-because resets cost more than the extra pace buys. The clean maximum is
-somewhere between; 0.40 is under test.
+`scripts/run_pp_only.sh` (localization + pure pursuit, **no arbiter**).
+
+| speed_scale | result |
+|---|---|
+| 0.30 | **3 laps, 0 collisions, best 32.43 s** — beats FTG's 33.43 s |
+| 0.40 | best 28.02 s but ~1 collision/lap (4 over 3 laps) |
+| 0.50 | 6 collisions in 1 lap, best 40.7 s — *slower*, resets cost more than the pace buys |
+
+0.30 is the shipping default. 0.40 is quicker per clean lap (28.0 s) but at
+~1 collision/lap it costs +10 s each, so it loses on total race time; worth
+revisiting once tracking at speed improves.
 
 ## Open
 
