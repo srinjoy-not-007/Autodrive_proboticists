@@ -172,13 +172,21 @@ def centerline_from_trajectory(tx, ty, corridor, res, ox, oy, iters=6):
             wl = wall_dist(x, y, nx[i], ny[i])
             wr = wall_dist(x, y, -nx[i], -ny[i])
             shift[i] = 0.5 * (wl - wr)
+        # Half-correction, then smooth. Correcting harder or skipping the
+        # smoothing centres the *points* better but makes the line jagged, and
+        # a jagged line swings the car's body corners into the wall: measured
+        # worst-corner clearance got worse, not better (Porto 0.325 -> 0.152 m,
+        # ICRA 0.215 -> 0.071 m). Body sweep, not point position, is what the
+        # error budget actually spends.
         P[:, 0] += 0.5 * shift * nx
         P[:, 1] += 0.5 * shift * ny
         # circular smoothing keeps it from ratcheting into corners
-        k = np.ones(9) / 9
+        w = 9
+        k = np.ones(w) / w
         for c in range(2):
-            P[:, c] = np.convolve(np.concatenate([P[-9:, c], P[:, c], P[:9, c]]),
-                                  k, mode='same')[9:-9]
+            P[:, c] = np.convolve(np.concatenate([P[-w:, c], P[:, c], P[:w, c]]),
+                                  k, mode='same')[w:-w]
+
     return P
 
 
