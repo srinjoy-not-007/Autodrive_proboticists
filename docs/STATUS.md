@@ -145,7 +145,38 @@ the map is built from a worse trajectory. Next: improve the reconnaissance lap
 (slower FTG, or a second mapping pass driven from the first map) before trusting
 the drill end-to-end on an unfamiliar circuit.
 
-## Speed: where the 5x gap actually is
+## Speed: 32.43 s -> 11.21 s with Stanley (2.9x)
+
+`scripts/run_stanley.sh 1.0 track_v2 safe` — localization + Stanley tracker,
+full profile speed: **3 laps, 0 collisions, best 11.21 s**, cross-track error
+~7 mm. This is the shipping configuration.
+
+What made the difference, in order:
+1. **Curvature feedforward.** Most of the steering now comes from the plan
+   (atan(L*kappa)), so feedback only corrects the residual. Cross-track error
+   fell from ~120 mm (pure pursuit) to ~7 mm.
+2. **Front-axle reference (Stanley).** Stable under heading error, where pure
+   pursuit cuts corners.
+3. **Pose prediction + 50 Hz control.** All sensors arrive at ~10 Hz on one
+   WebSocket so there is no extra information between scans, but the pose can
+   be dead-reckoned to 'now' and the loop run faster than the sensor rate.
+
+Measured along the way:
+
+| Configuration | Result |
+|---|---|
+| Stanley, safe line, scale 1.0, ay 3 | **11.21 s, 0 collisions** ← shipping |
+| Stanley, safe line, ay 4 | 10.58 s but 1 collision — loses on race time (+10 s each) |
+| Stanley, safe line, ay 6 | 1352 collisions — grip limit is real near ay 3-4 |
+| Stanley, **optimized** raceline | 12.28 s, 17 collisions — its 0.146 m corner clearance cannot absorb residual error |
+| Pure pursuit, safe line | 32.43 s, 0 collisions |
+
+Two lessons worth keeping: the **safe (centerline) line beats the optimized
+raceline** on this track because clearance matters more than path length once
+collisions cost 10 s; and a **long braking horizon double-counts** the profile's
+own braking distance (52 s/lap at 1.2 s horizon vs 11 s at 0.35 s).
+
+## Historical: where the 5x gap was
 
 Profile tuning is exhausted; the limit is the **controller**, not the plan.
 Measured lateral-acceleration demand vs collisions:
