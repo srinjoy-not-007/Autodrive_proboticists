@@ -111,6 +111,15 @@ the footprint check flags as undrivable *before* we ever drive it.
 Past competition images are useful unseen tracks for practice: `*-compete` tags
 carry the real competition circuits, while every `*-practice` tag is Porto.
 
+**Driving result on that unseen track is honest but not yet clean:** the
+generated stack laps it, best 67.8 s, but at ~1 collision/lap at speed_scale
+0.30 *and* 0.20 — so on this circuit the problem is not speed. The likely cause
+is recon quality: the blind FTG drive that produced the map itself had contacts
+(0.93% of samples with a body corner inside a wall, versus 0.00% on Porto), so
+the map is built from a worse trajectory. Next: improve the reconnaissance lap
+(slower FTG, or a second mapping pass driven from the first map) before trusting
+the drill end-to-end on an unfamiliar circuit.
+
 ## Open
 
 - Find the highest collision-free `speed_scale`, then move from the safe line
