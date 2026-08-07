@@ -24,6 +24,7 @@ from std_msgs.msg import Float32
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from pit_crew.pf_core import ParticleFilterCore, load_map   # noqa: E402
 from pit_crew import vehicle                                 # noqa: E402
+from pit_crew.scan_odometry import ScanSpeed, scan_to_points  # noqa: E402
 
 
 TOPICS = {
@@ -66,7 +67,7 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--param', action='append', default=[])
     ap.add_argument('--speed-source', default='encoder',
-                    choices=['encoder', 'none', 'imu', 'throttle'])
+                    choices=['encoder', 'none', 'imu', 'throttle', 'scan'])
     ap.add_argument('--throttle-to-mps', type=float, default=25.0,
                     help='1/ff_gain; scale the calibrated throttle->speed curve')
     ap.add_argument('--dump', default=None)
@@ -96,6 +97,8 @@ def main():
     imu_speed = 0.0
     imu_last_t = None
     thr_speed = 0.0
+    scan_speed = ScanSpeed(alpha=float(os.environ.get('SCAN_ALPHA', '0.5')))
+    prev_yaw = None
 
     for t, name, m in msgs:
         if name.endswith('imu'):
@@ -133,6 +136,14 @@ def main():
                 speed = imu_speed
             elif args.speed_source == 'throttle':
                 speed = thr_speed
+            elif args.speed_source == 'scan':
+                pts = scan_to_points(m.ranges, m.angle_min, m.angle_increment,
+                                     m.range_min, m.range_max)
+                dyaw = 0.0 if prev_yaw is None else \
+                    math.atan2(math.sin(imu_yaw - prev_yaw),
+                               math.cos(imu_yaw - prev_yaw))
+                prev_yaw = imu_yaw
+                speed = scan_speed.update(pts, dyaw, dt)
             else:
                 speed = 0.0
             pf.predict(speed, dt, imu_yaw)
