@@ -178,6 +178,43 @@ raceline** on this track because clearance matters more than path length once
 collisions cost 10 s; and a **long braking horizon double-counts** the profile's
 own braking distance (52 s/lap at 1.2 s horizon vs 11 s at 0.35 s).
 
+## Steering oscillation (the visible left-right swinging)
+
+Measured with `tools/steering_smoothness.py`: **1.68 steering reversals per
+second** and a p95 steering rate of **4.32 rad/s against a 3.2 rad/s actuator**
+— we were commanding faster than the wheels can physically turn, and phase lag
+in a feedback loop is what turns a correction into an oscillation. Mean lock was
+0.293 rad (17 deg) just to hold a line.
+
+Three causes, all now addressed at source (filtering the output harder only adds
+more lag):
+1. **The pose snapped.** The filter publishes a resampled-particle mean at
+   10 Hz, so consecutive fixes differ by centimetres; the controller ran at
+   50 Hz on a pose that teleported every 100 ms. Now each fix is blended into a
+   continuously-propagated state.
+2. **No actuator rate limit.** Commands now respect 3.2 rad/s.
+3. **Noisy heading reference.** Path heading was computed between raceline
+   points 0.1 m apart, where centimetre spline wiggle dominates; now taken over
+   a ~0.5 m baseline, and curvature smoothed to match.
+
+| Config | Lap | Collisions | Reversals/s | Steer rate p95 | Mean lock |
+|---|---|---|---|---|---|
+| Original gains | 11.21 s | 0 | 1.68 | 4.32 (over limit) | 0.293 rad |
+| + all three fixes | 11.74 s | 1 | 1.68 | 4.12 | 0.217 |
+| + low feedback gains | 12.06 s | 2 | 1.50 | 3.20 (at limit) | 0.142 |
+
+**Honest state:** mean steering effort halved, but smoothness trades against
+tracking, and the *reversal rate* barely moved. Part of it is geometric (this
+track genuinely alternates direction) and part is fundamental: any feedback
+controller reacting to error sampled at 10 Hz will ring. Follow-the-Gap shows
+the same swinging and uses no localization at all, which confirms the sensor
+rate — not the pose — is the floor.
+
+**This is now the strongest argument for MPC** (task #22): it optimizes a whole
+steering trajectory subject to the rate limit, instead of reacting pointwise,
+which is precisely the cure for rate-limit-induced oscillation. That is a better
+justification than the one it was originally queued on.
+
 ## Generalization: what transfers and what does not
 
 Tested by regenerating everything for the **ICRA 2026 competition circuit**
