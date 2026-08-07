@@ -85,7 +85,7 @@ def main():
         centerline = np.loadtxt(args.centerline, delimiter=',')[:, :2]
 
     pf = ParticleFilterCore(dist, img, meta, centerline, **params)
-    speed_est = vehicle.SpeedEstimator(alpha=0.5)
+    speed_est = vehicle.SpeedEstimator(alpha=float(os.environ.get("PF_ALPHA","0.5")))
 
     msgs = read_bag(args.bag)
     imu_yaw = None
