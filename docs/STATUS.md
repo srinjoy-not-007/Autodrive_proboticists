@@ -145,6 +145,36 @@ the map is built from a worse trajectory. Next: improve the reconnaissance lap
 (slower FTG, or a second mapping pass driven from the first map) before trusting
 the drill end-to-end on an unfamiliar circuit.
 
+## Speed: where the 5x gap actually is
+
+Profile tuning is exhausted; the limit is the **controller**, not the plan.
+Measured lateral-acceleration demand vs collisions:
+
+| peak speed (p95) | lateral accel (p95) | collisions |
+|---|---|---|
+| 1.73 m/s | **2.22 m/s²** | **0** |
+| 2.66 | 5.57 | 7 |
+| 3.25 | 8.04 | 12 |
+| 3.94 | 9.74 | 23 |
+
+Three profiles were tried and all confirm the same ceiling: ay = 3 (ideal 11 s,
+clean only when scaled to 0.30), ay = 8 (ideal 6.8 s — right ballpark, but
+crashes), and ay = 2.5 with vmax 2.0 built from the measured numbers (ideal
+15.4 s, still crashes). The clean run *averaged* 0.92 m/s, so sustained pace,
+not peak, is what the controller holds. Winners average 4.4 m/s.
+
+**Conclusion: to approach 6.5 s we need a better tracking controller, not a
+faster plan.** Pure pursuit is a geometric reactive controller fed by a 10 Hz
+pose; at speed it cannot hold a 1.3 m corridor. Candidates, in order of
+expected payoff:
+1. **Curvature feedforward + cross-track feedback** (or Stanley) instead of
+   pure geometric pursuit — the raceline's curvature is known ahead of time, so
+   steering should not be derived solely from a lookahead point.
+2. **Higher-rate pose**: integrate IMU between LiDAR scans to publish at
+   ~100 Hz instead of 10 Hz, so the controller is not steering on 0.1 s-old data.
+3. **MPC** over the raceline, which handles the actuator rate limit
+   (3.2 rad/s) explicitly — the likely reason aggressive steering fails.
+
 ## Open
 
 - Find the highest collision-free `speed_scale`, then move from the safe line
