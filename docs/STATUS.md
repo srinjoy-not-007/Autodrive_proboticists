@@ -27,8 +27,8 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 | What | Result |
 |---|---|
 | Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
-| Localization, replaying the mapping bag | median 0.09 m, p95 0.31 m (flattering: that bag built the map) |
-| Localization, **live at racing pace** | median **0.19 m**, p95 0.35 m — this is the number that matters |
+| Localization, offline on an unseen bag | median 0.093 m, p95 0.299 m |
+| Localization, **live** | median **0.092 m**, p95 0.298 m, within 10 cm 55% |
 | Pure pursuit tracking error | median 0.12 m, p95 0.36 m |
 | Pure pursuit lap time | 20.7 s (but not yet collision-free) |
 | Optimized raceline | 27.0 m, ideal lap ~10.4 s |
@@ -59,6 +59,12 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 7. Collisions **teleport the car to a checkpoint**, so a logged collision
    position is the *reset* point, not the impact point — look ~0.4 s earlier.
 8. TUM's `psi` column is **north-zero**, not standard math angles.
+9. **Feeding a velocity input into the filter made it worse.** The calibrated
+   throttle->speed curve is a straight-line fit, so it over-predicts through
+   corners: the estimate led reality by ~50 ms and median error degraded
+   monotonically with the gain (0.093 m at zero, 0.157 m at k=32). The
+   likelihood field localizes better with a plain random walk. Live error
+   dropped 0.140 -> 0.092 m by switching it off.
 
 ## Qualification: met
 
