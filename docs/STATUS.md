@@ -210,10 +210,21 @@ controller reacting to error sampled at 10 Hz will ring. Follow-the-Gap shows
 the same swinging and uses no localization at all, which confirms the sensor
 rate — not the pose — is the floor.
 
-**This is now the strongest argument for MPC** (task #22): it optimizes a whole
-steering trajectory subject to the rate limit, instead of reacting pointwise,
-which is precisely the cure for rate-limit-induced oscillation. That is a better
-justification than the one it was originally queued on.
+**MPC was built on that argument and it worked.** `src/pit_crew/mpc.py`,
+selected with `CONTROLLER=mpc ./scripts/run_stanley.sh`:
+
+| Controller | Lap | Collisions | Reversals/s | Steer rate p95 | Mean lock |
+|---|---|---|---|---|---|
+| Pure pursuit | 32.43 s | 0 | — | — | — |
+| Stanley | 11.21 s | 0 | 1.68 | 4.32 (over limit) | 0.293 |
+| Stanley, low gains | 12.06 s | 2 | 1.50 | 3.20 | 0.142 |
+| **MPC** | 11.47 s | **0** | **1.42** | **2.80 (within limit)** | 0.204 |
+
+MPC is the only controller that keeps the steering rate inside the actuator's
+3.2 rad/s limit while staying collision-free — it optimises a steering sequence
+subject to the constraint rather than reacting pointwise, so smoothness costs no
+accuracy. Stanley remains the shipped default until MPC has more laps behind it;
+both are collision-free at ~11.2-11.5 s.
 
 ## Generalization: what transfers and what does not
 
