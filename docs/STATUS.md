@@ -393,3 +393,25 @@ longer the suspect, the remaining lever is **clearance**: make the line
 generator trade lap time for margin wherever the corridor allows, targeting
 corner clearance comfortably above the measured localization p95. That is task
 #24 and is now the single thing between us and a working unseen-track stack.
+
+## Unseen track (ICRA): still open, but narrowed to speed
+
+State at the last session boundary, with encoder odometry and the
+measurement-chosen line (0.414 m worst-corner clearance):
+
+| speed_scale | collisions | note |
+|---|---|---|
+| 1.0 | 134 over 3 laps | |
+| 0.5 | 17 over 2 laps | |
+| 0.3 | not yet tested | **next thing to run** |
+
+Halving the speed cut collisions ~8x, so pace is the dominant remaining factor
+on this circuit, not localization (now stable: 0 relocalizations, p95 0.549 m)
+and not the line (0.414 m clearance, chosen by measurement).
+
+Porto runs clean at scale 1.0; ICRA does not. The profiles differ — ICRA allows
+6.3 m/s against Porto's 5.25 — so a single global scale is not transferable.
+**The drill should end with an automatic speed-scale sweep**: run 2 laps at
+descending scales and keep the fastest that is collision-free. That is a small
+script and it removes the last hand-tuned, track-specific number from the
+pipeline.
