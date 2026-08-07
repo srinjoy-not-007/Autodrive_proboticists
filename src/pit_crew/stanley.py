@@ -52,7 +52,7 @@ class StanleyTracker(Node):
             ('k_ff', 1.0),               # curvature feedforward gain
             ('k_damp', 0.12),            # damping on steering rate
             ('control_hz', 50.0),
-            ('brake_horizon_s', 1.2),
+            ('brake_horizon_s', 0.35),   # short: the profile already brakes
             ('throttle_gain', 0.040),
             ('max_predict_s', 0.35),     # never extrapolate further than this
             ('steer_alpha', 0.6),
@@ -138,9 +138,11 @@ class StanleyTracker(Node):
         self.steer += self.steer_alpha * (delta - self.steer)
         self.steer = float(np.clip(self.steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
 
-        # Slowest speed over the stretch we are about to cover: with open-loop
-        # throttle the car must already be slow when it reaches the corner.
-        horizon = max(0.5, self.speed * self.brake_horizon)
+        # A short defensive horizon only. The tph velocity profile already
+        # includes braking distance, so a long horizon double-counts it and
+        # pins the car near the profile's global minimum (measured: 52 s/lap
+        # at a 1.2 s horizon versus 32 s with none).
+        horizon = max(0.2, self.speed * self.brake_horizon)
         n_ahead = max(2, int(horizon / max(self.spacing, 1e-3)))
         idx = (i + np.arange(n_ahead)) % len(self.v_prof)
         self.speed = float(self.v_prof[idx].min()) * self.speed_scale
