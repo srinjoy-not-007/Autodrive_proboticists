@@ -37,6 +37,7 @@ class PurePursuit(Node):
             ('lookahead_max', 1.00),
             ('lookahead_per_mps', 0.15),
             ('speed_scale', 0.6),        # global scale on the profile
+            ('brake_horizon_s', 1.2),    # look this far ahead for the speed
             ('throttle_gain', 0.040),     # open-loop throttle per m/s
             ('steer_alpha', 0.75),
             ('min_loc_score', 0.15),     # below this, stop commanding
@@ -44,7 +45,7 @@ class PurePursuit(Node):
             ('output_ns', ''),           # set to route via the arbiter
         ])
         (raceline_csv, self.la_min, self.la_max, self.la_per_mps,
-         self.speed_scale, throttle_gain, self.steer_alpha,
+         self.speed_scale, self.brake_horizon, throttle_gain, self.steer_alpha,
          self.min_score, self.pose_timeout, output_ns) = [x.value for x in p]
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
@@ -52,6 +53,8 @@ class PurePursuit(Node):
         self.rl_v = rl[:, 5]
         self.rl_s = rl[:, 0]
         self.throttle_ctl = vehicle.ThrottleController(ff_gain=throttle_gain)
+        seg = np.hypot(np.diff(self.rl_xy[:, 0]), np.diff(self.rl_xy[:, 1]))
+        self._pt_spacing = float(np.median(seg)) if len(seg) else 0.1
         self._steer_filt = 0.0
         self._last_pose = None
         self._last_t = None
@@ -117,7 +120,14 @@ class PurePursuit(Node):
         steer_angle = math.atan(vehicle.WHEELBASE * curvature)
         self._steer_filt += self.steer_alpha * (steer_angle - self._steer_filt)
 
-        v_target = float(self.rl_v[i0]) * self.speed_scale
+        # Take the slowest speed in the stretch we are about to cover, not the
+        # speed at the point we are on. Open-loop throttle plus a 10 Hz sensor
+        # loop means the car cannot brake reactively at the corner entry; it
+        # has to already be slow when it arrives.
+        horizon_m = max(0.5, self._speed * self.brake_horizon)
+        n_ahead = max(2, int(horizon_m / max(self._pt_spacing, 1e-3)))
+        idx = (i0 + np.arange(n_ahead)) % n
+        v_target = float(self.rl_v[idx].min()) * self.speed_scale
         self.pub_steer.publish(
             Float32(data=float(vehicle.steer_to_cmd(self._steer_filt))))
         self.pub_throttle.publish(
