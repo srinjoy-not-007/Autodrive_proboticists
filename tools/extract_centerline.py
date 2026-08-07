@@ -123,6 +123,65 @@ def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
     return np.array(order, dtype=float)
 
 
+def centerline_from_trajectory(tx, ty, corridor, res, ox, oy, iters=6):
+    """Centre the driven trajectory inside the corridor.
+
+    A global skeleton assumes the drivable area is a simple loop. On a track
+    with an inner passage the flood-filled corridor merges regions that are not
+    connected in the driving sense, and the skeleton happily cuts across a wall
+    (seen on the ICRA circuit: the extracted line crossed the infield and the
+    car dutifully drove into it). The driven trajectory, by contrast, is
+    evidence of what is actually drivable, so use it as the anchor and only
+    push each point sideways towards the middle of its own corridor.
+    """
+    solid = ~corridor
+
+    def wall_dist(x, y, nx, ny, limit=3.0):
+        d = 0.0
+        while d < limit:
+            d += res
+            ix = int(round((x + nx * d - ox) / res))
+            iy = int(round((y + ny * d - oy) / res))
+            if not (0 <= iy < solid.shape[0] and 0 <= ix < solid.shape[1]) \
+                    or solid[iy, ix]:
+                return d
+        return limit
+
+    # One clean lap, resampled uniformly
+    seg = np.hypot(np.diff(tx), np.diff(ty))
+    seg[seg > 0.5] = 0.0
+    s_cum = np.concatenate([[0], np.cumsum(seg)])
+    lap_end, away = s_cum[-1], False
+    for i in range(1, len(tx)):
+        d0 = math.hypot(tx[i] - tx[0], ty[i] - ty[0])
+        if d0 > 3.0:
+            away = True
+        elif away and d0 < 0.6 and s_cum[i] > 5.0:
+            lap_end = s_cum[i]
+            break
+    n_pts = max(80, int(lap_end / 0.15))
+    want = np.linspace(0, lap_end, n_pts, endpoint=False)
+    P = np.column_stack([np.interp(want, s_cum, tx), np.interp(want, s_cum, ty)])
+
+    for _ in range(iters):
+        d = np.gradient(P, axis=0)
+        t = np.hypot(d[:, 0], d[:, 1])
+        nx, ny = -d[:, 1] / (t + 1e-9), d[:, 0] / (t + 1e-9)
+        shift = np.zeros(len(P))
+        for i, (x, y) in enumerate(P):
+            wl = wall_dist(x, y, nx[i], ny[i])
+            wr = wall_dist(x, y, -nx[i], -ny[i])
+            shift[i] = 0.5 * (wl - wr)
+        P[:, 0] += 0.5 * shift * nx
+        P[:, 1] += 0.5 * shift * ny
+        # circular smoothing keeps it from ratcheting into corners
+        k = np.ones(9) / 9
+        for c in range(2):
+            P[:, c] = np.convolve(np.concatenate([P[-9:, c], P[:, c], P[:9, c]]),
+                                  k, mode='same')[9:-9]
+    return P
+
+
 def main():
     prefix = sys.argv[1]
     out = sys.argv[2] if len(sys.argv) > 2 else prefix + '_centerline'
@@ -147,15 +206,17 @@ def main():
     print(f'corridor cells: {corridor.sum()} '
           f'({corridor.sum() * res * res:.1f} m^2)')
 
-    skel = skeletonize(corridor)
-    cyc = prune_to_cycle(skel)      # spurs cause out-and-back kinks
-    print(f'skeleton px: {skel.sum()}, after spur pruning: {cyc.sum()}')
-    order = trace_via_waypoints(cyc, tx, ty, ox, oy, res)
-    print(f'centerline: {len(order)} px (~{len(order) * res:.1f} m loop)')
-
-    # Pixel -> world; circular moving average collapses small skeleton loop
-    # artifacts (~10-20 cm) before splining
-    pts = np.stack([ox + order[:, 1] * res, oy + order[:, 0] * res], axis=1)
+    if '--skeleton' in sys.argv:
+        skel = skeletonize(corridor)
+        cyc = prune_to_cycle(skel)
+        print(f'skeleton px: {skel.sum()}, after spur pruning: {cyc.sum()}')
+        order = trace_via_waypoints(cyc, tx, ty, ox, oy, res)
+        pts = np.stack([ox + order[:, 1] * res, oy + order[:, 0] * res], axis=1)
+        print(f'centerline (skeleton): {len(pts)} pts')
+    else:
+        pts = centerline_from_trajectory(tx, ty, corridor, res, ox, oy)
+        print(f'centerline (trajectory-anchored): {len(pts)} pts '
+              f'(~{np.hypot(*np.diff(pts, axis=0).T).sum():.1f} m loop)')
     win = 15
     kernel = np.ones(win) / win
     for c in range(2):
