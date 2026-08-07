@@ -1,5 +1,30 @@
 # Status — measured, not assumed
 
+## Target: what winning actually looks like
+
+Published results, **same Porto practice track we develop on**:
+
+| Event | Qualification (10 laps) | Best lap | Finals best lap |
+|---|---|---|---|
+| CDC-TF 2025 | Mamba 65.41 s | **6.53 s** | VAUL 7.74 s |
+| ICRA 2025 | AGV 67.86 s | 6.77 s | VAUL 11.28 s |
+
+Podium teams post **zero collisions**, so cleanliness is table stakes, not an
+edge. Our best clean lap is 32.43 s — about **5x off the winning pace**. Note
+our own velocity profile's "ideal" lap was ~11 s, i.e. slower than their real
+6.5 s: the grip assumptions (ax = ay = 3 m/s^2) are far too conservative. A
+6.5 s lap on a 28.6 m loop is 4.4 m/s average, which needs roughly 10 m/s^2 of
+lateral grip in the hairpins. Measuring the real limit is the first step.
+
+Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
+[CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
+
+## Steps only the human can do
+
+- Register (done by user), push the image to DockerHub, and submit the Phase 1
+  and Phase 2 Google Forms. Everything else in this document is automated.
+
+
 Updated 2026-08-07. Every number here came from a run on the Porto practice
 track; nothing is a design estimate.
 
