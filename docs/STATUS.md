@@ -225,6 +225,17 @@ identical controller and gains.
 grip limit (ay ~3), throttle calibration (0.040 per m/s), localization
 parameters, braking horizon. None of these were re-tuned per track.
 
+**Rewrite did not fix it either — recon quality is the blocker.** Anchoring the
+centerline to the driven trajectory produced clean geometry (uniform 0.153 m
+spacing, closes to 0.154 m, no discontinuities, 1.33 m corridor) and better
+clearance (0.075 -> 0.215 m), but driving it was *worse*: 581 collisions, no
+completed laps, cross-track error 0.58 m. So the line is not malformed — the
+failure is downstream (localization on that map, or the line faithfully
+following an excursion the messy recon drive made). **Both** centerline methods
+fail on the ICRA recon, which points squarely at task #18: the blind
+Follow-the-Gap reconnaissance lap on an unknown track is not good enough to
+build a map from. Fix the recon first, then re-test.
+
 **Did NOT transfer: the centerline extraction.** The skeleton method assumes
 the drivable area is a simple loop. The ICRA circuit has an inner passage, so
 the flood-filled corridor merged regions that are not connected in the driving
