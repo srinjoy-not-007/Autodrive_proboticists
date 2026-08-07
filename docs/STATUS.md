@@ -81,19 +81,23 @@ ignores speed, so this configuration clears it. The submission image runs it
 with `PIT_CREW_MODE=reactive`, needs no map, and therefore works on a track we
 have never seen — which also makes it the safe finals fallback.
 
+## Raceline stack: clean, and faster than FTG
+
+`scripts/run_pp_only.sh` (localization + pure pursuit, **no arbiter**) on the
+safe line at `speed_scale` 0.30: **3 laps, 0 collisions, best 32.43 s** — under
+FTG's 33.43 s. At 0.50 it collides and is *slower* overall (40.7 s best),
+because resets cost more than the extra pace buys. The clean maximum is
+somewhere between; 0.40 is under test.
+
 ## Open
 
-- The raceline stack is fast (20.7 s vs 33.4 s) but not yet collision-free.
-  The cause is quantified: localization 0.19 m + tracking 0.12 m ~ 0.31 m of
-  error against 0.146 m of corner clearance on the optimized line. The safe
-  line (0.325 m clearance) roughly covers it and got much closer (1 lap, then
-  8 collisions over several laps) but is not clean either.
-- Cutting the live localization error is the single change that unlocks the
-  fast line — see task #16.
+- Find the highest collision-free `speed_scale`, then move from the safe line
+  to the sweep-corrected optimized line (ideal lap ~10.4 s, so there is a lot
+  left on the table).
+- The arbiter needs rebuilding or dropping (#11).
 
 ## Next
 
 1. Push the qualification image to DockerHub and submit Phase 1 early (#13).
-2. Reduce live localization error (#16); then raise `speed_scale` on the safe
-   line, then move to the optimized line.
+2. Raise `speed_scale` to the clean limit; then switch to the optimized line.
 3. Rehearse the new-track drill end to end (#14).
