@@ -320,3 +320,43 @@ expected payoff:
 1. Push the qualification image to DockerHub and submit Phase 1 early (#13).
 2. Raise `speed_scale` to the clean limit; then switch to the optimized line.
 3. Rehearse the new-track drill end to end (#14).
+
+## What the winners do differently (VAUL, 1st at ICRA 2025 and CDC-TF 2025)
+
+VAUL (Université Laval) publish their tooling at `github.com/vaul-ulaval`.
+Comparing their component list against ours:
+
+| Component | VAUL | Ours | Verdict |
+|---|---|---|---|
+| Raceline optimization | `global_racetrajectory_optimization` (TUM) | same TUM `tph` | **match** |
+| Localization | `particle_filter` (fork of f1tenth/MIT, ray casting via `range_libc`) | own MCL, likelihood field | equivalent approach |
+| Reactive baseline | `wall_follow_node` | Follow-the-Gap | **match** |
+| Odometry | `wheel_odometry_node` **and `kiss-icp` (LiDAR odometry)** | none — throttle-derived speed only | **GAP** |
+| Control | `norlab_controllers` | Stanley / MPC | comparable |
+
+**The gap is odometry.** Every other block we have an equivalent of. VAUL carries
+two independent odometry sources; we have neither — our encoders are unusable
+(the signal aliases) so the particle filter's motion model runs on a
+throttle-derived guess, which is a straight-line calibration that ignores
+cornering drag. That is survivable on slow, small Porto and is exactly what
+breaks on the larger, faster ICRA circuit, where the filter's p95 error is
+0.54 m against 0.215 m of corner clearance.
+
+**KISS-ICP is the specific missing piece.** It is scan-to-scan LiDAR odometry:
+it estimates the vehicle's motion between consecutive scans by registering the
+point clouds, with no reliance on wheel encoders or a throttle model. That is
+precisely the input our motion model lacks, it is sensor-derived rather than
+assumed, and it degrades gracefully on any track because it uses the same LiDAR
+we already trust for the sensor model.
+
+Also worth noting: VAUL's `wheel_odometry_node` treats the encoder `position`
+field as **counts**, dividing by counts-per-revolution, where we treated it as
+radians. Scale alone does not explain our near-zero correlation with truth (a
+scale factor cannot destroy correlation), but their node also carries an
+explicit max-acceleration outlier rejection — suggesting they hit noisy encoder
+data too. Worth one re-test under the counts interpretation before concluding.
+
+Sources: [vaul-ulaval](https://github.com/vaul-ulaval),
+[KISS-ICP](https://github.com/PRBonn/kiss-icp),
+[f1tenth/particle_filter](https://github.com/f1tenth/particle_filter),
+[f1tenth_benchmarks](https://github.com/BDEvan5/f1tenth_benchmarks)
