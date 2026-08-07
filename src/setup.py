@@ -31,6 +31,7 @@ setup(
             'pure_pursuit = pit_crew.pure_pursuit:main',
             'arbiter = pit_crew.arbiter:main',
             'stanley = pit_crew.stanley:main',
+            'mpc = pit_crew.mpc:main',
         ],
     },
 )

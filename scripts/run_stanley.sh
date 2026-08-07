@@ -1,6 +1,7 @@
 #!/bin/bash
-# Localization + Stanley tracker (curvature feedforward, predicted pose).
+# Localization + a raceline tracker.
 # Usage: ./scripts/run_stanley.sh [speed_scale] [map] [line] [extra ros args...]
+#   CONTROLLER=mpc ./scripts/run_stanley.sh ...   to use MPC instead of Stanley
 set +e
 cd "$(dirname "$0")/.."
 SCALE="${1:-0.30}"; MAP="${2:-track_v2}"; LINE="${3:-safe}"
@@ -18,7 +19,7 @@ docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew loc
     -p centerline_csv:=/home/data/racelines/${MAP}_centerline.csv \
     -p init_x:=${IX} -p init_y:=${IY} > /tmp/loc.log 2>&1"
 sleep 7
-docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew stanley --ros-args \
+docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew ${CONTROLLER:-stanley} --ros-args \
     -p raceline_csv:=/home/data/racelines/${MAP}_${LINE}.csv \
     -p speed_scale:=${SCALE} ${EXTRA} > /tmp/stanley.log 2>&1"
 docker exec -d autodrive_roboracer_api /bin/bash -c \
