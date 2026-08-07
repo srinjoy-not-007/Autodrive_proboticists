@@ -405,6 +405,59 @@ generator trade lap time for margin wherever the corridor allows, targeting
 corner clearance comfortably above the measured localization p95. That is task
 #24 and is now the single thing between us and a working unseen-track stack.
 
+## Closing on the winners: what is actually left (Aug 7-8)
+
+We track our own plan to within **2.4%** (11.32 s run vs 11.05 s ideal), so the
+controller is no longer the bottleneck. Everything left is in the plan. Four
+levers swept, all measured on Porto:
+
+| Change | Ideal | Best lap | Collisions |
+|---|---|---|---|
+| safe line, ay 3.0 (**shipping**) | 11.05 s | **11.32 s** | **0** over 22 laps |
+| safe line, ay 4.0 | 9.57 s | 10.11 s | 23 over 21 laps |
+| optimized raceline, ay 3.0 | 10.41 s | 10.65 s | 57 over ~25 laps |
+| corridor-margin sweep (`--w-veh`) | 10.45 s best | not driven | — |
+
+**The optimized raceline is not usable, and not for want of tracking.** Its
+failures spread over 6 separate zones, the signature of a clearance problem
+(0.146 m) rather than a defect. MPC's ~7 mm tracking did not rescue what
+Stanley failed at, which retires the idea that the old rejection was the
+controller's fault.
+
+**ay 4.0 fails at exactly two corners, and they are not the tightest ones.**
+kappa 0.379 and 0.699 against a maximum of 1.019 — both are *curvature
+transitions* (zone A reverses from -0.611 to +0.379 within 1.5 m while
+accelerating 2.38 -> 3.25 m/s). Steering sits at full lock **20% of the time**
+versus ~5% in the clean run. So the ay-4 limit is transient tracking through
+direction changes, not steady-state grip. ay 5.0 was not driven: with the
+steering already saturating a fifth of the time, more speed can only be worse.
+
+**Porto's corridor is too narrow for raceline optimization to buy much.** The
+`--w-veh` sweep trades clearance for time along a nearly flat frontier: 0.146 m
+-> 10.41 s against 0.292 m -> 10.67 s. `--kappa-bound` changes nothing at all
+(0.8/1.0/1.2/1.6 all give the same line) because the corridor binds first. Note
+the "optimized" line's **peak** curvature (1.717) is *worse* than the plain
+centerline's (1.019) — min-curvature reduces the integral, and spikes locally,
+which is precisely what saturates the steering.
+
+**Where this leaves the 6.53 s target.** Our realistic ceiling with these levers
+is ~10.5-11.3 s. Winners average 4.38 m/s over this track; the tightest corner
+on our line is R = 0.98 m, which at that pace implies lateral accelerations
+around 9-20 m/s2. Our car visibly slides around 5-7. Either their line opens
+those corners using width we are not finding, or their vehicle/sim differs.
+**Next step is to read their raceline generation, not to sweep our own
+parameters further** — this frontier has been mapped and it does not reach.
+Before spending on that, confirm the 6.53 s figure really is the same track,
+same vehicle, same sim version; the implied grip is high enough to be worth
+checking.
+
+Tooling note: `src/pit_crew/skidpad.py` measures grip directly (hold steering,
+ramp speed, watch achieved yaw rate fall away from v*tan(delta)/L). It works,
+but **needs open space neither track has** — on Porto the slide widens the
+circle until the car grinds the walls (354 collisions in 100 s), corrupting the
+result. See the module docstring.
+
+
 ## Unseen track (ICRA): SOLVED — 13 clean laps at full speed (Aug 7)
 
 **Result: 13 consecutive laps, 0 collisions, speed_scale 1.0, 20.9 s/lap**
