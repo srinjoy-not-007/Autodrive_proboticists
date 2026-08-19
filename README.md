@@ -16,10 +16,13 @@ Team workspace for the [6th RoboRacer Sim Racing League @ IROS 2026](https://aut
 ## Layout
 
 ```
-scripts/     helper scripts (pull images, run sim/devkit, smoke test)
-src/         our ROS 2 packages (mounted into the devkit container at src/pit_crew)
-data/        recorded runs, maps, racelines (git-ignored)
-docs/        PLAN.md — strategy and roadmap
+scripts/     helper scripts (pull images, run sim/devkit, race, smoke test)
+src/         our ROS 2 package (mounted into the devkit container at src/pit_crew)
+tools/       offline pipeline run on the host via .venv (maps → lines → analysis)
+data/        maps and racelines (tracked); bags, logs and screenshots (git-ignored)
+docs/        PLAN.md — strategy · STATUS.md — every measured result, and what's next
+submission/  Dockerfile + entrypoint for the competition image
+CLAUDE.md    operating manual for AI coding agents working in this repo
 upstream/    clone of the official competition repo (git-ignored)
 ```
 
@@ -46,11 +49,15 @@ Inside the sim GUI: click **Connection** to link to the bridge (WebSocket :4567)
 ## Running the stack
 
 ```bash
-./scripts/run_race_stack.sh 0.30 track_v2 safe      # localization + raceline + FTG + arbiter
-./scripts/run_race_stack.sh 0.45 track_v2 raceline  # the fast line
+CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping config
 ./scripts/record_mapping_run.sh                     # slow FTG lap, recorded for mapping
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
+
+Shipping config = safe centerline + MPC at full profile speed. Measured: Porto
+22 laps / 0 collisions / best **11.32 s**; ICRA, a track it was never tuned on,
+13 laps / 0 collisions / 20.9 s per lap. `run_race_stack.sh` also exists but
+starts the arbiter, which measurably makes things *worse* — see `docs/STATUS.md`.
 
 New track, end to end (this is the finals drill):
 
@@ -86,10 +93,14 @@ Follow-the-Gap stack — the safe entry for a track we have not validated on.
   *stale* scan; the LiDAR is GPU-raytraced and needs real rendering. Run the sim
   windowed via `scripts/sim_restart_connect.sh` (it also clicks *Connection*).
 - **LiDAR arrives at ~10 Hz**, not the 40 Hz in the spec sheet.
-- **Wheel-encoder speed is unusable.** The encoder angle aliases at the publish
-  rate — correlation with true speed is |r| < 0.2 however you unwrap it. Throttle
-  runs open loop (**~0.040 throttle per m/s**, measured); real speed feedback must
-  come from differentiating the localization pose.
+- **Wheel-encoder speed works** — `position` is cumulative wheel angle in
+  radians, so speed = `wheel_radius * d(position)/dt` (scale 0.993/0.999 on two
+  tracks). An earlier note here said otherwise; that data was recorded while the
+  car was stuck and reversing. Throttle actuation stays open loop
+  (**~0.040 throttle per m/s**, measured).
+- **`lap_count` and `collision_count` are cumulative across runs**, resetting
+  only when the sim *container* restarts. Difference them against the run's
+  first row.
 - **Commands latch.** Publish zeros to stop; a stale command keeps being applied.
 - **`/autodrive/reset_command`** returns the car to the last checkpoint and does
   not clear a wedged/beached vehicle — restart the sim container for that.
