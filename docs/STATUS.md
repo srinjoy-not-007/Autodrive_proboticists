@@ -559,6 +559,14 @@ the controller's internal model changed:
 
 Worse on every axis: 76% more collisions per lap and 2.2x the time at full lock.
 
+Caveat on the sample: the model-on run was stopped at 87 s by a stray background
+timer, so it is 8 laps against the baseline's 20. The full-lock figure is a
+per-sample statistic over thousands of samples and is unaffected by the shorter
+run; the collisions-per-lap comparison rests on 7 events in 8 laps against 10 in
+20, which is directional rather than tight. The effect is large and the mechanism
+below explains it, so this was not re-run — but if the planner-side version ever
+needs a head-to-head, use matched run lengths.
+
 **The mechanism, in hindsight obvious.** Telling the controller the tyres deliver
 less curvature than it thought does not make it slow down — it has no authority
 over speed, because the velocity profile is fixed offline. Its only remaining
