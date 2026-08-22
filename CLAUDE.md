@@ -109,14 +109,14 @@ angle in radians).
 
 ## Where things stand
 
-Shipping: safe centerline + MPC, ay 3.0 / **ax 6.5** / brake 4.0 / jerk 20,
+Shipping: safe centerline + MPC, **ay 3.5** / **ax 6.5** / brake 4.0 / jerk 20,
 with the controller's **`ay_limit`** capping steering by the grip that exists.
-Ten-lap race time 115.0 -> **107.5 s**.
+Ten-lap race time 115.0 -> **101.2 s**.
 
 | Track | Result |
 |---|---|
-| Porto (practice) | 25 laps, 0 collisions, best **10.40 s**, median 10.75 s |
-| ICRA (never tuned on) | 15 laps, 0 collisions, **18.91 s/lap** |
+| Porto (practice) | 27 laps, 0 collisions, best **9.81 s**, median 10.12 s |
+| ICRA (never tuned on) | 16 laps, 0 collisions, **17.95 s/lap** |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s |
 
 Published winning lap on the same Porto track is **6.53 s**. We track our own

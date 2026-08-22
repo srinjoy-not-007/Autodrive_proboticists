@@ -523,10 +523,35 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
-## BREAKTHROUGH (Aug 23): 115.0 -> 107.5 s of race time, from two measurements
+## SHIPPING (Aug 23): race time 115.0 -> 101.2 s, Porto best lap 9.81 s
 
-**Shipping candidate: safe line, ay 3.0, ax 6.5, brake 4.0, jerk 20, MPC with
-`ay_limit` 4.5. Measured: 25 laps, 0 collisions, best 10.40 s, median 10.75 s,
+Final configuration: safe centerline, **ay 3.5 / ax 6.5 / brake 4.0 / jerk 20**,
+MPC with `ay_limit` 4.5.
+
+| | Porto | ICRA (never tuned on) |
+|---|---|---|
+| before today | 22 laps, 0 coll, best 11.32 s, **115.0 s** race | 13 laps, 0 coll, 20.9 s/lap |
+| **now** | **27 laps, 0 coll, best 9.81 s, median 10.12 s, 101.2 s race** | **16 laps, 0 coll, median 17.95 s** |
+
+**Sub-10-second lap for the first time, and a 13.8 s gain over a ten-lap race,
+with zero collisions on both tracks.**
+
+The grip cap was swept against race time once the steering cap made higher
+values survivable at all:
+
+| plan ay | median | collisions | 10-lap race |
+|---|---|---|---|
+| 3.0 | 10.75 s | 0 | 107.5 s |
+| **3.5** | **10.12 s** | **0** | **101.2 s** |
+| 4.0 | 9.80 s | 2 | 105.4 s |
+
+ay 4.0 holds the quickest single lap of the sweep (**9.44 s**) and loses the race
+by four seconds to two collisions. That is this whole project in one row.
+
+## How it was found: 115.0 -> 107.5 s, from two measurements
+
+**The step that unlocked everything above: ay 3.0, ax 6.5, brake 4.0, jerk 20,
+MPC with `ay_limit` 4.5 — 25 laps, 0 collisions, best 10.40 s, median 10.75 s,
 steering at full lock 0.0% of samples.**
 
 Two independent findings, neither of which is a tuning parameter.

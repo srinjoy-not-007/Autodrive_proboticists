@@ -43,8 +43,11 @@ VENV = '.venv/bin/python'
 
 # The validated profile. These are not tuning knobs — each traces to a
 # measurement (docs/STATUS.md, "BREAKTHROUGH (Aug 23)"):
-#   ay 3.0    lateral, well under the 4.5 m/s2 the tyres sustain, because the
-#             margin is what absorbs localization and tracking error.
+#   ay 3.5    lateral. Swept against race time, not best lap, with the steering
+#             cap in place: 3.0 -> 107.5 s, 3.5 -> 101.2 s, 4.0 -> 105.4 s. 4.0
+#             holds the quickest single lap of the sweep (9.44 s) and loses on
+#             race time to two collisions, which is the whole lesson of this
+#             project in one row.
 #   ax 6.5    longitudinal mu is 0.72, i.e. 7.1 m/s2 available. Acceleration
 #             happens on straights where there is no lateral demand, so this is
 #             nearly free: ideal lap 11.0 -> 10.1 s on Porto.
@@ -53,7 +56,7 @@ VENV = '.venv/bin/python'
 #   jerk 20   the lateral-jerk ceiling the clean shipping profile already met.
 # Measured with these: Porto 25 laps 0 collisions median 10.75 s (was 11.5),
 # ICRA 15 laps 0 collisions median 18.91 s (was 20.9).
-PROFILE = ['--ay', '3.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
+PROFILE = ['--ay', '3.5', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
 
 
 def worst_corner(map_prefix, line_csv):
