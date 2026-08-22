@@ -44,6 +44,7 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/new_track_drill.sh <name> <sim_tag> <s>   # the whole unseen-track pipeline, timed
 .venv/bin/python tools/validate_laps.py             # lap times and collisions from a run log
 .venv/bin/python tools/footprint_analysis.py data/maps/<name> data/racelines/<line>.csv
+.venv/bin/python tools/compare_sim_builds.py <tag_a> <tag_b>   # diff two sim images' physics/track
 ```
 
 `sim_restart_connect.sh` **restarts the devkit container, which wipes the colcon
@@ -120,6 +121,11 @@ Published winning lap on the same Porto track is **6.53 s**. We track our own
 plan to within 2.4%, so the tracker is no longer the bottleneck — the gap is in
 the planner. `docs/STATUS.md` has the full lever sweep.
 
+That 6.53 s was **verified comparable** (Aug 22): the build it was set on
+(`2025-cdc-tf-practice`) and ours have a byte-identical Porto mesh, identical
+physics settings and an identical vehicle, checked asset-by-asset with
+`tools/compare_sim_builds.py`. The gap is real, not an artefact.
+
 ## Do not re-derive these
 
 - **The arbiter causes the collisions it was meant to prevent.** Same line,
@@ -130,8 +136,13 @@ the planner. `docs/STATUS.md` has the full lever sweep.
   on Porto — it is faster in theory (10.41 s vs 11.05 s ideal) but only leaves
   0.146 m corner clearance and collects ~57 collisions. Clearance beats path
   length when a collision costs +10 s. Better tracking did not rescue it.
-- **Do not keep raising the ay cap.** ay 4.0 gives 10.11 s but 23 collisions,
-  and it fails at curvature *transitions*, not the tightest corners.
+- **Do not keep raising the ay cap** *by itself*. ay 4.0 gives 10.11 s but 23
+  collisions, and it fails at curvature *transitions*, not the tightest corners.
+  The reason matters: the tyre model peaks at **mu 1.0 (ay 9.81 m/s2) at 0.01
+  slip** and halves to 0.5 (4.91 m/s2) by 0.10 slip, so our ~5 m/s2 ceiling is
+  the *asymptote*, not the limit — the ay-4.0 run sat at full steering lock 20%
+  of samples. More grip is there, but only for a line and controller that hold
+  slip inside that window. Raising the cap without fixing that just crashes.
 - **Do not re-tune the centering strength** of the centerline extractor —
   harder centering makes the line jagged and clearance *worse*.
 - `--kappa-bound` in `optimize_raceline.py` does nothing on Porto; the corridor

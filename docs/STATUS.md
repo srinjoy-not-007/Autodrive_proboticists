@@ -200,7 +200,7 @@ Measured along the way:
 |---|---|
 | Stanley, safe line, scale 1.0, ay 3 | **11.21 s, 0 collisions** ← shipping |
 | Stanley, safe line, ay 4 | 10.58 s but 1 collision — loses on race time (+10 s each) |
-| Stanley, safe line, ay 6 | 1352 collisions — grip limit is real near ay 3-4 |
+| Stanley, safe line, ay 6 | 1352 collisions — looked like a grip limit near ay 3-4 (see Aug 22 note) |
 | Stanley, **optimized** raceline | 12.28 s, 17 collisions — its 0.146 m corner clearance cannot absorb residual error |
 | Pure pursuit, safe line | 32.43 s, 0 collisions |
 
@@ -366,12 +366,10 @@ than keep guessing at ours.
 
 Order of work:
 
-1. **Validate the benchmark first — cheapest and it may reset the target.**
-   Confirm 6.53 s is the same track, same vehicle model, same sim version.
-   Their average of 4.38 m/s over a line whose tightest corner is R = 0.98 m
-   implies lateral accelerations of 9-20 m/s2; our car visibly slides at 5-7.
-   If their sim grips differently, the gap is partly an artefact and the whole
-   plan changes. Do not skip this.
+1. ~~**Validate the benchmark first**~~ — **DONE Aug 22. It did not reset the
+   target, it sharpened it.** Same car, same track mesh, same physics, verified
+   asset-by-asset. It also showed the tyre model allows **ay 9.81 m/s2** where
+   we cap at 3.0. See "Step 1 DONE" below.
 2. **Get VAUL's stack running** (github.com/vaul-ulaval, 1st at ICRA 2025 and
    CDC-TF 2025). We already know from the earlier code comparison that every
    block matches ours except odometry (they run wheel odometry AND kiss-icp).
@@ -390,6 +388,67 @@ the integral of kappa and is free to spike locally, and those spikes are what
 saturate the steering at exactly the two corners where ay 4.0 fails. If they
 bound peak curvature, or use a different objective, that alone could be the
 difference.
+
+## Step 1 DONE: the 6.53 s benchmark is real, and the tyres have 3x the grip we use (Aug 22)
+
+**The benchmark is valid.** The 6.53 s lap was set on `2025-cdc-tf-practice`;
+we develop on `2026-iros-practice`. Those are different simulator builds, so
+the first question was whether the comparison means anything at all. It does —
+verified from the Unity assets themselves, not by inference
+(`tools/compare_sim_builds.py`, re-runnable on any pair of tags):
+
+| | 2025-cdc-tf-practice | 2026-iros-practice |
+|---|---|---|
+| Unity engine | 2022.3.52f1 | 2022.3.52f1 |
+| PhysicsManager + TimeManager | gravity 9.81, 6 solver iters, **1 ms** fixed step | identical |
+| Rigidbody | mass **3.47 kg**, drag 0.273 | identical |
+| WheelCollider x4 | radius 0.059 m, spring 500 / damper 100, same friction curves | identical |
+| Vehicle transform subtree | 248 of **249** parts identical | " |
+| Active track | `Porto Track` | `Porto Track` |
+| Track mesh | md5 `6c879809d3e8`, 5 970 752 B | **byte-identical** |
+| Checkpoints (24) + spawn points | identical | identical |
+
+The single differing vehicle part is the scene placement of the car root
+(z 0.74 -> 0.80), which the spawn point overrides at runtime. Same car, same
+track, same physics. **Our 11.32 s against their 6.53 s is a real 1.73x gap and
+the target stands.** This retires the "maybe their sim just grips differently"
+escape hatch.
+
+**What the same comparison turned up is more useful than the answer.** Reading
+the tyre model out of the asset:
+
+| | value | implies |
+|---|---|---|
+| lateral mu at peak | 1.00 (extremumValue 1.0 x stiffness 1.0) | **ay up to 9.81 m/s2** |
+| ...at slip | **0.01** | a very narrow window |
+| lateral mu at asymptote | 0.50 | ay 4.91 m/s2 |
+| ...at slip | 0.10 | |
+| longitudinal mu at peak | 0.72 (0.9 x 0.8) | ax up to 7.1 m/s2 |
+
+Unity scales `WheelFrictionCurve` values by wheel load, so value x stiffness is
+effectively mu. **We cap the velocity profile at ay 3.0 — 31% of what the tyre
+can do.**
+
+This reframes every grip conclusion in this document. The ~5 m/s2 ceiling we
+kept hitting is not the friction limit, it is the **asymptote**: past 0.10 slip
+the lateral force halves to 4.91 m/s2, which is almost exactly where our runs
+fall apart. And we know independently that the ay-4.0 run had steering at full
+lock **20% of samples** — i.e. it was past peak slip and riding the asymptote.
+So the failure was never "the tyres let go at 3-4"; it was a controller and a
+line that could not hold slip inside a 0.01-0.10 window.
+
+It also resolves the arithmetic that made the target look impossible. 4.38 m/s
+average over an R = 0.98 m corner appeared to need 9-20 m/s2, above any
+plausible limit — but that estimate wrongly assumed the tightest corner is
+taken at the average speed. Against a real 9.81 m/s2 peak, a 6.53 s lap sits
+inside the tyre model, not outside it.
+
+**What this does not yet prove.** These are asset values; achieved lateral
+acceleration is lower once load transfer, the suspension, and four wheels
+reaching peak slip at different moments are accounted for. Nothing here has
+been driven. The next measurement is a controller that holds small slip angles
+and a line with bounded curvature — which is exactly what step 3 (diffing their
+raceline against ours) is for.
 
 ## What the winners do differently (VAUL, 1st at ICRA 2025 and CDC-TF 2025)
 
