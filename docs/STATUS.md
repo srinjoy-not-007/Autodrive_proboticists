@@ -568,8 +568,38 @@ understeer at 0.58 of asked at 0.319 rad and 0.79 at 0.204. The line asks the
 front tyres for something much closer to what they will actually give.
 
 Ideal lap is *not* better at matched grip (11.08 s vs 11.01 s at ay 3.0): the
-shaping trades some top speed for radius. The bet is that it can hold a higher
-ay cleanly, where the safe line cannot.
+shaping trades some top speed for radius. The bet was that it could hold a
+higher ay cleanly, where the safe line cannot.
+
+**Driven at ay 4.0, the bet half paid.** 22 laps, **2 collisions**, best 10.80 s
+— against the *same cap* on the safe line, which gave 10 collisions over 20
+laps. **Collisions per lap fell 5x, 0.50 to 0.09**, which is the mechanism
+working exactly as the grip curve predicted: ask the front tyres for 0.204 rad
+instead of 0.319 and they deliver it. But median lap went the wrong way, 10.48
+to 11.54 s, because the shaping gave up top speed (5.39 -> 4.63 m/s) to buy the
+radius.
+
+**Priced as race time — which is the only number that counts — nothing beats the
+shipping config:**
+
+| config | median | collisions/lap | 10-lap race time |
+|---|---|---|---|
+| **safe ay 3.0 (shipping)** | 11.50 s | **0.00** | **115.0 s** |
+| safe ay 3.5 | 11.01 s | 0.14 | 123.7 s |
+| safe ay 4.0 | 10.48 s | 0.50 | 154.8 s |
+| opened ay 4.0 | 11.54 s | 0.09 | 124.5 s |
+
+At +10 s a collision, a config has to be *both* faster and clean. Best lap is a
+vanity metric here: the ay-4.0 safe line holds the fastest lap of the session
+(9.96 s) and the worst race by 40 seconds.
+
+**The specific flaw to fix next.** The shaping objective uses a point-mass speed
+`v = min(vmax, sqrt(ay/kappa))`, which assumes the car arrives at every corner
+already at its limit speed and leaves it the same way. It therefore overvalues
+corner radius and undervalues straights — precisely the trade that cost 0.76 m/s
+of top speed. Putting the real forward/backward acceleration-limited profile
+inside the objective (the same one `optimize_raceline.py` already computes)
+should keep the followability win while giving the straights back.
 
 ## Raising the grip cap on the safe line: 3.5 is faster and still not clean
 
