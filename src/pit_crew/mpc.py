@@ -63,6 +63,7 @@ class MPCTracker(Node):
             ('use_measured_speed', False),   # encoder speed for prediction
             ('rate_limited_rollout', False), # actuator limit inside the horizon
             ('windowed_index', False),   # local path search instead of global
+            ('ay_limit', 4.5),           # m/s2 the tyres deliver; 0 disables
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -80,7 +81,7 @@ class MPCTracker(Node):
          self.stale_pose_s, self.understeer_model, self.track_window,
          self.track_back, self.track_lost_m, self.reach_steps,
          self.use_measured_speed, self.rate_limited_rollout,
-         self.windowed_index,
+         self.windowed_index, self.ay_limit,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
@@ -328,6 +329,28 @@ class MPCTracker(Node):
             return
 
         v = max(self.measured_speed(), 0.4)
+
+        # Steering authority is not a constant — it is whatever the tyres can
+        # pay for at this speed. delta = atan(L * ay_max / v^2) is the largest
+        # angle that does not demand more lateral acceleration than exists.
+        #
+        # Without it the controller can ask for anything. Measured on the
+        # ax-6.5 run: 0.202 rad commanded at 5.45 m/s, which through the
+        # measured understeer curve demands ~15 m/s2 against the ~4.5 the tyres
+        # give. The car slid wide into the wall while sitting 0.054 m from its
+        # own line — the tracking was fine, the command was unpayable. This is
+        # the cheap half of what ForzaETH's MAP controller does structurally:
+        # derive steering from the lateral acceleration you can afford.
+        #
+        # It binds only where it should. Against an ay-3.0 plan it leaves ~50%
+        # headroom everywhere: 0.319 rad allowed at 2.1 m/s where the hairpin
+        # asks 0.319, 0.050 allowed at 5.4 m/s where the straight asks ~0.
+        steer_cap = vehicle.MAX_STEER
+        if self.ay_limit > 0.0:
+            steer_cap = min(vehicle.MAX_STEER,
+                            math.atan(vehicle.WHEELBASE
+                                      * self.ay_limit / max(v * v, 0.25)))
+
         # Candidate steering TARGETS, not applied commands. A review flagged the
         # 4x as a bug — candidates land a rate-limit step apart, so several clip
         # to the same applied value — and narrowing it to exactly one step was
@@ -338,8 +361,10 @@ class MPCTracker(Node):
         # and the cost differences between neighbouring candidates become
         # noise. Keep 4x. `reach_steps` exists to re-test, not to tune blindly.
         reach = self.steer_rate * self.control_dt * self.reach_steps
-        lo = max(-vehicle.MAX_STEER, self.steer - reach)
-        hi = min(vehicle.MAX_STEER, self.steer + reach)
+        lo = max(-steer_cap, self.steer - reach)
+        hi = min(steer_cap, self.steer + reach)
+        if lo > hi:            # already beyond the cap: unwind towards it
+            lo = hi = float(np.clip(self.steer, -steer_cap, steer_cap))
         best, best_cost = self.steer, float('inf')
         for cand in np.linspace(lo, hi, int(self.n_cand)):
             c = self.rollout_cost(float(cand), e_lat, e_yaw, i0, v)

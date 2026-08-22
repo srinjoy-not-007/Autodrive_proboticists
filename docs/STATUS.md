@@ -523,6 +523,70 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## BREAKTHROUGH (Aug 23): 115.0 -> 107.5 s of race time, from two measurements
+
+**Shipping candidate: safe line, ay 3.0, ax 6.5, brake 4.0, jerk 20, MPC with
+`ay_limit` 4.5. Measured: 25 laps, 0 collisions, best 10.40 s, median 10.75 s,
+steering at full lock 0.0% of samples.**
+
+Two independent findings, neither of which is a tuning parameter.
+
+**1. Longitudinal grip was capped at 42% of its measured value.** The tyre asset
+gives longitudinal mu 0.72, i.e. ax up to 7.1 m/s2. Every run in this project's
+history had `--ax` set equal to `--ay`, which is 3.0. Acceleration happens on
+straights where there is no lateral demand at all, so it is very nearly free:
+
+| ay | ax | brake | v_max | ideal |
+|---|---|---|---|---|
+| 3.0 | 3.0 | 4.0 | 5.39 m/s | 11.0 s |
+| 3.0 | 6.5 | 6.5 | 7.00 m/s | 10.1 s |
+
+Driven on its own it was *not* free — 4 collisions — but the reason was not the
+friction circle, because holding brake at the proven 4.0 gave the same 4.
+
+**2. The controller had no idea what lateral acceleration its steering implied.**
+Localizing those 4 collisions: all between s = 29.2 and s = 2.2 m, two of them on
+a section with kappa = -0.00 and the car **0.054 m from its own line**. The
+tracking was fine. At the moment of contact the controller had commanded
+**0.202 rad at 5.45 m/s**, which through the measured understeer curve is a
+demand for **~15 m/s2** against the ~4.5 the tyres deliver. The command was
+simply unpayable, and no amount of clearance or tracking accuracy would have
+saved it.
+
+Steering authority is not a constant. It is `delta_max = atan(L * ay_max / v^2)`
+— whatever the tyres can pay for at the current speed:
+
+| speed | max steer allowed | what the ay-3.0 plan asks |
+|---|---|---|
+| 2.1 m/s (hairpin) | 0.319 rad | 0.319 rad |
+| 3.0 m/s | 0.161 rad | 0.107 rad |
+| 5.4 m/s (straight) | 0.050 rad | ~0 |
+
+So it leaves ~50% headroom against the plan everywhere and binds only on gross
+over-commands. This is the cheap half of what ForzaETH's MAP controller does
+structurally — derive steering from the lateral acceleration you can afford
+rather than from geometry alone (arxiv 2209.04346, 0.055 m tracking error at up
+to 11 m/s, and the stack won ICRA 2023).
+
+**Same line, same profile, only the limit added:**
+
+| | laps | collisions | best | median | full lock | 10-lap race |
+|---|---|---|---|---|---|---|
+| shipping ay3.0 / ax3.0 | 22 | 0 | 11.32 s | ~11.5 s | ~5% | **115.0 s** |
+| ax 6.5, no limit | 24 | 4 | 10.53 s | 11.02 s | 15.6% | 126.9 s |
+| **ax 6.5 + ay_limit 4.5** | **25** | **0** | **10.40 s** | **10.75 s** | **0.0%** | **107.5 s** |
+
+Full lock went from 15.6% of samples to **zero**. That is the mechanism behind
+every collision this project has ever logged: the controller demanding lateral
+acceleration that does not exist, sliding wide, and answering with more lock.
+
+**Why the earlier understeer attempt failed and this one works.** Both use the
+same measured curve. Putting it in the rollout cost told the controller the
+tyres give less, and its only lever being steering, it asked for *more* lock —
+0.88 collisions/lap. Putting it in the command limit removes the option
+entirely. Same measurement, opposite outcome, decided by which component holds
+it.
+
 ## The MPC review: every claim true, the headline prescription 9x worse (Aug 23)
 
 An external review of `mpc.py` produced five specific defects. **All five are

@@ -47,6 +47,38 @@ def corner_sweep(kappa):
     return np.clip(swing, HALF_W, 0.60)
 
 
+def clearance_speed_cap(xy, kappa, map_prefix, per_metre):
+    """Cap speed where the track is narrow, not just where it is curved.
+
+    The velocity profile has only ever known curvature. On Porto that puts the
+    highest planned speed (6.9 m/s) on the start straight, which is also the
+    tightest part of the line (0.325 m of corner clearance, the minimum for the
+    whole lap). Measured consequence at ax 6.5: four collisions, all of them
+    between s = 29.2 and s = 2.2 m, two on a section with kappa = -0.00 and the
+    car only 0.054 m off its own line. Nothing was wrong with the tracking; the
+    plan asked for 6 m/s through the narrowest gap on the track.
+
+    `per_metre` is a speed allowed per metre of clearance, calibrated from a run
+    that is known clean rather than chosen: the shipping profile peaks at
+    5.39 m/s where clearance is 0.325 m, i.e. 16.6 m/s per metre. Anything
+    faster than that ratio is asking for margin no run has ever demonstrated.
+    """
+    import sys
+    sys.path.insert(0, 'tools')
+    from footprint_analysis import load_dist, clearance as clear_at, CORNERS
+
+    dist, res, ox, oy = load_dist(map_prefix)
+    d = np.diff(np.vstack([xy, xy[:1]]), axis=0)
+    head = np.arctan2(d[:, 1], d[:, 0])
+    worst = np.full(len(xy), np.inf)
+    for cx, cy in CORNERS:
+        px = xy[:, 0] + cx * np.cos(head) - cy * np.sin(head)
+        py = xy[:, 1] + cx * np.sin(head) + cy * np.cos(head)
+        worst = np.minimum(worst, np.nan_to_num(
+            clear_at(dist, res, ox, oy, np.column_stack([px, py])), nan=np.inf))
+    return np.maximum(worst, 0.0) * per_metre, worst
+
+
 def limit_lat_jerk(vx, kappa, el_lengths, j_max, ax_max, ax_brake,
                    rounds=40, v_floor=0.5):
     """Cap how fast lateral acceleration is allowed to change along the lap.
@@ -130,6 +162,13 @@ def main():
     ap.add_argument('--w-veh', type=float, default=0.16,
                     help='extra safety on top of the swept footprint')
     ap.add_argument('--kappa-bound', type=float, default=1.6)
+    ap.add_argument('--map-prefix', default=None,
+                    help='enables the clearance speed cap; needs the map the '
+                         'line was built from, e.g. data/maps/track_v2')
+    ap.add_argument('--clearance-speed', type=float, default=16.6,
+                    help='m/s allowed per metre of corner clearance. 16.6 is '
+                         'the shipping profile\'s own ratio: 5.39 m/s at '
+                         '0.325 m, a combination measured clean over 22 laps.')
     ap.add_argument('--jerk-lat', type=float, default=None,
                     help='cap d(ay)/dt in m/s3. Off by default. The shipping '
                          'ay-3.0 profile peaks at 21 m/s3 and runs clean, so '
@@ -224,6 +263,17 @@ def main():
     vx_cl = np.append(vx, vx[0])
     ax_prof = tph.calc_ax_profile.calc_ax_profile(
         vx_profile=vx_cl, el_lengths=el_lengths, eq_length_output=False)
+
+    if args.map_prefix:
+        cap, clear = clearance_speed_cap(raceline, kappa, args.map_prefix,
+                                         args.clearance_speed)
+        bound = np.minimum(vx, cap)
+        n_cut = int(np.sum(bound < vx - 1e-6))
+        if n_cut:
+            vx = limit_long_accel(bound, el_lengths, args.ax, args.brake)
+        print(f'clearance cap: min clearance {clear.min():.3f} m, '
+              f'speed limited at {n_cut} of {len(vx)} points '
+              f'(worst allows {cap.min():.2f} m/s)')
 
     if args.jerk_lat is not None:
         before = float(np.sum(el_lengths / np.maximum(vx, 0.1)))
