@@ -523,6 +523,67 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## Opening the corners: three objectives, and only the third is the right one (Aug 23)
+
+The corridor at Porto's tightest corner is **2.075 m wide** — I had assumed it
+was the 0.875 m track minimum, and it is not. The car is 0.270 m wide, so there
+is +-0.90 m of lateral freedom there, +-0.73 m even after the measured lateral
+localization error. **The room to open that corner has been there all along; our
+optimisers were not finding it.** `tools/open_corners.py` exists to find it.
+
+Three objectives, tried in order, on the same corridor:
+
+| objective | R_min | length | top speed | verdict |
+|---|---|---|---|---|
+| centerline (baseline) | 0.951 m | 29.82 m | 5.39 m/s | kappa_max 1.051 |
+| minimum *integral* curvature (`optimize_raceline`) | 0.58 m | 27.0 m | — | peak gets **worse**: 1.72 |
+| curvature-weighted Laplacian relaxation | 0.727 m | 28.20 m | — | **worse**, every setting |
+| minimum *peak* curvature (minimax) | **1.772 m** | 31.95 m | 2.97 m/s | peak beautiful, **14.0 s lap** |
+| **minimum point-mass lap time, curvature-capped** | **1.560 m** | 29.62 m | 4.36 m/s | **the right objective** |
+
+Each failure taught the next one:
+
+- **Min-integral curvature** spikes locally, because the integral does not care
+  where the curvature goes. Peak rises from 1.02 to 1.72.
+- **Laplacian relaxation** minimises *length*, not curvature. It cuts corners,
+  which tightens exactly the peak it was meant to open: -24% to -61% of minimum
+  radius across every setting tried. Kept in the tool only because the failure
+  is instructive.
+- **Minimax curvature** flattens the peak superbly — R_min 0.951 -> 1.772 m — and
+  then drives a 14.0 s lap. Nothing in that objective wants a straight to stay
+  straight, so it spends curvature everywhere to pull the maximum down and top
+  speed collapses from 5.39 to 2.97 m/s. **Minimising peak curvature is not
+  minimising lap time.**
+- **Point-mass lap time** balances them, but on its own it plans corners the car
+  cannot physically turn: R_min 0.305 m against a 0.561 m steering lock, shape
+  score 6.91 s. That missing constraint is the planner-side curvature cap. With
+  `--kappa-cap 0.64` (all the car achieves at racing speed even at full lock) it
+  produces a usable line.
+
+**The resulting line, `track_v2_opened`:** R_min 1.560 m (**+64%**), path length
+essentially unchanged at 29.62 m, worst-corner clearance 0.269 m (still clear of
+the 0.22 m gate), and the number that matters — **required steering at the
+tightest point falls from 0.319 to 0.204 rad**. The measured grip curve puts
+understeer at 0.58 of asked at 0.319 rad and 0.79 at 0.204. The line asks the
+front tyres for something much closer to what they will actually give.
+
+Ideal lap is *not* better at matched grip (11.08 s vs 11.01 s at ay 3.0): the
+shaping trades some top speed for radius. The bet is that it can hold a higher
+ay cleanly, where the safe line cannot.
+
+## Raising the grip cap on the safe line: 3.5 is faster and still not clean
+
+| profile | laps | collisions | best | median | full lock |
+|---|---|---|---|---|---|
+| ay 3.0 (shipping) | 22 | **0** | 11.32 s | ~11.5 s | ~5% |
+| ay 3.5 + jerk 20 | 22 | 3 | **10.45 s** | 11.01 s | 17.7% |
+| ay 4.0 + jerk 20 | 20 | 10 | 9.96 s | 10.48 s | 16.1% |
+
+ay 3.5 saves ~0.9 s/lap and costs 3 collisions, which is +30 s against ~9 s
+saved over ten laps. **Not shippable.** The pattern is monotone and the cause is
+the same one the grip curve identified: the safe line's 0.319 rad demand sits
+where the tyres return 58% of what is asked.
+
 ## The clearance frontier is a dead end on Porto, and understeer compensation backfired (Aug 23)
 
 Two experiments, both aimed at the ~2 s that separates our clean 11.32 s from
