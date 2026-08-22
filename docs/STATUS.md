@@ -12,11 +12,19 @@ Published results, **same Porto practice track we develop on**:
 Qualification uses the **Porto practice track — the same one we develop on**,
 so those best-lap figures are directly comparable to ours. The finals figures
 are on each event's own unseen track and are not comparable. Podium teams post
-**zero collisions**, so cleanliness is table stakes, not an edge. Our best clean lap is 32.43 s — about **5x off the winning pace**. Note
-our own velocity profile's "ideal" lap was ~11 s, i.e. slower than their real
-6.5 s: the grip assumptions (ax = ay = 3 m/s^2) are far too conservative. A
-6.5 s lap on a 28.6 m loop is 4.4 m/s average, which needs roughly 10 m/s^2 of
-lateral grip in the hairpins. Measuring the real limit is the first step.
+**zero collisions**, so cleanliness is table stakes, not an edge.
+
+Our best clean lap is **11.32 s** — about **1.7x off the winning pace** (it was
+32.43 s when this section was first written; see "Speed: 32.43 s -> 11.21 s").
+The remaining gap is not the tracker: we hold our own plan to 2.4%, and every
+parameter we own has been swept (see "Closing on the winners"). It is the plan.
+
+A 6.53 s lap on a 28.6 m loop is 4.4 m/s average, which over our tightest
+corner (R = 0.98 m) implies lateral accelerations around 9-20 m/s^2. Our car
+visibly slides at 5-7, and an ay cap of 4.0 already produces 23 collisions. So
+either their line opens those corners using width we are not finding, or the
+published figure is not the same track/vehicle/sim we are racing. **Confirming
+which is step 1 of the current plan** — see "NEXT SESSION — START HERE".
 
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
@@ -27,26 +35,33 @@ Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/
   and Phase 2 Google Forms. Everything else in this document is automated.
 
 
-Updated 2026-08-07. Every number here came from a run on the Porto practice
-track; nothing is a design estimate.
+Updated 2026-08-07; stale sections reconciled 2026-08-22. Every number here
+came from a run; nothing is a design estimate. Sections are append-only and in
+rough chronological order, so where an early conclusion was later overturned it
+is marked SUPERSEDED rather than deleted — the corrections are the useful part.
 
 ## The stack
 
-```
-LiDAR ─┬─ localization ──── pose + score ──┬─ pure_pursuit ─┐
-       │      (MCL vs map)                 │   (raceline)   │
-       ├─ follow_the_gap ──────────────────┘                ├─ arbiter ─► car
-       └─────────────────────────────────────── (LiDAR) ────┘
-```
-
-`arbiter` is the only node that publishes to the actuators. It picks between
-RACELINE (pure pursuit), REACTIVE (Follow-the-Gap) and BRAKE.
-
-Offline pipeline, all track-agnostic — this *is* the finals drill:
+**As shipped** — the tracker publishes to the car directly:
 
 ```
-record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
-                      → optimize_raceline.py  → run_race_stack.sh
+LiDAR ── localization ──── pose ──── mpc ─────► car
+            (MCL vs map)          (raceline)
+
+LiDAR ── follow_the_gap ──────────────────────► car     (PIT_CREW_MODE=reactive:
+                                                         map-free, any track)
+```
+
+The two modes are selected at container start and never switch mid-run. The
+`arbiter` that used to sit between them is **deliberately not started** — it
+caused the collisions it was meant to prevent (see "do not re-derive", below).
+
+Offline pipeline, all track-agnostic — this *is* the finals drill, and
+`scripts/new_track_drill.sh` runs it end to end in ~271 s measured:
+
+```
+record a recon lap → build_map_from_bag.py → extract_centerline.py
+                   → make_track_lines.py   → footprint_analysis.py → race it
 ```
 
 ## Measured results
@@ -68,9 +83,14 @@ record_mapping_run.sh → build_map_from_bag.py → extract_centerline.py
 
 1. **Headless mode freezes the LiDAR.** It is GPU-raytraced; `-batchmode
    -nographics` serves a stale scan forever. The sim must render.
-2. **Encoder speed is unusable** — it aliases at the publish rate, correlating
-   with true speed at |r| < 0.2. It caused both the throttle surging and a
-   relocalization storm. Speed now comes from the calibrated throttle curve.
+2. **Encoder speed WORKS — this entry used to say the opposite and was wrong.**
+   `position` is the cumulative wheel angle in radians, so speed is
+   `wheel_radius * d(position)/dt`; scale comes out 0.993 and 0.999 against IPS
+   on two tracks. The |r| < 0.2 correlation that condemned it was measured on a
+   stretch where the car was stuck, reversing and being teleported to
+   checkpoints, which makes any derivative look like noise. **Judge a sensor on
+   clean data.** Encoders are now the filter's motion source; throttle
+   *actuation* is still open loop at the calibrated 0.040 per m/s.
 3. **Throttle gain was guessed 3.6× too high** (0.14 vs the measured 0.040),
    which is what made the car overspeed a 1.3 m corridor and crash constantly.
    Calibrating it produced the first clean laps.
@@ -381,30 +401,32 @@ Comparing their component list against ours:
 | Raceline optimization | `global_racetrajectory_optimization` (TUM) | same TUM `tph` | **match** |
 | Localization | `particle_filter` (fork of f1tenth/MIT, ray casting via `range_libc`) | own MCL, likelihood field | equivalent approach |
 | Reactive baseline | `wall_follow_node` | Follow-the-Gap | **match** |
-| Odometry | `wheel_odometry_node` **and `kiss-icp` (LiDAR odometry)** | none — throttle-derived speed only | **GAP** |
+| Odometry | `wheel_odometry_node` **and `kiss-icp` (LiDAR odometry)** | wheel encoders (LiDAR odometry built, measured, rejected) | narrower than it looked |
 | Control | `norlab_controllers` | Stanley / MPC | comparable |
 
-**The gap is odometry.** Every other block we have an equivalent of. VAUL carries
-two independent odometry sources; we have neither — our encoders are unusable
-(the signal aliases) so the particle filter's motion model runs on a
-throttle-derived guess, which is a straight-line calibration that ignores
-cornering drag. That is survivable on slow, small Porto and is exactly what
-breaks on the larger, faster ICRA circuit, where the filter's p95 error is
-0.54 m against 0.215 m of corner clearance.
+**Written Aug 7, when this section concluded "the gap is odometry, and KISS-ICP
+is the missing piece". Both halves turned out to be wrong, and the correction
+is worth keeping.** The premise was that our encoders were unusable, so the
+particle filter ran on a throttle-derived guess. The encoders are fine — the
+"unusable" measurement was taken while the car was stuck and reversing (`position`
+is cumulative wheel angle in radians; scale 0.993/0.999 verified on two tracks).
+They are now the filter's motion source, and live localization sits at 0.092 m
+median.
 
-**KISS-ICP is the specific missing piece.** It is scan-to-scan LiDAR odometry:
-it estimates the vehicle's motion between consecutive scans by registering the
-point clouds, with no reliance on wheel encoders or a throttle model. That is
-precisely the input our motion model lacks, it is sensor-derived rather than
-assumed, and it degrades gracefully on any track because it uses the same LiDAR
-we already trust for the sensor model.
+KISS-ICP was then the wrong prescription for a second, independent reason: we
+built scan-to-scan LiDAR odometry and it **cannot work on a racetrack** — the
+aperture problem, measured 5.7x underestimate. See the next section. VAUL
+presumably carry it for robustness rather than because scan matching supplies
+the forward speed; the wheels do that in their stack too.
 
-Also worth noting: VAUL's `wheel_odometry_node` treats the encoder `position`
-field as **counts**, dividing by counts-per-revolution, where we treated it as
-radians. Scale alone does not explain our near-zero correlation with truth (a
-scale factor cannot destroy correlation), but their node also carries an
-explicit max-acceleration outlier rejection — suggesting they hit noisy encoder
-data too. Worth one re-test under the counts interpretation before concluding.
+So the odometry column is not the gap. What remains unexplained is pace, and
+the current plan attacks it by diffing their *raceline* against ours.
+
+Also noted at the time: VAUL's `wheel_odometry_node` treats the encoder
+`position` field as **counts**, dividing by counts-per-revolution, where we
+treated it as radians. **Closed** — radians is correct for this sim, verified
+by the 0.993/0.999 scale against IPS on two tracks. The near-zero correlation
+that prompted the question was junk data, not a unit error.
 
 Sources: [vaul-ulaval](https://github.com/vaul-ulaval),
 [KISS-ICP](https://github.com/PRBonn/kiss-icp),
@@ -435,14 +457,23 @@ informative.
 **The real result of chasing this was discovering the encoders work.** That was
 the missing odometry all along; it is now the filter's motion source.
 
-## Remaining gap on unseen tracks
+## Remaining gap on unseen tracks — SUPERSEDED (was wrong)
 
-ICRA localization is now stable (0 relocalizations, p95 0.549 m) but still
-exceeds the 0.215 m corner clearance of its generated line. With odometry no
-longer the suspect, the remaining lever is **clearance**: make the line
-generator trade lap time for margin wherever the corridor allows, targeting
-corner clearance comfortably above the measured localization p95. That is task
-#24 and is now the single thing between us and a working unseen-track stack.
+This section argued that ICRA failed on an **error budget**: localization p95
+0.549 m against 0.215 m of corner clearance, so the fix was to trade lap time
+for margin in the line generator.
+
+**That diagnosis was wrong and the section is kept only as a record of it.**
+ICRA was failing on a centerline **spur** — a stretch where the path doubled
+back on itself, so the car was commanded to stop and reverse, and wedged there
+every lap. Clearance was never the binding constraint; the line already
+measured a healthy 0.414 m. See "Unseen track (ICRA): SOLVED" below for the
+evidence and the three fixes. Result after them: **13 laps, 0 collisions, full
+speed**, and clearance improved to 0.564 m as a side effect.
+
+The general lesson: an error-budget argument is easy to construct from two
+numbers that are both real, and it will still be wrong if the failure has a
+different mechanism. Localize the collisions in space before theorising.
 
 ## Closing on the winners: what is actually left (Aug 7-8)
 

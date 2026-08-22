@@ -75,8 +75,10 @@ class FollowTheGap(Node):
         self.get_logger().info('Follow-the-Gap ready (v_max=%.1f m/s)' % self.v_max)
 
     def on_encoder(self, wheel, msg: JointState):
-        # Encoder speed is unusable on this platform (see vehicle.SpeedEstimator);
-        # throttle runs open loop. Kept subscribed for diagnostics only.
+        # FTG deliberately ignores measured speed: it commands a fixed v_max
+        # and lets the open-loop throttle curve hold it, so there is no speed
+        # loop to close here. (The encoders themselves are fine and the
+        # localizer uses them — see vehicle.SpeedEstimator.) Diagnostics only.
         pass
 
     # ------------------------------------------------------------------ #
