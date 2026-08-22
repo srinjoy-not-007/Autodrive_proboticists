@@ -523,6 +523,47 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## Are we overfitting to Porto? Audit (Aug 22)
+
+Worth asking, because the finals track is released three days before the
+deadline and nothing can be hand-tuned on it.
+
+**Regenerated per track, so not tuned at all:** map, centerline, safe line,
+raceline, corridor widths, velocity profile, start pose. `new_track_drill.sh`
+produces all of it in ~271 s measured.
+
+**Vehicle-level, therefore track-independent by construction:** wheelbase, body
+box, steering lock and its 3.2 rad/s rate, wheel radius, the 0.040 throttle
+gain — and now the grip curve. Checked rather than assumed: every collider in
+the scene, including all six track meshes, carries PhysicsMaterial (0,0), i.e.
+the default, and Unity WheelColliders take friction from their own curves
+regardless of the surface. **Every track in this simulator has identical grip**,
+so the 4.5 m/s2 plateau and the 0.15 rad saturation point transfer to a track we
+have never seen.
+
+**Genuinely tuned on Porto:** the ay/ax caps, `--w-veh 0.16`, the jerk cap, the
+MPC weights and horizon, and the localization parameters (`sigma_hit`,
+`beam_temp`, motion noise, `throttle_to_mps`).
+
+**The evidence that this is not badly overfit is ICRA.** A 56.7 m circuit, twice
+Porto's length, never tuned on, ran **13 consecutive laps, 0 collisions, at full
+speed** with *zero* parameter changes. We have also already caught and fixed one
+genuine overfit: `throttle_to_mps` had been set to 0 because that helped Porto,
+and it made the filter diverge on ICRA (mean 1.48 m); it went back to 25.0.
+
+**Two places the Porto shape is still baked in:**
+
+1. **`make_track_lines.py` always ships the safe centerline.** That choice came
+   from a Porto-only result — the corridor there is too narrow for the optimized
+   line to keep enough clearance. On a wider finals track the optimized line
+   could well win. The script already picks the centerline *method* by
+   measurement; safe-vs-optimized should be chosen the same way instead of by a
+   constant.
+2. **"`--kappa-bound` does nothing"** is explicitly a Porto-corridor
+   observation, kept as such. On a wider track it may bind.
+
+And the honest caveat: n = 2 tracks.
+
 ## Step 2: VAUL's winning stack is not published (Aug 22)
 
 Cloned everything public under `github.com/vaul-ulaval` (kept in `upstream/vaul/`,
