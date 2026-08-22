@@ -149,6 +149,16 @@ physics settings and an identical vehicle, checked asset-by-asset with
   be taken inside that region without using track width to open it — which
   costs the clearance that keeps us collision-free. That trade, not the ay cap,
   is the real constraint on lap time.
+- **Do not put the understeer curve in the controller's rollout.** Measured: it
+  raises collisions per lap from 0.50 to 0.88 and time at full lock from 16% to
+  36%. The controller cannot slow down — the profile is fixed offline — so
+  telling it the tyres deliver less only makes it command more lock, deeper into
+  saturation. `vehicle.achieved_curvature()` is correct and kept; it belongs in
+  the **planner**, capping planned curvature at what the car can achieve.
+- **On Porto the geometry is settled.** The best optimized line beats the safe
+  centerline by 0.05 s of ideal lap while giving up 44% of its clearance and two
+  thirds of its steering reserve (`tools/sweep_lines.py`). All remaining lap time
+  is in the velocity profile.
 - **Do not re-tune the centering strength** of the centerline extractor —
   harder centering makes the line jagged and clearance *worse*.
 - `--kappa-bound` in `optimize_raceline.py` does nothing on Porto; the corridor

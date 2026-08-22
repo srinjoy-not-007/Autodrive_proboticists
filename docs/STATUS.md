@@ -523,6 +523,55 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## The clearance frontier is a dead end on Porto, and understeer compensation backfired (Aug 23)
+
+Two experiments, both aimed at the ~2 s that separates our clean 11.32 s from
+the ay-4.0 profile's 9.56 s ideal.
+
+**1. Swept the corridor-margin x grip-cap grid** (`tools/sweep_lines.py`, gated
+on the re-derived 0.22 m clearance floor). The ranking added two metrics the
+earlier sweeps lacked: how much of the lap demands steering past the measured
+saturation point, and how much steering lock is left in reserve at the tightest
+corner. The top two candidates settle the geometry question:
+
+| candidate | ideal | clearance | kappa_max | steer reserve |
+|---|---|---|---|---|
+| optimized, w_veh 0.32, ay 4.5 | 9.02 s | 0.225 m | 1.51 | **0.070 rad** |
+| **safe geometry**, ay 4.5 | 9.07 s | **0.325 m** | **1.02** | **0.205 rad** |
+
+**Fifty milliseconds apart.** The optimized line pays for them with 44% of its
+clearance and two thirds of the authority the controller has to correct an error
+exactly where it can least afford one. Every other optimized candidate fails the
+clearance gate outright. So on Porto the geometry is settled — the safe
+centerline is the line — and *all* remaining lap time is in the velocity
+profile. This also explains why `--w-veh` looked flat before: it is flat.
+
+**2. Put the measured understeer curve into the controller's model — and it made
+everything worse.** `vehicle.achieved_curvature()` encodes the measured ratio
+(1.00 below 0.10 rad, 0.42 at full lock), and `mpc.py` can roll out with it
+instead of `tan(delta)/L`. Same line file as the morning's run, same caps, only
+the controller's internal model changed:
+
+| | laps | collisions | per lap | full lock | best | median |
+|---|---|---|---|---|---|---|
+| model **off** | 20 | 10 | 0.50 | 16.1% | 9.96 s | 10.48 s |
+| model **on** | 8 | 7 | **0.88** | **36.0%** | 10.03 s | 10.82 s |
+
+Worse on every axis: 76% more collisions per lap and 2.2x the time at full lock.
+
+**The mechanism, in hindsight obvious.** Telling the controller the tyres deliver
+less curvature than it thought does not make it slow down — it has no authority
+over speed, because the velocity profile is fixed offline. Its only remaining
+lever is to command *more lock*, which drives the front tyres further into the
+saturation the model just described. Honesty about the tyre, handed to the wrong
+component, amplifies the exact failure it was meant to prevent.
+
+**The model itself is validated and kept** — the measurement is sound and
+`achieved_curvature()` stays in `vehicle.py`. It belongs in the **planner**: cap
+planned curvature at what the car can actually achieve and set the speed from
+that, so the controller is never asked for turn-in that does not exist. The
+parameter defaults to off; the shipping config is untouched.
+
 ## Submission integrity pass (Aug 23) — two of these would have scored zero
 
 An architecture review proposed replacing the planner, controller and estimator.

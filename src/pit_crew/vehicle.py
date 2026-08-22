@@ -26,6 +26,37 @@ def steer_to_cmd(angle_rad: float) -> float:
     return max(-1.0, min(1.0, angle_rad / MAX_STEER))
 
 
+# Measured understeer, from tools/grip_curve.py on the ay-4.0 race trace: the
+# fraction of the curvature a steering angle asks for that the front tyres
+# actually deliver. They track the kinematic bicycle model below ~0.10 rad, are
+# visibly saturating by 0.15, and return 42% at full lock.
+#
+# This matters to any model that predicts where the car will be. Rolling forward
+# with tan(delta)/L past ~0.15 rad expects curvature the car will not produce, so
+# the car runs wide, and a controller that believes its own model answers by
+# winding on more lock — which lands further down this curve and makes it worse.
+# That understeer-then-recover cycle is what put the ay-4.0 run into the wall.
+_UNDERSTEER = ((0.000, 1.00), (0.075, 1.00), (0.125, 0.88), (0.175, 0.80),
+               (0.225, 0.79), (0.275, 0.68), (0.350, 0.52), (0.460, 0.42),
+               (MAX_STEER, 0.40))
+
+
+def understeer_ratio(delta: float) -> float:
+    """Fraction of the asked-for curvature the front tyres really deliver."""
+    a = abs(delta)
+    if a <= _UNDERSTEER[0][0]:
+        return _UNDERSTEER[0][1]
+    for (x0, y0), (x1, y1) in zip(_UNDERSTEER, _UNDERSTEER[1:]):
+        if a <= x1:
+            return y0 + (y1 - y0) * (a - x0) / (x1 - x0)
+    return _UNDERSTEER[-1][1]
+
+
+def achieved_curvature(delta: float) -> float:
+    """Curvature this steering angle actually produces, understeer included."""
+    return understeer_ratio(delta) * math.tan(delta) / WHEELBASE
+
+
 class SpeedEstimator:
     """Vehicle speed from wheel encoder angles.
 

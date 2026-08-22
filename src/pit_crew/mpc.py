@@ -55,6 +55,7 @@ class MPCTracker(Node):
             ('stuck_distance', 0.20),    # m of travel that counts as moving
             ('escape_seconds', 1.2),     # how long to reverse out
             ('stale_pose_s', 0.35),      # no pose for this long = coast to a stop
+            ('understeer_model', False),  # roll out with measured tyre saturation
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -69,7 +70,7 @@ class MPCTracker(Node):
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
-         self.stale_pose_s,
+         self.stale_pose_s, self.understeer_model,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
@@ -178,7 +179,12 @@ class MPCTracker(Node):
             kap = float(self.kappa[idx % len(self.kappa)])
             denom = max(1.0 - kap * e_lat, 0.2)
             e_lat = e_lat + math.sin(e_yaw) * ds
-            e_yaw = e_yaw + (math.tan(delta) / vehicle.WHEELBASE
+            # The curvature this steering angle will actually produce. Below
+            # ~0.15 rad the two agree; past it the kinematic term promises
+            # turn-in the tyres do not have (see vehicle.achieved_curvature).
+            kap_cmd = (vehicle.achieved_curvature(delta) if self.understeer_model
+                       else math.tan(delta) / vehicle.WHEELBASE)
+            e_yaw = e_yaw + (kap_cmd
                              - kap * math.cos(e_yaw) / denom) * ds
             e_yaw = wrap(e_yaw)
             cost += (self.w_lat * e_lat ** 2 + self.w_yaw * e_yaw ** 2
