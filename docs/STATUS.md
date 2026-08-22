@@ -370,10 +370,19 @@ Order of work:
    target, it sharpened it.** Same car, same track mesh, same physics, verified
    asset-by-asset. It also showed the tyre model allows **ay 9.81 m/s2** where
    we cap at 3.0. See "Step 1 DONE" below.
-2. **Get VAUL's stack running** (github.com/vaul-ulaval, 1st at ICRA 2025 and
-   CDC-TF 2025). We already know from the earlier code comparison that every
-   block matches ours except odometry (they run wheel odometry AND kiss-icp).
-3. **Diff the artefacts, not the prose**: their raceline vs ours on the same
+2. ~~**Get VAUL's stack running**~~ — **DONE Aug 22: there is nothing to run.**
+   Everything public is their dev environment plus forks of third-party
+   components; the winning autonomy stack and its tuning are not published.
+   See "Step 2" below for what the code does reveal, including the 0.32 m
+   corridor width they plan with against our 0.325 m of measured clearance.
+3. **BLOCKED as written** (no raceline of theirs to diff) — replaced by:
+   **cut the localization p95 and spend it on corner radius.** Both the grip
+   curve and their 0.32 m corridor point at the same constraint. Concretely:
+   measure where the filter's error actually comes from at racing speed, then
+   re-run the `--w-veh` sweep with the margin that a better p95 justifies. The
+   old sweep said the frontier was flat (0.146 m -> 10.41 s vs 0.292 m ->
+   10.67 s) but it was run at ay 3.0, below the 4.5 m/s2 the tyres will give.
+   ~~Diff the artefacts, not the prose~~: their raceline vs ours on the same
    map — path length, peak curvature, curvature p99, worst-corner clearance,
    and the velocity profile's ay ceiling. Our numbers to beat, all on Porto:
    ideal 11.05 s, peak kappa 1.019, clearance 0.325 m, ay cap 3.0.
@@ -513,6 +522,49 @@ impossible to take inside the linear region without using track width to open
 it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
+
+## Step 2: VAUL's winning stack is not published (Aug 22)
+
+Cloned everything public under `github.com/vaul-ulaval` (kept in `upstream/vaul/`,
+git-ignored). **The autonomy stack that won is not among it**, so "get VAUL's
+stack running and diff it" cannot be done as written.
+
+- `autodrive_roboracer_ws` is their *development environment* — Docker compose,
+  devcontainer, bridge. Its competition entrypoint `devkit-final.bash` contains
+  the literal line `# Autonomy stack goes here`, and what it actually launches
+  is `wall_follow_node`, a reactive wall follower. The README dates it to the
+  2nd league (CDC 2024).
+- `global_racetrajectory_optimization` is a fork of TUM's, and the committed
+  `params/racecar.ini` is **stock TUM** — mass 1200 kg, length 4.7 m,
+  v_max 70 m/s. Nothing scaled to a 1:10 car.
+- The rest (`particle_filter`, `kiss-icp`, `norlab_controllers`, `range_libc`)
+  are forks of third-party projects: the components, not the integration or the
+  tuning.
+
+**What the code does still tell us**, all of it narrowing the gap rather than
+widening it:
+
+| Their code | Value | Ours | Verdict |
+|---|---|---|---|
+| `wheel_odometry_node.cpp` `counts_per_rev` | **6.5** (i.e. 2*pi) | radians, scale 0.993/0.999 | same interpretation — **closes** the counts-vs-radians question, and our calibration is tighter than their 6.5 vs 6.283 |
+| same, `max_acceleration` outlier reject | 4.0 m/s2 | none | worth adding; note it matches our measured grip plateau |
+| `ackermann_to_autodrive_node.cpp` throttle | `speed / 22.8` = **0.0439 per m/s**, open loop | 0.040 per m/s, open loop | match — no speed PID on their side either |
+| `spline_bruteforcer.py` (their own file) | `width_veh=0.32` | 0.27 car + swept footprint + 0.16 margin + 7.5 cm/side wall dilation | **they plan a far tighter corridor than we dare** |
+| same | brute-forces `stepsize_prep`/`stepsize_reg` over 0.05-1.5 m until spline normals stop crossing | fixed 0.10 m stepsize | a 1:10-scale adaptation of the TUM defaults (1.0-3.0 m) |
+
+**The one number that stands out is 0.32 m.** Their corridor allows the car
+0.32 m of width — 2.5 cm of margin per side over the 0.270 m body. We plan with
+the swept footprint plus 0.16 m and race a line with 0.325 m of measured corner
+clearance, because our error budget needs it: live localization is 0.092 m
+median but 0.298 m p95. A team running `particle_filter` with `range_libc` ray
+casting *and* kiss-icp can afford margins we cannot.
+
+That is the same conclusion the grip curve reached from the other end. Staying
+inside the linear tyre region needs curvature under 0.46 1/m; Porto's tightest
+corner is 1.019; opening it requires track width; track width is exactly what
+our localization error is spending. **The lever is localization accuracy, which
+buys clearance, which buys corner radius, which buys speed.** Not the ay cap,
+and not the tracker.
 
 ## What the winners do differently (VAUL, 1st at ICRA 2025 and CDC-TF 2025)
 
