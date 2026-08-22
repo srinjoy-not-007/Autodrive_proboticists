@@ -109,12 +109,14 @@ angle in radians).
 
 ## Where things stand
 
-Shipping: safe centerline + MPC + full profile speed (ay cap 3.0 m/s²).
+Shipping: safe centerline + MPC, ay 3.0 / **ax 6.5** / brake 4.0 / jerk 20,
+with the controller's **`ay_limit`** capping steering by the grip that exists.
+Ten-lap race time 115.0 -> **107.5 s**.
 
 | Track | Result |
 |---|---|
-| Porto (practice) | 22 laps, 0 collisions, best **11.32 s** |
-| ICRA (never tuned on) | 13 laps, 0 collisions, **20.9 s/lap** |
+| Porto (practice) | 25 laps, 0 collisions, best **10.40 s**, median 10.75 s |
+| ICRA (never tuned on) | 15 laps, 0 collisions, **18.91 s/lap** |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s |
 
 Published winning lap on the same Porto track is **6.53 s**. We track our own
@@ -149,6 +151,16 @@ physics settings and an identical vehicle, checked asset-by-asset with
   be taken inside that region without using track width to open it — which
   costs the clearance that keeps us collision-free. That trade, not the ay cap,
   is the real constraint on lap time.
+- **Steering authority is not constant — it is `atan(L * ay_max / v^2)`.** The
+  controller caps its own command by what the tyres can pay for at the current
+  speed (`ay_limit`, 4.5 m/s²). Without it, it commanded 0.202 rad at 5.45 m/s —
+  a demand for ~15 m/s² — slid wide and hit a wall while 0.054 m from its own
+  line. With it, steering never reaches full lock at all (15.6% of samples -> 0%)
+  and collisions went 4 -> 0. Do not remove it to "get more steering".
+- **Longitudinal grip is 7.1 m/s², not 3.0.** Longitudinal mu is 0.72 and
+  acceleration happens where there is no lateral demand, so `--ax 6.5` is nearly
+  free (ideal lap 11.0 -> 10.1 s). Braking stays at 4.0: it overlaps corner
+  entry. `PROFILE` in `make_track_lines.py` holds the validated set.
 - **Do not put the understeer curve in the controller's rollout.** Measured: it
   raises collisions per lap from 0.50 to 0.88 and time at full lock from 16% to
   36%. The controller cannot slow down — the profile is fixed offline — so

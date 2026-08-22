@@ -41,6 +41,20 @@ import numpy as np   # noqa: E402
 
 VENV = '.venv/bin/python'
 
+# The validated profile. These are not tuning knobs — each traces to a
+# measurement (docs/STATUS.md, "BREAKTHROUGH (Aug 23)"):
+#   ay 3.0    lateral, well under the 4.5 m/s2 the tyres sustain, because the
+#             margin is what absorbs localization and tracking error.
+#   ax 6.5    longitudinal mu is 0.72, i.e. 7.1 m/s2 available. Acceleration
+#             happens on straights where there is no lateral demand, so this is
+#             nearly free: ideal lap 11.0 -> 10.1 s on Porto.
+#   brake 4.0 braking overlaps corner entry, where lateral demand is rising, so
+#             it stays at the value proven over 22 clean laps.
+#   jerk 20   the lateral-jerk ceiling the clean shipping profile already met.
+# Measured with these: Porto 25 laps 0 collisions median 10.75 s (was 11.5),
+# ICRA 15 laps 0 collisions median 18.91 s (was 20.9).
+PROFILE = ['--ay', '3.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
+
 
 def worst_corner(map_prefix, line_csv):
     dist, res, ox, oy = load_dist(map_prefix)
@@ -124,6 +138,7 @@ def build(track, tag, extra):
 
     out = {'centerline': cl}
     for kind, args in (('safe', ['--centerline-only']), ('raceline', [])):
+        args = args + PROFILE
         path = f'data/racelines/{track}_{kind}_{tag}'
         if subprocess.run([VENV, 'tools/optimize_raceline.py', cl + '.csv',
                            '--out', path] + args,
