@@ -47,6 +47,66 @@ def corner_sweep(kappa):
     return np.clip(swing, HALF_W, 0.60)
 
 
+def limit_lat_jerk(vx, kappa, el_lengths, j_max, ax_max, ax_brake,
+                   rounds=40, v_floor=0.5):
+    """Cap how fast lateral acceleration is allowed to change along the lap.
+
+    The tyre model peaks at mu 1.0 but only at 0.01 sideways slip, falling to
+    0.5 by 0.10 slip (see docs/STATUS.md, "Step 1 DONE"). A profile that jumps
+    from one steady cornering load to another forces the tyre to build slip
+    faster than it can hold, so it overshoots the peak and lands on the
+    asymptote at half the grip. That is the measured failure signature: raising
+    the ay cap to 4.0 collided at curvature *transitions*, not at the tightest
+    corners, with steering at full lock 20% of samples.
+
+    An ay cap alone cannot express this — it bounds the value, not the rate.
+    This bounds d(ay)/dt by slowing the car through transitions, leaving steady
+    corners free to use the higher cap.
+
+    Only ever reduces speed, so it converges; the longitudinal passes afterwards
+    keep the result reachable by a car that has to brake into the slow points.
+    """
+    v = np.asarray(vx, dtype=float).copy()
+    ds = np.asarray(el_lengths, dtype=float)
+    kap = np.abs(kappa)
+    sgn = np.sign(kappa)
+
+    for _ in range(rounds):
+        ay = v * v * kappa
+        dt = ds / np.maximum(0.5 * (v + np.roll(v, -1)), 0.1)
+        lim = j_max * dt
+        nxt = np.roll(ay, -1)
+        over = np.abs(nxt - ay) > lim + 1e-6
+        if not over.any():
+            break
+        for i in np.flatnonzero(over):
+            j = (i + 1) % len(v)
+            big, small = (i, j) if abs(ay[i]) > abs(ay[j]) else (j, i)
+            if kap[big] < 1e-6:
+                continue                     # straight: ay is ~0 regardless of v
+            same = sgn[big] == sgn[small]
+            allowed = lim[i] + abs(ay[small]) if same else lim[i] - abs(ay[small])
+            target = min(abs(ay[big]), max(0.0, allowed))
+            v[big] = max(v_floor, math.sqrt(target / kap[big]))
+            ay[big] = v[big] * v[big] * kappa[big]
+        v = limit_long_accel(v, ds, ax_max, ax_brake)
+    return v
+
+
+def limit_long_accel(v, ds, ax_max, ax_brake, passes=3):
+    """Forward/backward passes so the profile is reachable within ax limits."""
+    v = v.copy()
+    n = len(v)
+    for _ in range(passes):
+        for i in range(n):
+            j = (i + 1) % n
+            v[j] = min(v[j], math.sqrt(v[i] ** 2 + 2.0 * ax_max * ds[i]))
+        for i in range(n - 1, -1, -1):
+            j = (i + 1) % n
+            v[i] = min(v[i], math.sqrt(v[j] ** 2 + 2.0 * ax_brake * ds[i]))
+    return v
+
+
 def curvature_of(reftrack, normvec, alpha, stepsize):
     """Curvature of the candidate line, sampled back at reference points."""
     rl, _, cx, cy, inds, tv, _, _, _ = tph.create_raceline.create_raceline(
@@ -70,6 +130,10 @@ def main():
     ap.add_argument('--w-veh', type=float, default=0.16,
                     help='extra safety on top of the swept footprint')
     ap.add_argument('--kappa-bound', type=float, default=1.6)
+    ap.add_argument('--jerk-lat', type=float, default=None,
+                    help='cap d(ay)/dt in m/s3. Off by default. The shipping '
+                         'ay-3.0 profile peaks at 21 m/s3 and runs clean, so '
+                         'that is the level known to be survivable.')
     ap.add_argument('--stepsize', type=float, default=0.10)
     ap.add_argument('--sweep-iters', type=int, default=2,
                     help='corridor shrink / re-optimize passes for body sweep')
@@ -160,6 +224,20 @@ def main():
     vx_cl = np.append(vx, vx[0])
     ax_prof = tph.calc_ax_profile.calc_ax_profile(
         vx_profile=vx_cl, el_lengths=el_lengths, eq_length_output=False)
+
+    if args.jerk_lat is not None:
+        before = float(np.sum(el_lengths / np.maximum(vx, 0.1)))
+        vx = limit_lat_jerk(vx, kappa, el_lengths, args.jerk_lat,
+                            args.ax, args.brake)
+        after = float(np.sum(el_lengths / np.maximum(vx, 0.1)))
+        ay_p = vx ** 2 * kappa
+        dt_p = el_lengths / np.maximum(vx, 0.1)
+        jerk = np.abs(np.diff(np.append(ay_p, ay_p[0]))) / np.maximum(dt_p, 1e-3)
+        print(f'lateral jerk capped at {args.jerk_lat:.0f} m/s3: '
+              f'achieved max {jerk.max():.1f}, ideal lap {before:.2f} -> {after:.2f} s')
+        vx_cl = np.append(vx, vx[0])
+        ax_prof = tph.calc_ax_profile.calc_ax_profile(
+            vx_profile=vx_cl, el_lengths=el_lengths, eq_length_output=False)
 
     lap_t = float(np.sum(el_lengths / np.maximum(vx, 0.1)))
     print(f'velocity: min {vx.min():.2f} max {vx.max():.2f} m/s — '

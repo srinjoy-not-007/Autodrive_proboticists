@@ -136,13 +136,19 @@ physics settings and an identical vehicle, checked asset-by-asset with
   on Porto — it is faster in theory (10.41 s vs 11.05 s ideal) but only leaves
   0.146 m corner clearance and collects ~57 collisions. Clearance beats path
   length when a collision costs +10 s. Better tracking did not rescue it.
-- **Do not keep raising the ay cap** *by itself*. ay 4.0 gives 10.11 s but 23
-  collisions, and it fails at curvature *transitions*, not the tightest corners.
-  The reason matters: the tyre model peaks at **mu 1.0 (ay 9.81 m/s2) at 0.01
-  slip** and halves to 0.5 (4.91 m/s2) by 0.10 slip, so our ~5 m/s2 ceiling is
-  the *asymptote*, not the limit — the ay-4.0 run sat at full steering lock 20%
-  of samples. More grip is there, but only for a line and controller that hold
-  slip inside that window. Raising the cap without fixing that just crashes.
+- **Do not keep raising the ay cap.** ay 4.0 gives 10.11 s but 23 collisions;
+  capping lateral jerk at 20 m/s3 as well cuts that to 10 (best lap 9.96 s) but
+  still is not clean. **Measured grip, from the race trace and not the asset:**
+  the car turns exactly as the bicycle model predicts below 0.10 rad of
+  steering, saturates past ~0.15 rad, and achieved lateral acceleration
+  plateaus at **4.5 m/s2** — the tyre's asymptote, not its 9.81 peak (that peak
+  sits at 0.01 slip, too narrow a window to hold). Real headroom over ay 3.0 is
+  ~1.5x. `tools/grip_curve.py <race log>` re-measures this from any run.
+- **Staying inside the linear tyre region means planned curvature under
+  0.46 1/m** (0.15 rad of steer). Porto's tightest corner is 1.019, so it cannot
+  be taken inside that region without using track width to open it — which
+  costs the clearance that keeps us collision-free. That trade, not the ay cap,
+  is the real constraint on lap time.
 - **Do not re-tune the centering strength** of the centerline extractor —
   harder centering makes the line jagged and clearance *worse*.
 - `--kappa-bound` in `optimize_raceline.py` does nothing on Porto; the corridor

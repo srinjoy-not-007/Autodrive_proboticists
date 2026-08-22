@@ -419,15 +419,16 @@ the tyre model out of the asset:
 
 | | value | implies |
 |---|---|---|
-| lateral mu at peak | 1.00 (extremumValue 1.0 x stiffness 1.0) | **ay up to 9.81 m/s2** |
+| lateral mu at peak | 1.00 (extremumValue 1.0 x stiffness 1.0) | ay 9.81 m/s2 — *transient only, see below* |
 | ...at slip | **0.01** | a very narrow window |
 | lateral mu at asymptote | 0.50 | ay 4.91 m/s2 |
 | ...at slip | 0.10 | |
 | longitudinal mu at peak | 0.72 (0.9 x 0.8) | ax up to 7.1 m/s2 |
 
 Unity scales `WheelFrictionCurve` values by wheel load, so value x stiffness is
-effectively mu. **We cap the velocity profile at ay 3.0 — 31% of what the tyre
-can do.**
+effectively mu. We cap the velocity profile at ay 3.0. **The 9.81 figure is the
+peak of the curve and the car cannot live there — the measured plateau is
+4.5 m/s2, the asymptote. The real headroom over our cap is ~1.5x, not 3x.**
 
 This reframes every grip conclusion in this document. The ~5 m/s2 ceiling we
 kept hitting is not the friction limit, it is the **asymptote**: past 0.10 slip
@@ -443,12 +444,75 @@ plausible limit — but that estimate wrongly assumed the tightest corner is
 taken at the average speed. Against a real 9.81 m/s2 peak, a 6.53 s lap sits
 inside the tyre model, not outside it.
 
-**What this does not yet prove.** These are asset values; achieved lateral
-acceleration is lower once load transfer, the suspension, and four wheels
-reaching peak slip at different moments are accounted for. Nothing here has
-been driven. The next measurement is a controller that holds small slip angles
-and a line with bounded curvature — which is exactly what step 3 (diffing their
-raceline against ours) is for.
+**Driven the same day, and it cut the headroom claim down.** See the next
+section: the peak is real but unreachable in sustained cornering, and the
+number that matters is the *asymptote*, 4.91 m/s2. Treat "3x the grip we use"
+as wrong and "about 1.5x" as right.
+
+## Driving the jerk-limited profile: partly right, and the grip question settled (Aug 22)
+
+Step 1 predicted that our failures above ay 3.0 come from crossing the tyre's
+narrow peak-slip window at curvature *transitions*, not from running out of
+grip in the corners. The test: same geometry, only the speed profile changed.
+
+`optimize_raceline.py --jerk-lat` caps d(ay)/dt. The shipping ay-3.0 profile
+peaks at 21 m/s3 and runs clean over 22 laps, so 20 m/s3 is a level known to be
+survivable; an unlimited ay-4.0 profile peaks at 32 m/s3.
+
+| profile | ideal | driven | best lap | collisions |
+|---|---|---|---|---|
+| safe, ay 3.0 (shipping) | 11.01 s | 22 laps | **11.32 s** | **0** |
+| safe, ay 4.0, no jerk cap | 9.57 s | 21 laps | 10.11 s | 23 |
+| **safe, ay 4.0, jerk <= 20** | 9.56 s | **20 laps** | **9.96 s** | **10** |
+
+The path is byte-identical to the shipping line, so clearance is unchanged at
+0.325 m and the only variable is speed.
+
+**The prediction half-held.** Collisions fell from 23 to 10 at the same ay cap
+and the same lap count, and the best lap improved to 9.96 s. Localizing them
+the way the ICRA spur was found: the 10 events are only **4 incidents**, one of
+which is a collision-reset loop — the car hits, is teleported to the checkpoint,
+drives the same 0.8 m and hits again, six times. Every incident sits at
+kappa 0.04-0.70, never at the tightest corner (1.019). So the failure really is
+transitional. But 4 incidents is not clean, and 10 collisions cost +100 s. **Not
+shippable.**
+
+**What the run settled is more valuable than the lap time.** Differentiating the
+IPS trace gives the yaw rate the car actually achieved, which can be compared
+against what the steering angle asked for (`kappa = tan(delta)/L`) — the
+measurement `skidpad.py` needs open space for, extracted from a normal racing
+lap instead (`tools/grip_curve.py`):
+
+| steering | kappa asked | achieved | ratio | ay achieved |
+|---|---|---|---|---|
+| 0.05-0.10 | 0.24 | 0.24 | **1.01** | 2.52 |
+| 0.10-0.15 | 0.38 | 0.34 | 0.88 | 3.98 |
+| 0.15-0.20 | 0.54 | 0.42 | 0.80 | **4.49** |
+| 0.20-0.25 | 0.67 | 0.55 | 0.79 | 4.31 |
+| 0.25-0.30 | 0.87 | 0.58 | 0.68 | 4.38 |
+| 0.30-0.40 | 1.13 | 0.62 | 0.52 | 4.09 |
+| 0.40-0.52 | 1.49 | 0.64 | 0.42 | 3.87 |
+
+Below 0.10 rad of steering the car turns exactly as the bicycle model says.
+Past ~0.15 rad the front tyres saturate and **more steering buys no more
+lateral acceleration at all** — achieved ay flattens at 4.1-4.5 and then
+declines while the asked-for curvature keeps climbing. At full lock the car
+achieves 37% of the curvature it is asking for.
+
+That plateau, 4.5 m/s2, is the tyre model's **asymptote** (4.91), not its peak
+(9.81). The peak sits at 0.01 slip, a window too narrow to hold, so in practice
+the car races on the falling branch. **Corrected conclusion: usable grip is
+about 4.5 m/s2 — real headroom over our ay 3.0 cap is ~1.5x, not 3x.** The old
+"grip is genuinely limited near ay 3-4" entry was closer to right than the
+Step 1 reading of the asset was.
+
+**Where that leaves the pace problem.** Staying inside the linear region means
+keeping steering under ~0.15 rad, i.e. planned curvature under
+`tan(0.15)/0.324 = 0.46 1/m`. Porto's tightest corner is 1.019 — **geometrically
+impossible to take inside the linear region without using track width to open
+it**. Which returns to the clearance problem: opening corners costs the margin
+that keeps us collision-free. That, not the ay cap, is the real constraint, and
+it is what the winners must be solving differently.
 
 ## What the winners do differently (VAUL, 1st at ICRA 2025 and CDC-TF 2025)
 
