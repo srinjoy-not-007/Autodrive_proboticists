@@ -63,6 +63,22 @@ class SpeedEstimator:
                     self.jumped = True
         return self.speed
 
+    def consume_jump(self) -> bool:
+        """True once per detected teleport, clearing the state it invalidated.
+
+        The simulator returns the car to its last checkpoint after a collision,
+        which both moves it and zeroes the encoders. Everything this estimator
+        holds is about where the car *was*: the filtered speed describes motion
+        that has stopped, and the stored positions would make the next
+        derivative garbage too. Drop both and re-seed from the next sample.
+        """
+        if not self.jumped:
+            return False
+        self.jumped = False
+        self.speed = 0.0
+        self._last.clear()
+        return True
+
 
 class ThrottleController:
     """Open-loop throttle from a target speed.

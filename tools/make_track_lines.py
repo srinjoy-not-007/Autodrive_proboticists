@@ -59,12 +59,27 @@ def worst_corner(map_prefix, line_csv):
 
 MIN_TURN_R = 0.561      # wheelbase / tan(max steer)
 
-# A line has to leave more room than our own error consumes. Live localization
-# measures p95 0.298 m on Porto, which dominates the ~0.12 m tracking error, so
-# anything under ~0.30 m of worst-corner clearance is spending margin we do not
-# have. Measured either side of that line: 0.325 m -> 0 collisions over 22 laps;
-# 0.146 m -> ~57 collisions, and better tracking did not rescue it.
-MIN_CLEARANCE = 0.30
+# A line has to leave more room than our own error consumes — but only the part
+# of that error which moves the car *sideways*, towards a wall. Decomposing the
+# live localization trace against the direction of travel (data/logs/
+# loc_norandom.csv):
+#
+#     total euclidean       median 0.092  p95 0.298  max 0.427
+#     along-track           median 0.074  p95 0.246  max 0.410
+#     normal (lateral)      median 0.043  p95 0.171  max 0.196
+#
+# The headline 0.298 m is mostly along-track *lag*: it makes the car early or
+# late along the path, not closer to the wall. Using it as a per-side clearance
+# floor was the wrong statistic and roughly twice as conservative as the
+# geometry requires. The lateral error never exceeded 0.196 m over the run.
+#
+# So the floor rejects what is physically impossible, not what is merely
+# untested: worst observed lateral error (0.196) plus the map's own 0.025 m
+# resolution. Measured either side of the gap this leaves open: 0.325 m -> 0
+# collisions over 22 laps, 0.146 m -> ~57 collisions and better tracking did not
+# rescue it. Anything between 0.22 and 0.325 m is admitted but UNPROVEN — it
+# gets written to race.csv, which nothing races until it has been driven.
+MIN_CLEARANCE = 0.22
 
 
 def ideal_lap(line_csv):

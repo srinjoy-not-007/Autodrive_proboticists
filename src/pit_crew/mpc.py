@@ -54,6 +54,7 @@ class MPCTracker(Node):
             ('stuck_seconds', 1.5),      # commanded to move but barely moving
             ('stuck_distance', 0.20),    # m of travel that counts as moving
             ('escape_seconds', 1.2),     # how long to reverse out
+            ('stale_pose_s', 0.35),      # no pose for this long = coast to a stop
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -68,6 +69,7 @@ class MPCTracker(Node):
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
+         self.stale_pose_s,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
@@ -93,6 +95,7 @@ class MPCTracker(Node):
         self._escape_until = None
         self._escape_steer = 0.0
         self._stuck_count = 0
+        self._stale_warned = False
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
@@ -192,6 +195,21 @@ class MPCTracker(Node):
     def control_step(self):
         if self.pose is None:
             return
+
+        # Pose has stopped arriving — localization died, the bridge dropped, or
+        # the simulator went away. Commands LATCH here, so returning early would
+        # leave the last throttle applied and drive the car into a wall at
+        # speed. Coast instead, and *hold* the steering angle rather than
+        # snapping to zero: mid-corner, zero steer points at the outside wall.
+        if self.now() - self.pose[3] > self.stale_pose_s:
+            self.publish(self.steer, 0.0)
+            if not self._stale_warned:
+                self.get_logger().error(
+                    f'no pose for {self.stale_pose_s:.2f}s — coasting to a stop')
+                self._stale_warned = True
+            return
+        self._stale_warned = False
+
         x, y, yaw = self.predicted_state()
 
         d = np.hypot(self.xy[:, 0] - x, self.xy[:, 1] - y)

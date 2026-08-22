@@ -187,11 +187,21 @@ class ParticleFilter(Node):
         head = self.imu_yaw + self.pth
         # Cap per-update travel: a bad speed sample must not fling the whole
         # particle set off the map (from which there is no recovery).
+        # A checkpoint reset teleports the car, so the motion model has nothing
+        # to say about this step: propagating the pre-jump speed would march the
+        # whole cloud away from where the car actually now is. Stand still and
+        # spread instead, which lets the sensor update pull the particles to the
+        # checkpoint rather than fighting a confident wrong prior. The existing
+        # lost-score relocalization still covers the case where it does not.
+        jumped = self.speed_est.consume_jump()
         # Encoder speed when available, throttle estimate as fallback
         v = self.speed_est.speed if self.speed_est.speed > 1e-3 else self.speed_cmd
-        step = float(np.clip(v * dt, -0.6, 0.6))
-        self.px += step * np.cos(head) + np.random.normal(0, self.noise_xy, self.n_p)
-        self.py += step * np.sin(head) + np.random.normal(0, self.noise_xy, self.n_p)
+        step = 0.0 if jumped else float(np.clip(v * dt, -0.6, 0.6))
+        noise = self.noise_xy * (4.0 if jumped else 1.0)
+        if jumped:
+            self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
+        self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
+        self.py += step * np.sin(head) + np.random.normal(0, noise, self.n_p)
         self.pth += np.random.normal(0, self.noise_th, self.n_p)
 
     def update(self, scan: LaserScan):

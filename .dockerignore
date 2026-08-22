@@ -1,0 +1,15 @@
+# The submission image only COPYs src/, data/maps, data/racelines and
+# submission/. Everything else is build context sent to the daemon for nothing —
+# .venv/ and upstream/ alone are ~1.8 GB, which makes every image build slow and
+# risks baking host-only artefacts into a competition submission.
+.venv/
+upstream/
+.git/
+data/bags/
+data/logs/
+data/screens/
+**/__pycache__/
+*.pyc
+build/
+install/
+log/

@@ -8,6 +8,20 @@ source /opt/ros/humble/setup.bash
 source /home/autodrive_devkit/install/setup.bash
 cd /home/autodrive_devkit
 
+# Commands LATCH in this simulator: whatever was last published keeps being
+# applied. If the stack is stopped without zeroing, the car drives on by itself.
+# Best effort only — nothing survives SIGKILL — but it covers an orderly stop.
+zero_actuators() {
+    timeout 2 ros2 topic pub -r 20 --times 10 \
+        /autodrive/roboracer_1/throttle_command std_msgs/msg/Float32 '{data: 0.0}' \
+        > /dev/null 2>&1 || true
+    timeout 2 ros2 topic pub -r 20 --times 10 \
+        /autodrive/roboracer_1/steering_command std_msgs/msg/Float32 '{data: 0.0}' \
+        > /dev/null 2>&1 || true
+}
+shutdown() { zero_actuators; kill 0 2>/dev/null; exit 0; }
+trap shutdown SIGINT SIGTERM
+
 MAP="${PIT_CREW_MAP:-/home/data/maps/track_v2}"
 LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/track_v2_centerline.csv}"

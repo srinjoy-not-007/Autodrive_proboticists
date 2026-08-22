@@ -523,6 +523,76 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## Submission integrity pass (Aug 23) — two of these would have scored zero
+
+An architecture review proposed replacing the planner, controller and estimator.
+Auditing the submission path first turned up defects that outrank every one of
+those proposals, because they are certain rather than speculative.
+
+**1. The image did not start itself.** The base devkit is
+`ENTRYPOINT ["/bin/bash"]` with no `CMD`, and ours re-declared the same. `docker
+run <image>` therefore landed in a shell and started nothing. Fixed by adding
+`CMD ["-c", "/home/autodrive_devkit.sh"]`; passing `-c "..."` still overrides
+it, so every existing script behaves identically. **Verified by cold-starting
+the built image with no arguments** and watching `bringup_headless`,
+`autodrive_bridge` and `localization` come up.
+
+**2. We were breaking the devkit's NumPy ABI.** The base image ships numpy
+1.22.2 and its ROS 2 Humble C-extensions are compiled against the 1.x ABI. Our
+`pip3 install scipy` resolved numpy to **2.2.6**, after which the devkit's own
+bridge printed an ABI warning on startup and `cv_bridge` failed outright with
+`AttributeError: _ARRAY_API not found`. We are forbidden from modifying
+`autodrive_roboracer` to repair that, so we must not break it. Pinned to
+`"numpy<2" "scipy==1.10.1"`; verified numpy stays 1.22.2 and `cv_bridge`,
+`sensor_msgs` and `pit_crew` all import cleanly.
+
+**3. No stale-pose failsafe.** Commands latch in this simulator. If localization
+died the controller kept publishing its last command forever — full throttle
+into a wall. `mpc.py` now coasts to zero throttle after `stale_pose_s` (0.35 s,
+about 3.5 missed scans) while *holding* the steering angle: snapping to zero
+mid-corner aims at the outside wall.
+
+**4. The teleport signal was set and never read.** `SpeedEstimator.jumped` was
+raised on a physically impossible encoder derivative — which is exactly what a
+checkpoint reset produces — and nothing consumed it. Now `consume_jump()` clears
+the invalidated speed and sample history, and the filter stands still and
+spreads for that step instead of marching the whole particle cloud away from
+where the car now is.
+
+**5. No `.dockerignore`.** The build context shipped `.venv/` and `upstream/` —
+about 1.8 GB — to the daemon on every build.
+
+Regression test, shipping config on Porto: **9 laps, 0 collisions, best 11.26 s**
+against the 11.32 s baseline, with **zero** spurious failsafe or jump triggers.
+
+## The clearance gate used the wrong error component (Aug 23)
+
+`MIN_CLEARANCE` was 0.30 m, justified by localization's total Euclidean p95 of
+0.298 m. That is the wrong statistic: only the error *normal* to the path pushes
+the car towards a wall. Decomposing the same trace against the direction of
+travel:
+
+| component | median | p95 | max |
+|---|---|---|---|
+| total euclidean | 0.092 | 0.298 | 0.427 |
+| along-track | 0.074 | 0.246 | 0.410 |
+| **normal (lateral)** | **0.043** | **0.171** | **0.196** |
+
+The headline figure is mostly along-track **lag** — it makes the car early or
+late along the path, not closer to the wall. The gate was therefore about twice
+as conservative as the geometry requires.
+
+Re-derived to **0.22 m** = worst observed lateral error (0.196) + the map's own
+0.025 m resolution, i.e. it now rejects what is physically impossible rather
+than what is merely untested. **This changes no decision on either known
+track**: Porto's optimized lines (0.146, 0.135) are still rejected and the safe
+line still wins, ICRA's 0.564 still passes. It only matters for a future track
+whose best line lands between 0.22 and 0.325 m — and such a line is written to
+`race.csv`, which nothing races until it has been driven.
+
+The 0.146 m (~57 collisions) to 0.325 m (22 clean laps) frontier remains
+untested in between. That is the next experiment, not an assumption.
+
 ## Are we overfitting to Porto? Audit (Aug 22)
 
 Worth asking, because the finals track is released three days before the
