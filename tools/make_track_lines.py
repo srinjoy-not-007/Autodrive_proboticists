@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate a track's racing lines, choosing the centerline method by measurement.
+"""Generate a track's racing lines, choosing both the centerline method AND the
+line to race by measurement.
 
 Neither centerline method wins everywhere: the skeleton is better on a simple
 loop (Porto worst-corner clearance 0.325 m vs 0.079 m) while on a circuit with
@@ -7,6 +8,26 @@ an inner passage it cuts straight across the infield and is unusable, where the
 trajectory-anchored method works (ICRA 0.215 m). Rather than pick by hand per
 track — which is exactly the sort of choice that does not survive an unseen
 track — build both and keep whichever actually measures better.
+
+The same argument applies to safe-centerline vs optimized raceline, and used to
+be decided by a constant. On Porto the optimized line is faster in theory
+(10.41 s vs 11.05 s ideal) and unusable in practice: 0.146 m of corner
+clearance against a localization p95 of 0.298 m gave ~57 collisions, where the
+safe line's 0.325 m runs clean. That is a fact about Porto's narrow corridor,
+not about optimized racelines, and the finals track is released three days
+before the deadline with no time to rediscover it. So: build both, reject
+whatever cannot cover the measured error budget, and race the fastest of what
+survives.
+
+Outputs, all under data/racelines/<track>_:
+  centerline.csv  the chosen centerline
+  safe.csv        the conservative centerline-following line (unchanged)
+  raceline.csv    the min-curvature optimized line
+  race.csv        whichever of the two measured best — the one to race
+
+`race.csv` is written but nothing points at it yet: the shipping entrypoint
+still names `safe.csv` deliberately, because a line should be driven before it
+is trusted (see docs/STATUS.md).
 
 Usage: .venv/bin/python tools/make_track_lines.py <track_name>
 """
@@ -38,6 +59,20 @@ def worst_corner(map_prefix, line_csv):
 
 MIN_TURN_R = 0.561      # wheelbase / tan(max steer)
 
+# A line has to leave more room than our own error consumes. Live localization
+# measures p95 0.298 m on Porto, which dominates the ~0.12 m tracking error, so
+# anything under ~0.30 m of worst-corner clearance is spending margin we do not
+# have. Measured either side of that line: 0.325 m -> 0 collisions over 22 laps;
+# 0.146 m -> ~57 collisions, and better tracking did not rescue it.
+MIN_CLEARANCE = 0.30
+
+
+def ideal_lap(line_csv):
+    """Lap time the velocity profile claims for this line, in seconds."""
+    rl = np.loadtxt(line_csv, delimiter=',')
+    s, vx = rl[:, 0], rl[:, 5]
+    return float(np.sum(np.diff(s) / np.maximum(vx[:-1], 0.1)))
+
 
 def drivability(line_csv):
     """Reasons the car physically cannot follow this line, if any.
@@ -63,50 +98,80 @@ def drivability(line_csv):
     return bad
 
 
+def build(track, tag, extra):
+    """Both lines for one centerline method. Returns None if extraction fails."""
+    mp = f'data/maps/{track}'
+    cl = f'data/racelines/{track}_centerline_{tag}'
+    if subprocess.run([VENV, 'tools/extract_centerline.py', mp, cl] + extra,
+                      capture_output=True, text=True).returncode != 0:
+        print(f'  {tag}: centerline extraction failed')
+        return None
+
+    out = {'centerline': cl}
+    for kind, args in (('safe', ['--centerline-only']), ('raceline', [])):
+        path = f'data/racelines/{track}_{kind}_{tag}'
+        if subprocess.run([VENV, 'tools/optimize_raceline.py', cl + '.csv',
+                           '--out', path] + args,
+                          capture_output=True, text=True).returncode != 0:
+            print(f'  {tag:9s} {kind:9s} generation failed')
+            continue
+        bad = drivability(path + '.csv')
+        try:
+            wc = worst_corner(mp, path + '.csv')
+        except Exception as e:
+            print(f'  {tag:9s} {kind:9s} clearance check failed ({e})')
+            continue
+        lap = ideal_lap(path + '.csv')
+        why = '; '.join(bad) if bad else (
+            f'clearance {wc:.3f} < {MIN_CLEARANCE:.2f} m budget'
+            if wc < MIN_CLEARANCE else '')
+        print(f'  {tag:9s} {kind:9s} clearance {wc:.3f} m  ideal lap {lap:6.2f} s'
+              f'{"   REJECTED: " + why if why else ""}')
+        out[kind] = {'path': path, 'clearance': wc, 'lap': lap, 'ok': not why}
+    return out
+
+
 def main():
     track = sys.argv[1]
-    mp = f'data/maps/{track}'
-    results = {}
+    built = {}
     for tag, extra in (('skeleton', ['--skeleton']), ('anchored', [])):
-        cl = f'data/racelines/{track}_centerline_{tag}'
-        safe = f'data/racelines/{track}_safe_{tag}'
-        r = subprocess.run([VENV, 'tools/extract_centerline.py', mp, cl] + extra,
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            print(f'  {tag}: centerline extraction failed')
-            continue
-        r = subprocess.run([VENV, 'tools/optimize_raceline.py', cl + '.csv',
-                            '--centerline-only', '--out', safe],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            print(f'  {tag}: line generation failed')
-            continue
-        try:
-            wc = worst_corner(mp, safe + '.csv')
-        except Exception as e:
-            print(f'  {tag}: clearance check failed ({e})')
-            continue
-        bad = drivability(safe + '.csv')
-        if bad:
-            print(f'  {tag:9s} REJECTED: {"; ".join(bad)}')
-            continue
-        results[tag] = (wc, cl, safe)
-        print(f'  {tag:9s} worst-corner clearance {wc:.3f} m')
+        got = build(track, tag, extra)
+        if got and 'safe' in got:
+            built[tag] = got
 
-    if not results:
-        sys.exit('no drivable line produced by either method')
-    best = max(results, key=lambda k: results[k][0])
-    wc, cl, safe = results[best]
-    print(f'chosen: {best} ({wc:.3f} m)')
-    for src, dst in ((cl + '.csv', f'data/racelines/{track}_centerline.csv'),
-                     (safe + '.csv', f'data/racelines/{track}_safe.csv')):
-        subprocess.run(['cp', src, dst], check=True)
-    # optimized raceline from the chosen centerline
-    subprocess.run([VENV, 'tools/optimize_raceline.py',
-                    f'data/racelines/{track}_centerline.csv',
-                    '--out', f'data/racelines/{track}_raceline'],
-                   capture_output=True, text=True)
-    print(f'wrote data/racelines/{track}_{{centerline,safe,raceline}}.csv')
+    if not built:
+        sys.exit('no line produced by either centerline method')
+
+    # The centerline method is still chosen on the safe line's clearance: it is
+    # the one line guaranteed to exist for both methods, and it is what exposes
+    # a skeleton cutting across an infield.
+    best_tag = max(built, key=lambda t: built[t]['safe']['clearance'])
+    chosen = built[best_tag]
+    print(f'centerline method: {best_tag} '
+          f'({chosen["safe"]["clearance"]:.3f} m on the safe line)')
+
+    for src, dst in ((chosen['centerline'] + '.csv', f'{track}_centerline'),
+                     (chosen['safe']['path'] + '.csv', f'{track}_safe')):
+        subprocess.run(['cp', src, f'data/racelines/{dst}.csv'], check=True)
+    if 'raceline' in chosen:
+        subprocess.run(['cp', chosen['raceline']['path'] + '.csv',
+                        f'data/racelines/{track}_raceline.csv'], check=True)
+
+    # Race the fastest line that can actually cover our error budget.
+    viable = [(k, v) for k, v in chosen.items()
+              if isinstance(v, dict) and v.get('ok')]
+    if not viable:
+        sys.exit('no line clears the error budget on this track — '
+                 'widen the corridor or improve localization before racing')
+    kind, win = min(viable, key=lambda kv: kv[1]['lap'])
+    subprocess.run(['cp', win['path'] + '.csv',
+                    f'data/racelines/{track}_race.csv'], check=True)
+    other = [f'{k} {v["lap"]:.2f} s' for k, v in viable if k != kind]
+    print(f'race line: {kind} — ideal {win["lap"]:.2f} s, '
+          f'clearance {win["clearance"]:.3f} m'
+          + (f' (beat {", ".join(other)})' if other else
+             ' (only candidate that cleared the budget)'))
+    print(f'wrote data/racelines/{track}_{{centerline,safe,raceline,race}}.csv')
 
 
 if __name__ == '__main__':
