@@ -28,6 +28,17 @@ try:
 except ImportError:
     sys.exit('run inside the devkit container (needs rclpy + msg defs)')
 
+# The LiDAR sits 0.1933 m ahead of the IPS point the poses report (measured from
+# the simulator scene; see pit_crew/vehicle.py). Correcting for it is physically
+# right and measurably sharpens the map — Porto wall pixels 6.53% -> 4.66%, ICRA
+# 7.03% -> 4.19% — and it is worth 1.6 s a race on Porto.
+#
+# It is OFF by default anyway. The sharper ICRA map changes what the
+# skeletonizer sees as the track's topology: the traced loop goes from 56.8 m to
+# 88.5 m with two genuine direction reversals, and no drivable centerline comes
+# out at all. Fixing the extractor is the prerequisite for turning this on, and
+# whatever builds the map and whatever localizes against it must agree.
+LIDAR_FROM_POSE = float(os.environ.get('PIT_CREW_LIDAR_OFFSET', '0.0'))
 RES = 0.025          # m / cell
 PAD = 1.0            # m padding around trajectory bounds
 L_OCC = 0.85         # log-odds-ish increments (probability weights)
@@ -134,8 +145,13 @@ def main():
         ang = s.angle_min + np.arange(n) * s.angle_increment + yaw
         valid = np.isfinite(r) & (r > s.range_min) & (r < s.range_max * 0.98)
         # Occupied endpoints
-        ex = x + r[valid] * np.cos(ang[valid])
-        ey = y + r[valid] * np.sin(ang[valid])
+        # The LiDAR is 0.1933 m ahead of the IPS point these poses report (see
+        # pit_crew/vehicle.py). Mapping and localization must agree about this
+        # or the filter is matching a map built with a different sensor origin.
+        sx = x + LIDAR_FROM_POSE * math.cos(yaw)
+        sy = y + LIDAR_FROM_POSE * math.sin(yaw)
+        ex = sx + r[valid] * np.cos(ang[valid])
+        ey = sy + r[valid] * np.sin(ang[valid])
         gx = ((ex - xmin) / RES).astype(int)
         gy = ((ey - ymin) / RES).astype(int)
         ok = (gx >= 0) & (gx < W) & (gy >= 0) & (gy < H)
@@ -147,8 +163,8 @@ def main():
             if steps < 2:
                 continue
             rr = np.linspace(0.05, r[j] - 0.05, steps)
-            fx = ((x + rr * np.cos(ang[j]) - xmin) / RES).astype(int)
-            fy = ((y + rr * np.sin(ang[j]) - ymin) / RES).astype(int)
+            fx = ((sx + rr * np.cos(ang[j]) - xmin) / RES).astype(int)
+            fy = ((sy + rr * np.sin(ang[j]) - ymin) / RES).astype(int)
             ok = (fx >= 0) & (fx < W) & (fy >= 0) & (fy < H)
             grid[fy[ok], fx[ok]] += L_FREE
 

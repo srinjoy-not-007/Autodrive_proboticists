@@ -62,11 +62,12 @@ class ParticleFilter(Node):
             # the velocity input stays locked on (mean 0.236 m, p95 0.54 m, 0).
             # Keep it on: a small cost on slow tracks buys stability on fast ones.
             ('throttle_to_mps', 25.0),
+            ('lidar_offset', 0.0),        # vehicle.LIDAR_FROM_POSE to enable
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
          self.init_spread, self.lost_thresh, self.lost_patience,
-         self.throttle_to_mps) = [x.value for x in p]
+         self.throttle_to_mps, self.lidar_offset) = [x.value for x in p]
         self.speed_cmd = 0.0
 
         self.load_map(map_prefix)
@@ -218,8 +219,17 @@ class ParticleFilter(Node):
 
         head = (self.imu_yaw + self.pth)[:, None]          # (N,1)
         world_ang = head + ang[None, :]                     # (N,M)
-        ex = self.px[:, None] + rr[None, :] * np.cos(world_ang)
-        ey = self.py[:, None] + rr[None, :] * np.sin(world_ang)
+        # Rays leave the LiDAR, not the pose point: the sensor sits 0.1933 m
+        # ahead of it (measured from the simulator scene, see vehicle.py).
+        # DEFAULT OFF, and the reason is in docs/STATUS.md: it is physically
+        # correct, it sharpens both maps and it is worth 1.6 s on Porto, but the
+        # sharper map changes what the skeletonizer sees as the track topology
+        # and ICRA stops producing a drivable centerline at all. Must match
+        # whatever built the map.
+        sx = self.px[:, None] + self.lidar_offset * np.cos(head)
+        sy = self.py[:, None] + self.lidar_offset * np.sin(head)
+        ex = sx + rr[None, :] * np.cos(world_ang)
+        ey = sy + rr[None, :] * np.sin(world_ang)
 
         gx = np.clip(((ex - self.ox) / self.res).astype(np.int32), 0, self.W - 1)
         gy = np.clip(((ey - self.oy) / self.res).astype(np.int32), 0, self.H - 1)

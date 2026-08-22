@@ -523,6 +523,54 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## The LiDAR mount offset: right, worth 1.6 s, and not shippable yet (Aug 23)
+
+An MPC review flagged that the 0.2733 m LiDAR-to-rear-axle offset appeared to be
+missing from both mapping and localization. It is. Measured directly out of the
+simulator's scene rather than taken from the datasheet:
+
+| | z (m) | relative to rear axle |
+|---|---|---|
+| rear axle centre | 0.640 | — |
+| IPS / IMU | 0.720 | **+0.0800 m** |
+| LiDAR | 0.9133 | **+0.2733 m** |
+
+The pose we localize and race against is the **IPS point**, not the rear axle, so
+what ray casting needs is the LiDAR's offset from *that*: **0.1933 m**. Rays were
+being cast 0.19 m behind where they physically originate — larger than the entire
+0.171 m lateral localization error we are trying to reduce.
+
+**Correcting it in both the mapper and the filter measurably sharpens the map**,
+which is the signature of a correct sensor origin:
+
+| map | wall pixels before | after |
+|---|---|---|
+| Porto | 6.53% | **4.66%** |
+| ICRA | 7.03% | **4.19%** |
+
+**And it is worth 1.6 s a race on Porto**: 27 laps, 0 collisions, best 9.69 s,
+median 9.96 s, ten-lap race **99.6 s** against 101.2 s. First sub-100 result.
+
+**It is off by default anyway, because it breaks the unseen-track drill.** On the
+sharper ICRA map the skeletonizer sees a different track topology: the traced
+loop goes from 56.8 m to **88.5 m** with two direction reversals, and
+`make_track_lines.py` correctly rejects every candidate — no drivable centerline
+at all. The reversals are genuine doubling-back, not spurs: at one of them the
+two legs never separate by 0.5 m within 60 points, so `excise_spurs` rightly
+declines to touch it. A sharper map opens up infield regions the smeared map had
+walled off, and the loop tracer follows them.
+
+Porto gaining 1.6 s does not buy the right to break the only unseen-track proxy
+we have three weeks before the finals. **Enabling it requires fixing the
+centerline extractor's loop tracing first**, and whatever builds the map and
+whatever localizes against it must always agree — `lidar_offset` on the
+localization node, `PIT_CREW_LIDAR_OFFSET` for the mapper, both default 0.
+
+Worth noting from the same measurement: the scene's front-to-rear axle distance
+is **0.3312 m**, against the 0.324 in `vehicle.py`. 2.2%, it feeds the steering
+model, and the entire shipping config is validated against 0.324. Recorded here
+to be revisited deliberately rather than changed in passing.
+
 ## SHIPPING (Aug 23): race time 115.0 -> 101.2 s, Porto best lap 9.81 s
 
 Final configuration: safe centerline, **ay 3.5 / ax 6.5 / brake 4.0 / jerk 20**,

@@ -13,6 +13,29 @@ STEER_RATE = 3.2            # rad/s actuator slew
 TOP_SPEED = 22.88           # m/s (claimed; calibrate)
 
 # LiDAR geometry
+# Sensor mounting, measured directly out of the simulator's own scene with
+# tools/compare_sim_builds.py machinery (2026-08-23), not taken from a datasheet:
+#   rear axle centre  z = 0.640
+#   IPS / IMU         z = 0.720   -> +0.0800 m ahead of the rear axle
+#   LiDAR             z = 0.9133  -> +0.2733 m ahead of the rear axle
+#
+# The pose we localize and race against is the IPS point, so what matters to ray
+# casting is the LiDAR's offset from *that*: 0.2733 - 0.0800.
+#
+# Neither the mapper nor the particle filter applied this. Rays were cast 0.19 m
+# behind where they physically originate — larger than the entire 0.171 m
+# lateral localization error we are trying to reduce. It partly self-cancels
+# because both stages made the same mistake, but only while heading the way the
+# map was recorded.
+IPS_FROM_REAR_AXLE = 0.0800
+LIDAR_FROM_REAR_AXLE = 0.2733
+LIDAR_FROM_POSE = LIDAR_FROM_REAR_AXLE - IPS_FROM_REAR_AXLE   # 0.1933 m
+
+# Measured front-to-rear axle distance in the same scene is 0.3312 m, against
+# the 0.324 the datasheet gives and this file uses. Left alone for now: the
+# 2.2% difference feeds the steering model and the whole shipping config is
+# validated against 0.324. Worth revisiting deliberately, not incidentally.
+
 LIDAR_N = 1080
 LIDAR_FOV = math.radians(270.0)
 LIDAR_ANGLE_MIN = -math.radians(135.0)
