@@ -523,6 +523,80 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## The MPC review: every claim true, the headline prescription 9x worse (Aug 23)
+
+An external review of `mpc.py` produced five specific defects. **All five are
+factually correct** — verified in the code before touching anything:
+
+1. Candidates spread over `steer_rate * control_dt * 4.0` while only
+   `steer_rate * control_dt` is ever applied, so with 9 candidates the spacing
+   equals one rate-limit step and four positive candidates clip to the same
+   applied +0.064 rad. Searched action != applied action.
+2. Future steering in the rollout is hard-coded `delta += 0.5 * (ff - delta)`,
+   which ignores the 3.2 rad/s limit — it is not optimising a sequence.
+3. Prediction and rollout use the *commanded* profile speed, not measured; the
+   encoders are validated and were already feeding localization.
+4. `on_pose` discards `msg.header.stamp` in favour of arrival time.
+5. Reference index is a global `argmin` that can jump across the track.
+
+**Implemented all five. Result: 27 collisions over 23 laps, against 3 over 22
+for the same line with the original controller.** Best lap 11.16 s vs 10.45,
+full lock 24.0% vs 17.7%.
+
+**Two things the diagnosis got wrong, and they matter more than the five that
+were right.**
+
+*The timestamp fix is a no-op.* Measured `now - scan_stamp` over 40 scans:
+**min 0.000, median 0.001, max 0.001 s**. The bridge stamps scans on arrival, so
+there is no scan-to-now latency to recover. The defect is real as written and
+worth nothing.
+
+*The candidate range is not a bug — it is the design.* The wide range selects a
+steering **target**; the rate limiter below it is the actuator model. Narrowing
+it to exactly one applicable step leaves the rollout unable to evaluate
+committing to a larger angle at all, and the cost differences between
+neighbouring candidates collapse into noise. That is the change most likely to
+have caused the regression, and the telling detail is that the wiggle metric did
+*not* move (87.7 steering zero-crossings per minute, against ~88/min measured
+before). The failure was not chatter; it was the controller no longer being able
+to see where it needed to steer to.
+
+**Reverted to the proven defaults; every one of the five is now a parameter**
+(`reach_steps`, `use_measured_speed`, `rate_limited_rollout`, `windowed_index`;
+the timestamp fix is kept, being both harmless and marginally more correct), so
+each can be isolated later rather than tested as a bundle again. Baseline
+re-verified after reverting: **19 laps, 0 collisions, best 11.09 s.**
+
+Honest gap in this result: the five were implemented and reverted *together*, so
+which one caused the regression is inferred, not measured. The flags exist to
+settle that.
+
+What stands from the review regardless: `tools/steering_smoothness.py` counting
+sign crossings does conflate genuine track transitions with control oscillation;
+the controller has no speed authority, so it can only answer insufficient grip
+with more lock; and the LiDAR-to-rear-axle offset (0.2733 m) appears to be
+omitted in both mapping and localization, which may partly self-cancel but is
+worth verifying.
+
+## Acceleration limits in the shaping objective
+
+The point-mass `v = sqrt(ay/kappa)` assumed the car arrives at and leaves every
+corner at cornering speed, so it priced radius as free and straights as
+worthless. Replacing it with two forward/backward sweeps under the real ax
+limit (`profile_time()` in `tools/open_corners.py`):
+
+| line | clearance | kappa_max | v_max | ideal |
+|---|---|---|---|---|
+| safe, ay 3.5 | 0.325 m | 1.019 | 5.82 m/s | **10.20 s** |
+| opened, point-mass objective | 0.269 m | 0.640 | 4.36 m/s | 10.51 s |
+| **opened, acceleration-limited** | **0.300 m** | 0.642 | 4.26 m/s | **10.28 s** |
+
+Better on every axis than the point-mass version — clearance back up to 0.300 m
+and the ideal lap now a tie with the safe line — while asking for kappa 0.64
+instead of 1.019. Top speed is still down, and raising the Fourier resolution
+does not fix it: L-BFGS-B converges worse as modes rise (123 iterations at 40
+modes, 63 at 90), so those lines come out *slower*, 12.4-12.9 s.
+
 ## Opening the corners: three objectives, and only the third is the right one (Aug 23)
 
 The corridor at Porto's tightest corner is **2.075 m wide** — I had assumed it

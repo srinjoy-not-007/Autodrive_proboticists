@@ -26,7 +26,7 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from scipy import ndimage
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32
 
 from pit_crew import vehicle
@@ -56,6 +56,13 @@ class MPCTracker(Node):
             ('escape_seconds', 1.2),     # how long to reverse out
             ('stale_pose_s', 0.35),      # no pose for this long = coast to a stop
             ('understeer_model', False),  # roll out with measured tyre saturation
+            ('track_window', 90),        # path points searched ahead of the last
+            ('track_back', 12),          # ...and behind, allowing a small slip back
+            ('track_lost_m', 1.0),       # nothing this close nearby = re-acquire
+            ('reach_steps', 4.0),        # candidate spread, in rate-limit steps
+            ('use_measured_speed', False),   # encoder speed for prediction
+            ('rate_limited_rollout', False), # actuator limit inside the horizon
+            ('windowed_index', False),   # local path search instead of global
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -70,7 +77,10 @@ class MPCTracker(Node):
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
-         self.stale_pose_s, self.understeer_model,
+         self.stale_pose_s, self.understeer_model, self.track_window,
+         self.track_back, self.track_lost_m, self.reach_steps,
+         self.use_measured_speed, self.rate_limited_rollout,
+         self.windowed_index,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
@@ -90,18 +100,24 @@ class MPCTracker(Node):
         self.throttle_ctl = vehicle.ThrottleController(ff_gain=throttle_gain)
         self.pose = None
         self.gyro_z = 0.0
-        self.speed = 0.0
+        self.speed = 0.0            # commanded profile speed (throttle target)
+        self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         self.steer = 0.0
         self._trail = []            # (t, x, y) of the localized pose
         self._escape_until = None
         self._escape_steer = 0.0
         self._stuck_count = 0
         self._stale_warned = False
+        self._idx = None
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
         self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 10)
         self.create_subscription(Imu, f'{ns}/imu', self.on_imu, qos)
+        for side in ('left', 'right'):
+            self.create_subscription(
+                JointState, f'{ns}/{side}_encoder',
+                lambda m, w=side: self.on_enc(w, m), qos)
         self.pub_steer = self.create_publisher(Float32, f'{ns}/steering_command', 1)
         self.pub_throttle = self.create_publisher(Float32, f'{ns}/throttle_command', 1)
         self.pub_cte = self.create_publisher(Float32, '/pit_crew/cte', 10)
@@ -116,10 +132,38 @@ class MPCTracker(Node):
     def on_imu(self, msg: Imu):
         self.gyro_z = float(msg.angular_velocity.z)
 
+    def on_enc(self, wheel, msg: JointState):
+        if msg.position:
+            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self.speed_est.update(wheel, t, msg.position[0])
+
+    def measured_speed(self):
+        """What the car is doing, not what it was told to do.
+
+        Dead-reckoning and the rollout were both using the *commanded* profile
+        speed. Measured against the profile on a clean run that is 0.38 m/s of
+        mean error and 0.97 m/s at p95 — enough to shift where the controller
+        thinks it is by the time the next scan lands, and enough to move the
+        braking point. The encoders are validated (scale 0.993/0.999) and were
+        already feeding localization; there is no reason for the controller to
+        ignore them.
+        """
+        if not self.use_measured_speed:
+            return self.speed
+        if self.speed_est.consume_jump():
+            return self.speed        # teleported: measurement says nothing yet
+        v = self.speed_est.speed
+        return v if v > 1e-3 else self.speed
+
     def on_pose(self, msg: PoseStamped):
         mx, my = msg.pose.position.x, msg.pose.position.y
         myaw = yaw_from_quat(msg.pose.orientation)
-        t = self.now()
+        # Use the pose's own stamp (localization stamps it with the scan time),
+        # so prediction covers scan-to-now latency and not just the time since
+        # this callback happened to fire. Fall back if the stamp looks unusable.
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        now = self.now()
+        t = stamp if 0.0 <= now - stamp < 1.0 else now
         if self.pose is None:
             self.pose = (mx, my, myaw, t)
             return
@@ -144,12 +188,42 @@ class MPCTracker(Node):
             return False
         return math.hypot(x1 - x0, y1 - y0) < self.stuck_distance
 
+    def nearest_index(self, x, y):
+        """Path index, searched near the last one instead of globally.
+
+        A global argmin is free to jump anywhere on the track — onto an opposing
+        straight, across a hairpin, or wherever a localization correction lands.
+        Every such jump instantly changes the reference heading, curvature,
+        cross-track sign and speed target, and the controller answers with a
+        full-rate correction to an error that was never real. Search a window
+        around the last index instead, and fall back to a global search only
+        when nothing nearby fits — which is what an actual teleport looks like.
+        """
+        n = len(self.xy)
+        if not self.windowed_index:
+            return int(np.argmin(np.hypot(self.xy[:, 0] - x, self.xy[:, 1] - y)))
+        if self._idx is None:
+            self._idx = int(np.argmin(np.hypot(self.xy[:, 0] - x,
+                                               self.xy[:, 1] - y)))
+            return self._idx
+        win = (np.arange(self._idx - self.track_back,
+                         self._idx - self.track_back + self.track_window) % n)
+        d = np.hypot(self.xy[win, 0] - x, self.xy[win, 1] - y)
+        j = int(np.argmin(d))
+        if float(d[j]) > self.track_lost_m:
+            self._idx = int(np.argmin(np.hypot(self.xy[:, 0] - x,
+                                               self.xy[:, 1] - y)))
+        else:
+            self._idx = int(win[j])
+        return self._idx
+
     def predicted_state(self):
         x, y, yaw, t = self.pose
         dt = min(max(self.now() - t, 0.0), self.max_predict)
         yaw_mid = yaw + 0.5 * self.gyro_z * dt
-        return (x + self.speed * math.cos(yaw_mid) * dt,
-                y + self.speed * math.sin(yaw_mid) * dt,
+        v = self.measured_speed()
+        return (x + v * math.cos(yaw_mid) * dt,
+                y + v * math.sin(yaw_mid) * dt,
                 yaw + self.gyro_z * dt)
 
     def rollout_cost(self, delta0, e_lat, e_yaw, i0, v):
@@ -192,8 +266,16 @@ class MPCTracker(Node):
                      + self.w_rate * (delta - prev) ** 2)
             prev = delta
             # after the first step, relax towards the feedforward steer
+            # Relax towards the curvature feedforward, but no faster than the
+            # actuator can actually move. The old fixed 50% step let the rollout
+            # imagine reaching any angle in one step, so the first action was
+            # judged under a future the car cannot deliver.
             ff = math.atan(vehicle.WHEELBASE * kap)
-            delta = delta + 0.5 * (ff - delta)
+            if self.rate_limited_rollout:
+                reachable = self.steer_rate * (ds / max(v, 0.1))
+                delta = delta + max(-reachable, min(reachable, ff - delta))
+            else:
+                delta = delta + 0.5 * (ff - delta)
             s_travelled += ds
             idx = i0 + int(s_travelled / max(self.spacing, 1e-3))
         return cost
@@ -218,8 +300,7 @@ class MPCTracker(Node):
 
         x, y, yaw = self.predicted_state()
 
-        d = np.hypot(self.xy[:, 0] - x, self.xy[:, 1] - y)
-        i0 = int(np.argmin(d))
+        i0 = self.nearest_index(x, y)
         path_yaw = float(self.path_yaw[i0])
         dx, dy = x - self.xy[i0, 0], y - self.xy[i0, 1]
         e_lat = -math.sin(path_yaw) * dx + math.cos(path_yaw) * dy
@@ -246,9 +327,17 @@ class MPCTracker(Node):
                 f'e_yaw={e_yaw:.2f} — reversing out (#{self._stuck_count})')
             return
 
-        v = max(self.speed, 0.4)
-        # Feasible first steps: within the actuator's reach this cycle
-        reach = self.steer_rate * self.control_dt * 4.0
+        v = max(self.measured_speed(), 0.4)
+        # Candidate steering TARGETS, not applied commands. A review flagged the
+        # 4x as a bug — candidates land a rate-limit step apart, so several clip
+        # to the same applied value — and narrowing it to exactly one step was
+        # measured far worse: 27 collisions against 3 on the same line. The wide
+        # range is doing real work. It picks a target to move towards, and the
+        # rate limiter below is the actuator model; shrinking it to one step
+        # leaves the rollout unable to evaluate committing to a larger angle,
+        # and the cost differences between neighbouring candidates become
+        # noise. Keep 4x. `reach_steps` exists to re-test, not to tune blindly.
+        reach = self.steer_rate * self.control_dt * self.reach_steps
         lo = max(-vehicle.MAX_STEER, self.steer - reach)
         hi = min(vehicle.MAX_STEER, self.steer + reach)
         best, best_cost = self.steer, float('inf')

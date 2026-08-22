@@ -114,6 +114,30 @@ def minimax_curvature(cl, margin, n_modes, beta, penalty, iters):
     return np.clip(alpha_of(res.x), lo, hi), nvec, res
 
 
+def profile_time(k, ds, ay, ax, vmax, passes=2):
+    """Lap time under acceleration limits, not the point-mass fiction.
+
+    `v = sqrt(ay/kappa)` assumes the car is already at cornering speed on entry
+    and back at full speed the instant the corner ends. It therefore prices a
+    wider corner as pure profit and a straight as worth nothing, which is how
+    the first version of this objective bought +64% of corner radius with
+    0.76 m/s of top speed and came out slower overall.
+
+    Two forward/backward sweeps over the same ax limit the velocity profile
+    uses give the corner exits their real cost: a slow apex now has to be
+    accelerated out of, so shaving the apex stops being free.
+    """
+    v = np.minimum(vmax, np.sqrt(ay / np.maximum(k, 1e-3)))
+    for _ in range(passes):
+        for i in range(len(v)):
+            j = (i + 1) % len(v)
+            v[j] = min(v[j], np.sqrt(v[i] ** 2 + 2.0 * ax * ds[i]))
+        for i in range(len(v) - 1, -1, -1):
+            j = (i + 1) % len(v)
+            v[i] = min(v[i], np.sqrt(v[j] ** 2 + 2.0 * ax * ds[i]))
+    return float(np.sum(ds / np.maximum(v, 0.1)))
+
+
 def min_laptime(cl, margin, n_modes, ay, vmax, penalty, iters, kappa_cap):
     """Minimise a point-mass lap time directly, over the same smooth basis.
 
@@ -153,7 +177,6 @@ def min_laptime(cl, margin, n_modes, ay, vmax, penalty, iters, kappa_cap):
         p = c + a[:, None] * nvec
         k = np.abs(curvature(p))
         ds = np.linalg.norm(np.diff(np.vstack([p, p[:1]]), axis=0), axis=1)
-        v = np.minimum(vmax, np.sqrt(ay / np.maximum(k, 1e-3)))
         over = np.maximum(a - hi, 0.0) ** 2 + np.maximum(lo - a, 0.0) ** 2
         # A point mass is happy to take a 0.3 m corner slowly; this car cannot
         # turn tighter than its steering lock, and long before that the front
@@ -161,7 +184,8 @@ def min_laptime(cl, margin, n_modes, ay, vmax, penalty, iters, kappa_cap):
         # 0.10 rad, 0.42 at full lock). Without this the optimiser "wins" by
         # planning corners the car physically cannot follow.
         tight = np.maximum(k - kappa_cap, 0.0) ** 2
-        return float(np.sum(ds / v) + penalty * (over.sum() + tight.sum()))
+        return (profile_time(k, ds, ay, ay, vmax)
+                + penalty * float(over.sum() + tight.sum()))
 
     res = minimize(cost, np.zeros(B.shape[1]), method='L-BFGS-B',
                    options={'maxiter': iters, 'maxfun': iters * 20})
