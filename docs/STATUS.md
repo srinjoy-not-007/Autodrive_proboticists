@@ -523,6 +523,44 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## Lateral localization error is not tuning-limited (Aug 23)
+
+Lateral error is what sets how much clearance a line must keep, so it sets how
+close to the grip cliff we can plan. Three live configurations, measured against
+IPS on the same track at the shipping profile:
+
+| config | total median | total p95 | **lateral p95** |
+|---|---|---|---|
+| 800 particles, sigma_hit 0.06, 60 beams (shipping) | 0.174 m | 0.390 m | **0.168 m** |
+| 2000 particles | 0.178 m | 0.389 m | 0.170 m |
+| sigma_hit 0.03, 90 beams | 0.152 m | 0.391 m | **0.185 m** |
+
+**Lateral p95 is 0.17 +- 0.02 whatever we change.** Particle count does nothing —
+the filter is not particle-starved. Sharpening the likelihood field and adding
+beams improves the *median* (0.174 -> 0.152) and makes the *tail worse*, and the
+tail is the number clearance has to cover. Shipping keeps the best lateral p95.
+
+Two things worth extracting from this:
+
+**The error that grows with speed is lag, not drift.** Against the Aug 7
+baseline at a much slower profile, lateral error is unchanged (p95 0.168 vs
+0.171) while along-track error grew (p95 0.246 -> 0.377). Going faster does not
+push us closer to the wall; it makes us less sure how far along the lap we are.
+That is a much more comfortable failure mode, and it is why the 0.325 m line
+stays clean at ay 3.5.
+
+**The offline PF harness cannot be used for this.** `offline_pf.py` reports 192
+relocalizations and p95 of 11 m on a track where the live filter does 0.092 m
+median with zero relocalizations, with or without the `--centerline` argument it
+shares with the live node. It does not reproduce live behaviour, so every number
+above had to come from driving. Fixing that harness is its own task and would
+make this kind of sweep minutes instead of hours.
+
+So the clearance budget is a structural property of a 10 Hz sensor on a 0.025 m
+map, not something waiting to be tuned out. Reducing it means changing the
+information available — more sensor rate we do not have, or a second odometry
+source — not the filter's parameters.
+
 ## Recon teleports were corrupting the centerline (Aug 23) — latent finals bug
 
 Chasing the extractor blocker found something that matters more than the
