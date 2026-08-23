@@ -64,6 +64,11 @@ class MPCTracker(Node):
             ('rate_limited_rollout', False), # actuator limit inside the horizon
             ('windowed_index', False),   # local path search instead of global
             ('ay_limit', 4.5),           # m/s2 the tyres deliver; 0 disables
+            ('grip_watchdog', False),    # shed speed when the tyres let go
+            ('grip_ratio_min', 0.60),    # achieved/asked curvature below this = sliding
+            ('grip_cut', 0.75),          # speed multiplier applied per bad sample
+            ('grip_recover', 0.04),      # ...and clawed back per good one
+            ('grip_floor', 0.45),        # never shed more speed than this
             ('w_lat', 12.0),             # weight on lateral offset
             ('w_yaw', 3.0),              # weight on heading error
             ('w_steer', 0.5),            # weight on steering magnitude
@@ -81,7 +86,9 @@ class MPCTracker(Node):
          self.stale_pose_s, self.understeer_model, self.track_window,
          self.track_back, self.track_lost_m, self.reach_steps,
          self.use_measured_speed, self.rate_limited_rollout,
-         self.windowed_index, self.ay_limit,
+         self.windowed_index, self.ay_limit, self.grip_watchdog,
+         self.grip_ratio_min, self.grip_cut, self.grip_recover,
+         self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
          self.brake_horizon, throttle_gain) = [x.value for x in p]
@@ -110,6 +117,9 @@ class MPCTracker(Node):
         self._stuck_count = 0
         self._stale_warned = False
         self._idx = None
+        self.grip_scale = 1.0
+        self._grip_bad = 0
+        self._grip_events = 0
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
@@ -132,6 +142,45 @@ class MPCTracker(Node):
 
     def on_imu(self, msg: Imu):
         self.gyro_z = float(msg.angular_velocity.z)
+        self.update_grip()
+
+    def update_grip(self):
+        """Catch the tyres letting go, and back off before the wall arrives.
+
+        `ay_limit` is open loop: it caps what the controller may *demand*
+        against a constant. This is the closed-loop half — what the car is
+        actually delivering. Measured on the open floor, the front tyres hold
+        ~0.9 of the curvature asked of them right up to 9.9 m/s2 and then
+        collapse to 0.24-0.35 within one 0.5 m/s step. Abrupt, but not
+        invisible: the IMU sees the yaw rate stop following the steering.
+
+        Evaluated per IMU sample rather than per control cycle, because the IMU
+        is the only new information here and it arrives at ~10 Hz. Two
+        consecutive bad samples is ~0.2 s — late, but a slide takes longer than
+        that to reach a wall, and it is the earliest this platform can know.
+        """
+        if not self.grip_watchdog:
+            return
+        v = self.speed_est.speed
+        asked = abs(math.tan(self.steer)) / vehicle.WHEELBASE
+        # Only meaningful when actually cornering at speed: at low speed or near
+        # zero steer the ratio is noise divided by noise.
+        if v < 1.5 or asked < 0.25:
+            self._grip_bad = 0
+            self.grip_scale = min(1.0, self.grip_scale + 5.0 * self.grip_recover)
+            return
+        achieved = abs(self.gyro_z) / max(v, 0.1)
+        ratio = achieved / asked
+        if ratio < self.grip_ratio_min:
+            self._grip_bad += 1
+            if self._grip_bad >= 2:
+                if self.grip_scale > 0.99:
+                    self._grip_events += 1
+                self.grip_scale = max(self.grip_floor,
+                                      self.grip_scale * self.grip_cut)
+        else:
+            self._grip_bad = 0
+            self.grip_scale = min(1.0, self.grip_scale + self.grip_recover)
 
     def on_enc(self, wheel, msg: JointState):
         if msg.position:
@@ -384,7 +433,8 @@ class MPCTracker(Node):
 
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
         self.pub_throttle.publish(
-            Float32(data=float(self.throttle_ctl.command(self.speed))))
+            Float32(data=float(self.throttle_ctl.command(
+                self.speed * self.grip_scale))))
         self.pub_cte.publish(Float32(data=float(e_lat)))
 
     def publish(self, steer, throttle):

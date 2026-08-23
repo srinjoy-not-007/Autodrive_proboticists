@@ -523,6 +523,48 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## The grip watchdog works and is not worth shipping (Aug 23)
+
+`ay_limit` is open loop — it caps what the controller may *demand* against a
+constant. The closed-loop half is to watch what the tyres are actually
+delivering: the skidpad showed they hold ~0.9 of the curvature asked of them up
+to 9.9 m/s2 and then collapse to 0.24-0.35 within one 0.5 m/s step. Abrupt, but
+the IMU can see it — the yaw rate stops following the steering.
+
+`mpc.py: update_grip()` evaluates achieved/asked curvature per IMU sample (the
+only new information, ~10 Hz), and on two consecutive bad samples scales the
+throttle target down, clawing it back as grip returns.
+
+**It does what it was designed to do.** At ay 5.0 collisions fell from **31 to
+3**; at ay 4.0 from **2 to 0**. The detector is real.
+
+**And it loses on race time in every configuration tested:**
+
+| config | collisions | median | 10-lap race |
+|---|---|---|---|
+| **ay 3.5, no watchdog (shipping)** | **0** | **10.12 s** | **101.2 s** |
+| ay 3.5 + watchdog | 1 | 10.79 s | 112.1 s |
+| ay 4.0 + watchdog | 0 | 10.29 s | 102.8 s |
+| ay 5.0 + watchdog | 3 | 10.01 s | 111.2 s |
+
+It is not even free insurance: at the shipping cap it triggers on a clean
+configuration, sheds speed that did not need shedding, and cost a collision it
+was supposed to prevent. Default off.
+
+**The row that matters is the median column: 10.0 to 10.8 s everywhere.** Plan
+ay 3.5, 4.0 or 5.0, with a safety net or without, and the car laps at the same
+speed. More aggressive plans do not produce more speed — they get clipped,
+either by hitting a wall or by the watchdog clawing the speed back. Detecting
+breakaway 0.2 s late is too late to convert into lap time, because at 10 Hz that
+is the earliest this platform can know.
+
+**That is the ceiling, demonstrated four ways now:** raising ay alone (31
+collisions), opening the corners (5x fewer collisions, no net time), the tyre's
+real 9.9 m/s2 (unusable), and now a working breakaway detector (no net time). We
+are at the limit of this line and this error budget, and the limit is set by
+10 Hz sensing against a grip cliff — not by the planner, the controller, or the
+tyre.
+
 ## Lateral localization error is not tuning-limited (Aug 23)
 
 Lateral error is what sets how much clearance a line must keep, so it sets how
