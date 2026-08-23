@@ -523,6 +523,52 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## The tyre really does make 9.9 m/s2 — and we still cannot use it (Aug 23)
+
+`skidpad.py` was written to measure grip directly and had never run anywhere
+usable: on Porto the slide widens the circle until the car grinds the walls.
+**The `-explore` image turns out to have no track at all — only `Floor` is
+active, every track object disabled.** That is the open space it always needed.
+(It also had a latent bug: it called `rclpy.shutdown()` from inside its own timer
+callback, tearing the context down under the spin that was running it and
+burying the results in a traceback. Fixed.)
+
+Steady state, constant steering, speed ramped:
+
+| steer | ratio through the sweep | peak ay | breakaway |
+|---|---|---|---|
+| 0.10 | 0.88-0.94 | **6.24 m/s2** | never reached |
+| 0.20 | 0.86-0.92 | **9.87 m/s2** | abrupt, ratio -> 0.35 |
+| 0.30 | 0.84-0.92 | **8.37 m/s2** | abrupt, ratio -> 0.34 |
+
+**This overturns what this document has said since the morning.** The claim was
+that sustained grip is the tyre's 4.9 m/s2 asymptote and the 9.81 peak is
+unreachable. Wrong: the car holds ~0.9 of the curvature it asks for all the way
+to **9.87 m/s2**, essentially the asset's mu = 1.0. The earlier figure came from
+race logs, where — as the steady-state filter showed — only **2% of samples are
+steady** and none in the steering bins that matter. We had been measuring a car
+mid-correction and calling it a tyre curve.
+
+**And then it did not help at all.** Planned ay 5.0 with the controller's
+`ay_limit` raised to 7.0: **31 collisions** over 25 laps. Best lap 9.10 s, the
+quickest of the project, and a ten-lap race of **228 s** against 101.2.
+
+Both numbers are real and the reconciliation is the useful part. Breakaway is
+**abrupt** — ratio 0.9 to 0.35 within one 0.5 m/s speed step, with no
+intermediate warning. On an open floor exceeding the limit costs nothing and you
+drive out of it. In a 1.3 m corridor with 0.325 m of clearance and ~0.17 m of
+lateral localization error, it costs a collision, and a collision costs +10 s.
+
+**So the operative limit is not the tyre.** It is how close to an abrupt cliff
+you can plan while holding enough margin to survive being wrong about where you
+are. Measured, that is ay 3.5 — about 40% of the tyre's capability, and the
+shipping configuration stays exactly where it is.
+
+This is the same shape as every other result today: a true measurement, applied
+in the wrong place, makes things worse. The tyre limit belongs in `ay_limit` as
+an upper bound on what the controller may *demand*, not in the plan as a target
+to aim at.
+
 ## The LiDAR mount offset: right, worth 1.6 s, and not shippable yet (Aug 23)
 
 An MPC review flagged that the 0.2733 m LiDAR-to-rear-axle offset appeared to be

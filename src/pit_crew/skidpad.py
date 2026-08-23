@@ -66,6 +66,7 @@ class Skidpad(Node):
         self.t_phase = None
         self.samples = []
         self.results = []
+        self.done = False        # set from the timer; main() owns the shutdown
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
@@ -116,7 +117,11 @@ class Skidpad(Node):
                 self.report()
                 self.pub_throttle.publish(Float32(data=0.0))
                 self.pub_steer.publish(Float32(data=0.0))
-                rclpy.shutdown()
+                # Calling rclpy.shutdown() from inside a timer callback tears
+                # the context down underneath the spin that is running it, and
+                # rclpy raises "the given context is not valid" over the top of
+                # the results. Hand the decision back to main() instead.
+                self.done = True
 
     def record(self):
         if len(self.samples) < 10:
@@ -158,7 +163,8 @@ def main():
     rclpy.init()
     node = Skidpad()
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not node.done:
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:
