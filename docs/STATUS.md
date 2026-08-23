@@ -14,22 +14,22 @@ so those best-lap figures are directly comparable to ours. The finals figures
 are on each event's own unseen track and are not comparable. Podium teams post
 **zero collisions**, so cleanliness is table stakes, not an edge.
 
-Our best clean lap is **11.32 s** — about **1.7x off the winning pace** (it was
+Our best clean lap is **9.81 s** — about **1.50x off the winning pace** (it was
 32.43 s when this section was first written; see "Speed: 32.43 s -> 11.21 s").
-The remaining gap is not the tracker: we hold our own plan to 2.4%, and every
-parameter we own has been swept (see "Closing on the winners"). It is the plan.
+The old conclusion that the remaining gap was simply the plan is superseded by
+the Aug 23 winner-video and localization isolation work below.
 
-A 6.53 s lap on a 28.6 m loop is 4.4 m/s average, which over our tightest
-corner (R = 0.98 m) implies lateral accelerations around 9-20 m/s^2. Our car
-visibly slides at 5-7, and an ay cap of 4.0 already produces 23 collisions. So
-either their line opens those corners using width we are not finding, or the
-published figure is not the same track/vehicle/sim we are racing. **Confirming
-which is step 1 of the current plan** — see "NEXT SESSION — START HERE".
+The benchmark has since been verified asset-by-asset: the 2025 and 2026 Porto
+builds have the same track mesh, vehicle and physics. Onboard winner telemetry
+also directly shows roughly 8.6-9.5 m/s2 of lateral acceleration and a path
+close to the optimized TUM geometry. The gap is real; the previous inference
+that this grip was unusable came from our controller's behaviour, not from the
+winning car's demonstrated envelope.
 
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 23)
+## NEXT SESSION — START HERE (Aug 23, stopped for the day)
 
 **Shipping: safe centerline + MPC, ay 3.5 / ax 6.5 / brake 4.0 / jerk 20, with
 `ay_limit` 4.5. Porto 101.2 s race, best 9.81 s; ICRA 17.95 s/lap; zero
@@ -41,29 +41,46 @@ stops producing a drivable line or if a shipping artefact moves a byte. It
 exists because a change validated on Porto shipped having broken ICRA
 completely, and nothing said so.
 
-**The recommendation is to stop optimising lap time.** The ceiling has been
-demonstrated four independent ways (raising ay, opening the corners, measuring
-the tyre's real 9.9 m/s2, and a working breakaway detector) and the median lap
-sits at 10.0-10.8 s through all of them. It is set by **10 Hz sensing against an
-abrupt grip cliff**, not by the planner, the controller or the tyre. Remaining
-parameter sweeps are worth tenths.
+**Today's retained result is evidence, not a new shipping default.** A
+controlled replay of the same 176 s Porto mapping bag isolated the localization
+variables:
 
-Spend the time to Sep 12 on submission robustness instead:
+| map / sensor model | motion noise | total median / p95 | lateral median / p95 |
+|---|---:|---:|---:|
+| original map, zero offset | 0.035 m | 0.144 / 0.370 m | 0.027 / 0.155 m |
+| corrected map, 0.1933 m offset | 0.18 m | 0.041 / 0.103 m | 0.016 / 0.041 m |
+| corrected map, 0.1933 m offset | 0.035 m | **0.046 / 0.084 m** | **0.015 / 0.039 m** |
 
-1. **Run `new_track_drill.sh` on a genuinely fresh track** — a `*-compete` tag
-   nobody has touched — end to end, and race what it produces. This is the only
-   thing that exercises the finals path, and the drill was found on Aug 23 to
-   have been bypassing the validated pipeline entirely.
-2. **Cold-start the built submission image** and confirm 10 clean laps from it,
-   not from the dev stack. The image had two defects that would have scored zero
-   and both were found by looking, not by racing.
-3. **Re-verify after any change** with `check_pipeline.sh` plus one Porto and
-   one ICRA run.
+The LiDAR mount/map consistency is the dominant improvement. Merely reducing
+particle motion noise on the old map is a regression. A live run of the combined
+candidate completed **17 laps, 0 collisions**, best 9.89 s, and measured lateral
+p95 0.047 m; it did not beat the shipping 9.81 s. High-speed and optimized-line
+attempts still collided, so none of those controller/profile experiments were
+retained.
 
-Open and *not* recommended without a reason: the LiDAR mount correction (worth
-1.6 s on Porto, blocked on centerline extraction), teleport-robust centerline
-tracing (attempted and reverted twice), and the grip watchdog (works, loses on
-race time).
+**TODO — do not resume with another blind ay sweep:**
+
+1. Make corrected-vs-uncorrected map selection carry its matching
+   `lidar_offset` into runtime; the drill currently promotes map files but loses
+   which sensor origin generated them.
+2. Validate the corrected-map candidate on ICRA and then on one untouched track.
+   Do not change defaults until both are clean.
+3. Step speed up progressively (ay 4, 5, 6), one variable at a time, using the
+   corrected localization. Jumping directly to the reconstructed winner profile
+   caused repeated collisions and MCL resets.
+4. Replace or substantially improve the current candidate-grid kinematic MPC
+   before attempting ay 8-9. Winner telemetry proves that envelope exists, but
+   the present tracker cannot hold the optimized path there.
+5. After any candidate improvement: 20-30 Porto laps, an ICRA run,
+   `check_pipeline.sh`, and a cold-started submission-image test. Keep the
+   **9.81 s / zero-collision** artefact as the fallback throughout.
+
+Public-code audit: VAUL's winning integration is not published; its public
+competition repository contains an entrypoint placeholder/wall follower. The
+public ForzaETH repository contains no runnable winning stack, and the public
+RL-controller repository advertises a trained policy but does not contain the
+model artefact (and consumes restricted scoring topics). There is therefore no
+honest winner-stack cross-drive available today.
 
 ## Steps only the human can do
 
@@ -109,7 +126,8 @@ record a recon lap → build_map_from_bag.py → extract_centerline.py
 | *(historical: Porto 22 laps best 11.32 s, ICRA 20.9 s/lap, before Aug 23)* | |
 | Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
 | Localization, offline on an unseen bag | median 0.093 m, p95 0.299 m |
-| Localization, **live** | median 0.092 m, p95 0.298 m — but the number that matters is **lateral p95 0.17 m**, and it does not respond to tuning |
+| Localization, **shipping live** | median 0.092 m, p95 0.298 m; lateral p95 0.17 m |
+| Localization, **corrected-map candidate** | live 17 clean laps, lateral p95 **0.047 m**; offline total p95 **0.084 m**, lateral p95 **0.039 m** |
 | Tyre, steady state on open floor | holds ~0.9 of asked curvature to **9.9 m/s2**, then collapses abruptly |
 | Tyre, usable on track | **ay 3.5** — set by the grip cliff against 0.17 m of position uncertainty |
 | Pure pursuit tracking error | median 0.12 m, p95 0.36 m |

@@ -126,6 +126,22 @@ angle in radians).
 
 ## Where things stand
 
+**Aug 23 correction — this overrides the older ceiling claims below.** Official
+winner onboard telemetry demonstrates roughly **8.6-9.5 m/s2** lateral
+acceleration on the same Porto vehicle/physics, and its sampled path is close to
+the optimized TUM line. Our inability to use that envelope is a stack limitation,
+not proof that the envelope does not exist.
+
+A controlled replay also disproved the claim that lateral localization error is
+structurally stuck near 0.17 m. Keeping the LiDAR's physical 0.1933 m forward
+offset consistent in both map construction and localization reduced offline
+lateral p95 to **0.041 m** at the original process noise, or **0.039 m** with
+0.035 m noise. Low noise on the old zero-offset map regressed total p95 to
+0.370 m. The combined candidate ran 17 live laps without collision (lateral p95
+0.047 m, best 9.89 s), but is **not shipping yet** because it has not passed
+ICRA or beaten 9.81 s. See the first section of `docs/STATUS.md` for the exact
+TODO and validation gate.
+
 Shipping: safe centerline + MPC, **ay 3.5** / **ax 6.5** / brake 4.0 / jerk 20,
 with the controller's **`ay_limit`** capping steering by the grip that exists.
 Ten-lap race time 115.0 -> **101.2 s**.
@@ -212,10 +228,11 @@ physics settings and an identical vehicle, checked asset-by-asset with
   (`grip_watchdog`) cuts collisions 31 -> 3 at ay 5.0 and 2 -> 0 at ay 4.0, and
   costs more race time than it saves in *every* configuration — at the shipping
   cap it fires on a clean run and even caused a collision. Default off.
-- **Lateral localization error is not tuning-limited.** p95 is 0.17 +- 0.02
-  whatever you change; particle count does nothing, and sharpening the
-  likelihood field improves the median while making the tail worse. The error
-  that grows with speed is along-track *lag*, not sideways drift.
+- **SUPERSEDED: lateral localization error is not fixed at 0.17 m.** Particle
+  count and likelihood sharpening did not help, but those sweeps retained an
+  inconsistent zero-offset map. Correcting the LiDAR origin in both the map and
+  runtime model cuts lateral p95 to 0.039-0.047 m. Do not lower motion noise on
+  the old map; that combination regresses badly.
 - **`offline_pf.py` does not reproduce live behaviour** — 192 relocalizations
   where the live filter has zero. Do not tune against it; drive instead.
 - **Recon trajectories contain teleports** (3 in the ICRA recon, 58 in
