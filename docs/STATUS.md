@@ -29,6 +29,42 @@ which is step 1 of the current plan** — see "NEXT SESSION — START HERE".
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
+## NEXT SESSION — START HERE (Aug 23)
+
+**Shipping: safe centerline + MPC, ay 3.5 / ax 6.5 / brake 4.0 / jerk 20, with
+`ay_limit` 4.5. Porto 101.2 s race, best 9.81 s; ICRA 17.95 s/lap; zero
+collisions on both.** Down from 115.0 s at the start of Aug 23.
+
+**Before any commit that touches `tools/` or `src/tools/`, run
+`./scripts/check_pipeline.sh`.** It regenerates every track and fails if one
+stops producing a drivable line or if a shipping artefact moves a byte. It
+exists because a change validated on Porto shipped having broken ICRA
+completely, and nothing said so.
+
+**The recommendation is to stop optimising lap time.** The ceiling has been
+demonstrated four independent ways (raising ay, opening the corners, measuring
+the tyre's real 9.9 m/s2, and a working breakaway detector) and the median lap
+sits at 10.0-10.8 s through all of them. It is set by **10 Hz sensing against an
+abrupt grip cliff**, not by the planner, the controller or the tyre. Remaining
+parameter sweeps are worth tenths.
+
+Spend the time to Sep 12 on submission robustness instead:
+
+1. **Run `new_track_drill.sh` on a genuinely fresh track** — a `*-compete` tag
+   nobody has touched — end to end, and race what it produces. This is the only
+   thing that exercises the finals path, and the drill was found on Aug 23 to
+   have been bypassing the validated pipeline entirely.
+2. **Cold-start the built submission image** and confirm 10 clean laps from it,
+   not from the dev stack. The image had two defects that would have scored zero
+   and both were found by looking, not by racing.
+3. **Re-verify after any change** with `check_pipeline.sh` plus one Porto and
+   one ICRA run.
+
+Open and *not* recommended without a reason: the LiDAR mount correction (worth
+1.6 s on Porto, blocked on centerline extraction), teleport-robust centerline
+tracing (attempted and reverted twice), and the grip watchdog (works, loses on
+race time).
+
 ## Steps only the human can do
 
 - Register (done by user), push the image to DockerHub, and submit the Phase 1
@@ -68,11 +104,14 @@ record a recon lap → build_map_from_bag.py → extract_centerline.py
 
 | What | Result |
 |---|---|
-| **Porto, MPC, scale 1.0** | **22 laps, 0 collisions**, best 11.32 s ← shipping |
-| **ICRA (unseen), MPC, scale 1.0** | **13 laps, 0 collisions**, 20.9 s/lap |
+| **Porto, shipping** | **27 laps, 0 collisions**, best **9.81 s**, median 10.12 s, race **101.2 s** |
+| **ICRA (never tuned on), shipping** | **16 laps, 0 collisions**, median **17.95 s/lap** |
+| *(historical: Porto 22 laps best 11.32 s, ICRA 20.9 s/lap, before Aug 23)* | |
 | Follow-the-Gap alone | **11 laps, 0 collisions**, best 33.43 s — clears the qualification bar |
 | Localization, offline on an unseen bag | median 0.093 m, p95 0.299 m |
-| Localization, **live** | median **0.092 m**, p95 0.298 m, within 10 cm 55% |
+| Localization, **live** | median 0.092 m, p95 0.298 m — but the number that matters is **lateral p95 0.17 m**, and it does not respond to tuning |
+| Tyre, steady state on open floor | holds ~0.9 of asked curvature to **9.9 m/s2**, then collapses abruptly |
+| Tyre, usable on track | **ay 3.5** — set by the grip cliff against 0.17 m of position uncertainty |
 | Pure pursuit tracking error | median 0.12 m, p95 0.36 m |
 | Pure pursuit lap time | 20.7 s (but not yet collision-free) |
 | Optimized raceline | 27.0 m, ideal lap ~10.4 s |
@@ -339,18 +378,21 @@ expected payoff:
 3. **MPC** over the raceline, which handles the actuator rate limit
    (3.2 rad/s) explicitly — the likely reason aggressive steering fails.
 
-## Open
+## Open — HISTORICAL (Aug 8), all of it since closed
 
-- **Build the winners' stack and benchmark against it directly** — see NEXT
-  below. This is the one thing standing between us and the 6.53 s target.
-- The arbiter needs rebuilding or dropping (#11).
+- ~~Build the winners' stack and benchmark against it~~ — done Aug 22; there is
+  no published stack to run, and what is public is documented below.
+- The arbiter needs rebuilding or dropping (#11). Still true, still not shipped.
 
 Closed since this section was written: `speed_scale` is 1.0 and clean on both
 tracks, and the optimized line was driven and **rejected on measurement** (57
 collisions, 6 zones) — it is not "left on the table", it does not work here.
 
 
-## NEXT SESSION — START HERE
+## HISTORICAL PLAN (Aug 8) — superseded, kept for the reasoning
+
+The current starting point is at the top of this file. This section is what was
+planned on Aug 8 and every step of it has since been carried out.
 
 **Implement the winners' stack and compare it against ours on the same track,
 same sim, same vehicle.** Decided Aug 8 after mapping our own speed frontier and

@@ -19,6 +19,8 @@ Team workspace for the [6th RoboRacer Sim Racing League @ IROS 2026](https://aut
 scripts/     helper scripts (pull images, run sim/devkit, race, smoke test)
 src/         our ROS 2 package (mounted into the devkit container at src/pit_crew)
 tools/       offline pipeline run on the host via .venv (maps → lines → analysis)
+             incl. grip_curve.py, sweep_lines.py, open_corners.py,
+             compare_sim_builds.py
 data/        maps and racelines (tracked); bags, logs and screenshots (git-ignored)
 docs/        PLAN.md — strategy · STATUS.md — every measured result, and what's next
 submission/  Dockerfile + entrypoint for the competition image
@@ -29,6 +31,7 @@ upstream/    clone of the official competition repo (git-ignored)
 ## Quick start
 
 ```bash
+./scripts/check_pipeline.sh           # regenerate every track, fail on any drift
 ./scripts/pull_images.sh              # pull 2026-iros-practice sim + devkit images
 ./scripts/run_sim.sh                  # simulator with GUI (or: run_sim.sh headless)
 ./scripts/run_devkit.sh headless      # devkit bridge (or: graphics | no-arg for shell)
@@ -43,7 +46,8 @@ Inside the sim GUI: click **Connection** to link to the bridge (WebSocket :4567)
 - LiDAR: 1080 pts, 270° (±135°), 0.06–10 m, 40 Hz — `/autodrive/roboracer_1/lidar`
 - IMU + 2 rear wheel encoders (16 PPR); camera 48.8° FOV
 - Commands: `.../throttle_command`, `.../steering_command` (`std_msgs/Float32`, both [-1, 1])
-- Steering: ±0.5236 rad, rate-limited 3.2 rad/s; top speed 22.88 m/s; wheelbase 0.324 m
+- Steering: ±0.5236 rad, rate-limited 3.2 rad/s; top speed 22.88 m/s; wheelbase
+  0.324 m per the datasheet (the simulator scene measures 0.3312 m — see STATUS)
 - **Runtime-restricted topics (do not use while racing): IPS pose, odom, collision count, lap info, TF from sim**
 
 ## Running the stack
@@ -54,25 +58,43 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-Shipping config = safe centerline + MPC at full profile speed. Measured: Porto
-22 laps / 0 collisions / best **11.32 s**; ICRA, a track it was never tuned on,
-13 laps / 0 collisions / 20.9 s per lap. `run_race_stack.sh` also exists but
-starts the arbiter, which measurably makes things *worse* — see `docs/STATUS.md`.
+Shipping config = safe centerline + MPC, ay 3.5 / ax 6.5 / brake 4.0, with the
+controller capping its own steering by the lateral grip that exists at the
+current speed. Measured:
 
-New track, end to end (this is the finals drill):
+| Track | Result |
+|---|---|
+| Porto (practice) | **27 laps, 0 collisions**, best **9.81 s**, 10-lap race **101.2 s** |
+| ICRA — never tuned on | **16 laps, 0 collisions**, median **17.95 s/lap** |
+| Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s — clears qualification |
+
+The published winning lap on this same Porto track is 6.53 s (65.41 s race).
+The remaining gap is not the planner or the controller: the tyre holds ~0.9 of
+the curvature asked of it up to 9.9 m/s², then breaks away within one 0.5 m/s
+step, and we know our position to ~0.17 m. Plan closer to that cliff and the
+speed is clipped — by a wall, or by backing off. `docs/STATUS.md` has the four
+independent demonstrations.
+
+`run_race_stack.sh` also exists but starts the arbiter, which measurably makes
+things *worse* — see `docs/STATUS.md`.
+
+New track, end to end (this is the finals drill) — one command, ~271 s measured:
 
 ```bash
-./scripts/record_mapping_run.sh                       # drive + record a clean lap
-./scripts/stop_run.sh
-docker exec autodrive_roboracer_api /bin/bash -c \
-  "python3 /home/autodrive_devkit/src/pit_crew/tools/build_map_from_bag.py \
-   /home/data/bags/<BAG> /home/data/maps/<NAME>"
-.venv/bin/python tools/extract_centerline.py data/maps/<NAME> data/racelines/<NAME>_centerline
-.venv/bin/python tools/optimize_raceline.py data/racelines/<NAME>_centerline.csv          # fast line
-.venv/bin/python tools/optimize_raceline.py data/racelines/<NAME>_centerline.csv \
-    --centerline-only --out data/racelines/<NAME>_safe                                    # safe line
-.venv/bin/python tools/footprint_analysis.py data/maps/<NAME>   # check corner clearance!
+./scripts/new_track_drill.sh <name> <sim_tag> <record_seconds>
+CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 <name> safe        # then race it
 ```
+
+It drives a blind recon lap with Follow-the-Gap, builds the map **both ways**
+(with and without the LiDAR mount correction), and runs `make_track_lines.py` on
+each — which picks the centerline method by measured clearance, rejects any line
+that reverses direction or turns tighter than the steering lock, applies the
+validated speed profile, and keeps whichever map produced the faster drivable
+line. If neither does, it aborts loudly rather than shipping something ungated.
+
+Do not call `extract_centerline.py` / `optimize_raceline.py` directly for a race
+line: their defaults skip every one of those checks. That bypass was in this
+drill until Aug 23 and would have produced a slower, ungated line at the finals.
 
 ## Submission
 

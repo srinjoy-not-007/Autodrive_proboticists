@@ -19,8 +19,13 @@ been measured.
    collisions; that was the clue that found the real bug.
 4. **Do not modify the `autodrive_roboracer` devkit package or the simulator.**
    Competition rules. Our code is a separate ROS 2 package, `pit_crew`.
-5. `docs/STATUS.md` ends with a **NEXT SESSION — START HERE** section. Read it
-   first; update it before you stop.
+5. `docs/STATUS.md` **begins** with a **NEXT SESSION — START HERE** section
+   (the rest of the file is append-only history, oldest first). Read it first;
+   update it before you stop.
+6. **Run `./scripts/check_pipeline.sh` before any commit that touches `tools/`
+   or `src/tools/`.** It regenerates every track and fails if one stops
+   producing a drivable line, or if a shipping line moves a byte. A change
+   validated on Porto once shipped having broken ICRA completely.
 
 ## Environment
 
@@ -45,6 +50,18 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 .venv/bin/python tools/validate_laps.py             # lap times and collisions from a run log
 .venv/bin/python tools/footprint_analysis.py data/maps/<name> data/racelines/<line>.csv
 .venv/bin/python tools/compare_sim_builds.py <tag_a> <tag_b>   # diff two sim images' physics/track
+./scripts/check_pipeline.sh                         # regenerate all tracks, fail on any drift
+.venv/bin/python tools/grip_curve.py <race log>     # achieved vs asked curvature from any run
+.venv/bin/python tools/sweep_lines.py <track>       # corridor x grip grid, ranked
+.venv/bin/python tools/open_corners.py <centerline> --out X   # maximise the smallest radius
+```
+
+**Measuring grip properly needs the `-explore` image** — it has no track active
+at all, only `Floor`, which is the open space `skidpad.py` was written for:
+
+```bash
+TAG=2026-iros-explore ./scripts/sim_restart_connect.sh
+ros2 run pit_crew skidpad --ros-args -p steer:=0.20 -p v_max:=4.5
 ```
 
 `sim_restart_connect.sh` **restarts the devkit container, which wipes the colcon
@@ -119,9 +136,19 @@ Ten-lap race time 115.0 -> **101.2 s**.
 | ICRA (never tuned on) | 16 laps, 0 collisions, **17.95 s/lap** |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s |
 
-Published winning lap on the same Porto track is **6.53 s**. We track our own
-plan to within 2.4%, so the tracker is no longer the bottleneck — the gap is in
-the planner. `docs/STATUS.md` has the full lever sweep.
+Published winning lap on the same Porto track is **6.53 s** (65.41 s race).
+We track our own plan to within ~5%, so the tracker is not the bottleneck —
+**and neither is the planner, the tyre, or the grip cap.**
+
+**The ceiling has been demonstrated four independent ways** and the median lap
+sits at 10.0-10.8 s through all of them: raising ay alone (31 collisions),
+opening the corners (5x fewer collisions, no net time), the tyre's real
+9.9 m/s2 (unusable on track), and a working breakaway detector (no net time).
+It is set by **10 Hz sensing against an abrupt grip cliff**: the tyres hold
+~0.9 of asked curvature to 9.9 m/s2 then collapse within one 0.5 m/s step, and
+we know our position to 0.17 m laterally. Plan more aggressively and the speed
+is clipped — by a wall, or by the safety net. Further parameter sweeps are
+worth tenths.
 
 That 6.53 s was **verified comparable** (Aug 22): the build it was set on
 (`2025-cdc-tf-practice`) and ours have a byte-identical Porto mesh, identical
@@ -175,5 +202,22 @@ physics settings and an identical vehicle, checked asset-by-asset with
   harder centering makes the line jagged and clearance *worse*.
 - `--kappa-bound` in `optimize_raceline.py` does nothing on Porto; the corridor
   binds first.
-- `skidpad.py`'s Porto numbers are contaminated (the car grinds the walls once
-  it slides) — do not cite them.
+- `skidpad.py`'s *Porto* numbers are contaminated — but the tool works fine in
+  the **`-explore`** world, which has no track at all. Measured there: the tyre
+  holds ~0.9 of asked curvature to **9.9 m/s2**, then collapses to 0.24-0.35
+  within one 0.5 m/s step. **That grip is real and still unusable on track** —
+  planning ay 5.0 gives 31 collisions, because breakaway is abrupt and we know
+  our position to only 0.17 m.
+- **The grip watchdog works and loses.** Closed-loop breakaway detection
+  (`grip_watchdog`) cuts collisions 31 -> 3 at ay 5.0 and 2 -> 0 at ay 4.0, and
+  costs more race time than it saves in *every* configuration — at the shipping
+  cap it fires on a clean run and even caused a collision. Default off.
+- **Lateral localization error is not tuning-limited.** p95 is 0.17 +- 0.02
+  whatever you change; particle count does nothing, and sharpening the
+  likelihood field improves the median while making the tail worse. The error
+  that grows with speed is along-track *lag*, not sideways drift.
+- **`offline_pf.py` does not reproduce live behaviour** — 192 relocalizations
+  where the live filter has zero. Do not tune against it; drive instead.
+- **Recon trajectories contain teleports** (3 in the ICRA recon, 58 in
+  `maplap_short`) because a recon run collides. Two attempts to make centerline
+  tracing robust to them were reverted for breaking the shipping ICRA line.
