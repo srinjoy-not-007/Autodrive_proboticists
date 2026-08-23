@@ -561,7 +561,7 @@ map, not something waiting to be tuned out. Reducing it means changing the
 information available — more sensor rate we do not have, or a second odometry
 source — not the filter's parameters.
 
-## Recon teleports were corrupting the centerline (Aug 23) — latent finals bug
+## Recon teleports and the centerline — REVERTED, the cure was worse (Aug 23)
 
 Chasing the extractor blocker found something that matters more than the
 blocker. **Waypoints for the centerline trace come from the driven recon
@@ -571,10 +571,27 @@ adjacent 10 Hz samples and reads as a 180-degree heading flip. Waypoints
 straddling one step *backwards* along the track, and the shortest path ordering
 the centerline dutifully doubles back to reach them.
 
-The ICRA recon contains **3 teleports in 1942 samples**. `longest_clean_run()`
-now takes the longest teleport-free stretch (632 samples, 50.4 m — still more
-than a lap) rather than stitching across the jumps, so what orders the
-centerline is a stretch the car actually drove, in order.
+The ICRA recon contains **3 teleports in 1942 samples**, `maplap_short` has 58.
+
+**`longest_clean_run()` was written to take the longest teleport-free stretch,
+and it is REVERTED. It fixed the corrected-map case and broke the one we ship.**
+On ICRA it cuts a 56.7 m loop's trajectory to 50.4 m; the traced line comes out
+with a 0.421 m minimum radius and fails the steering-lock gate, so the ICRA line
+stops existing entirely. It was committed having run only the Porto regression,
+and shipped broken for one commit before the ICRA check caught it.
+
+Two further attempts at the underlying lap-end detection were also wrong, kept
+here so they are not repeated. Global closest-approach finds the *last* return
+on a multi-lap run: a 28.6 m lap read as 134 m. The first local minimum of
+distance-to-start is not the lap either — that signal has many minima as the
+track weaves, and Porto's first sits 3.07 m from home at s = 21.1 m. The
+original threshold ("first genuine return within 0.6 m after having left") asks
+the right question and survives.
+
+**The problem is real and still open.** Any cure has to preserve full loop
+coverage — stitch the clean segments in order, rather than keep only the longest
+one. The numbers below are what the reverted version achieved, recorded because
+the diagnosis stands even though the fix did not.
 
 | | traced length | reversals |
 |---|---|---|
