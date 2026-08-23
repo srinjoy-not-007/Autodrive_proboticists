@@ -97,7 +97,37 @@ def excise_spurs(pts, min_gap=0.5, max_len=6.0):
     return pts[~drop] if drop.any() else pts
 
 
-def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
+def longest_clean_run(tx, ty, max_jump=0.30):
+    """The longest stretch of trajectory with no teleport in it.
+
+    Waypoints come from the driven path, so whatever the recon run did the
+    traced centerline inherits. A recon run collides — that is what recon is —
+    and every collision teleports the car back to a checkpoint, which appears
+    as a >0.6 m jump between adjacent 10 Hz samples and reads as a 180 degree
+    heading flip. Waypoints that straddle one step *backwards* along the track,
+    and the shortest path ordering the centerline dutifully doubles back to
+    reach them.
+
+    Measured on the ICRA recon: 3 teleports in 1942 samples. A smeared map hides
+    the consequence because its narrower skeleton cannot follow the jump; a
+    sharper one can, which is why this only surfaced once the LiDAR mount offset
+    was corrected — 61.7 m of driven lap traced as 94.7 m with two reversals.
+
+    Taking the longest clean run rather than stitching around the jumps keeps
+    this honest: what is left is a stretch the car actually drove, in order.
+    """
+    d = np.hypot(np.diff(tx), np.diff(ty))
+    cuts = [0] + (np.flatnonzero(d > max_jump) + 1).tolist() + [len(tx)]
+    runs = [(b - a, a, b) for a, b in zip(cuts[:-1], cuts[1:])]
+    n, a, b = max(runs)
+    if len(runs) > 1:
+        span = float(np.hypot(np.diff(tx[a:b]), np.diff(ty[a:b])).sum())
+        print(f'trajectory: {len(runs) - 1} teleport(s); longest clean run '
+              f'{n} samples ({span:.1f} m) of {len(tx)}')
+    return tx[a:b], ty[a:b]
+
+
+def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=None, wp_spacing=2.0):
     """Order the centerline by chaining skeleton shortest paths through
     waypoints taken from the driven trajectory (in driving order).
 
@@ -127,6 +157,7 @@ def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
     # Waypoints: spread along the FIRST LAP of the trajectory by cumulative
     # path length, skipping teleport jumps. Lap end = first return near the
     # start after having travelled away.
+    tx, ty = longest_clean_run(tx, ty)
     seg = np.hypot(np.diff(tx), np.diff(ty))
     seg[seg > 0.5] = 0.0
     s = np.concatenate([[0], np.cumsum(seg)])
@@ -140,7 +171,18 @@ def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
         elif away and d0 < 0.6 and s[i] > 5.0:
             lap_end = s[i]
             break
-    print(f'trajectory: {total:.1f} m total, first lap ≈ {lap_end:.1f} m')
+    # Waypoint density has to scale with the track, not be a constant. Each hop
+    # is a shortest path through the skeleton, and a shortest path is only
+    # obliged to reach the next waypoint — on a map with infield branches it is
+    # free to take a different way round a sub-loop, which is how a traced lap
+    # comes back doubling over itself. The driven trajectory is ground truth for
+    # the track's topology; consulting it every couple of metres removes the
+    # freedom to wander. Measured: at one waypoint per 5.7 m the sharper ICRA
+    # map traced 88.5 m of 'lap' with two direction reversals.
+    if n_wp is None:
+        n_wp = max(10, int(lap_end / wp_spacing))
+    print(f'trajectory: {total:.1f} m total, first lap ≈ {lap_end:.1f} m, '
+          f'{n_wp} waypoints (~{lap_end / n_wp:.1f} m apart)')
     wp_idx = [int(np.searchsorted(s, lap_end * k / n_wp)) for k in range(n_wp)]
     wp_nodes = []
     for i in wp_idx:
@@ -257,8 +299,36 @@ def main():
 
     if '--skeleton' in sys.argv:
         skel = skeletonize(corridor)
+        # Keep only skeleton within reach of where the car actually drove.
+        #
+        # Skeletonizing the whole corridor assumes the drivable area is one
+        # simple loop. It is not: a good map opens up infield and run-off the
+        # racing line never visits, `prune_to_cycle` then leaves more than one
+        # cycle, and the shortest paths that order the centerline are free to
+        # route through the wrong one. That is what a "direction reversal" in
+        # the traced lap actually is. Measured on ICRA built with the corrected
+        # LiDAR origin: a 61.7 m driven lap traced as 94.7 m with two
+        # reversals, and denser waypoints did not help because the detour is
+        # topological, not a sampling artefact.
+        #
+        # The driven trajectory settles it — the car demonstrably went round the
+        # loop we race. Anything further from it than the corridor is wide is
+        # some other part of the map.
+        reach_m = float(next((a.split('=')[1] for a in sys.argv
+                              if a.startswith('--trace-reach=')), 2.5))
+        drove = np.zeros_like(corridor, dtype=bool)
+        for x, y in zip(tx, ty):
+            ix, iy = int((x - ox) / res), int((y - oy) / res)
+            if 0 <= iy < drove.shape[0] and 0 <= ix < drove.shape[1]:
+                drove[iy, ix] = True
+        near = ndimage.distance_transform_edt(~drove) * res <= reach_m
+        kept = skel & near
+        if kept.sum() > 50:
+            print(f'skeleton px: {skel.sum()}, within {reach_m:.1f} m of the '
+                  f'driven line: {kept.sum()}')
+            skel = kept
         cyc = prune_to_cycle(skel)
-        print(f'skeleton px: {skel.sum()}, after spur pruning: {cyc.sum()}')
+        print(f'after spur pruning: {cyc.sum()}')
         order = trace_via_waypoints(cyc, tx, ty, ox, oy, res)
         pts = np.stack([ox + order[:, 1] * res, oy + order[:, 0] * res], axis=1)
         print(f'centerline (skeleton): {len(pts)} pts')

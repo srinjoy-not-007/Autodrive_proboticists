@@ -523,6 +523,45 @@ it**. Which returns to the clearance problem: opening corners costs the margin
 that keeps us collision-free. That, not the ay cap, is the real constraint, and
 it is what the winners must be solving differently.
 
+## Recon teleports were corrupting the centerline (Aug 23) — latent finals bug
+
+Chasing the extractor blocker found something that matters more than the
+blocker. **Waypoints for the centerline trace come from the driven recon
+trajectory, and a recon run collides — that is what recon is.** Every collision
+teleports the car back to a checkpoint, which appears as a >0.6 m jump between
+adjacent 10 Hz samples and reads as a 180-degree heading flip. Waypoints
+straddling one step *backwards* along the track, and the shortest path ordering
+the centerline dutifully doubles back to reach them.
+
+The ICRA recon contains **3 teleports in 1942 samples**. `longest_clean_run()`
+now takes the longest teleport-free stretch (632 samples, 50.4 m — still more
+than a lap) rather than stitching across the jumps, so what orders the
+centerline is a stretch the car actually drove, in order.
+
+| | traced length | reversals |
+|---|---|---|
+| corrected map, before | 94.7 m | 2 |
+| **corrected map, after** | **57.8 m** | **0** |
+
+against a true loop of 56.7 m. Porto regenerates byte-identical, so this costs
+nothing where it was not needed.
+
+**This was masked, not absent.** A smeared map's narrower skeleton physically
+cannot follow a teleport jump; a sharper one can. It surfaced only because the
+LiDAR correction sharpened the map — but the bug was always there, and the
+finals recon will contain teleports too.
+
+Two wrong diagnoses on the way, both cheap to discard and worth recording:
+denser waypoints (10 -> 30) made it slightly *worse*, 88.5 -> 94.7 m, and
+masking the skeleton to within 2.5 m of the driven line was a complete no-op
+because the whole skeleton already is.
+
+**The LiDAR offset still does not ship.** With the extractor fixed, ICRA's
+corrected map produces a line rejected on min radius (0.543 m against the
+0.561 m lock) — and opening that corner with `open_corners.py` clears every gate
+but spends clearance down to **0.224 m**, against the 0.564 m the shipping line
+has while driving 17.95 s/lap clean. Not a trade to make on an unseen track.
+
 ## The tyre really does make 9.9 m/s2 — and we still cannot use it (Aug 23)
 
 `skidpad.py` was written to measure grip directly and had never run anywhere
