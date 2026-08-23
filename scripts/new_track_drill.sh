@@ -39,21 +39,46 @@ docker exec autodrive_roboracer_api /bin/bash -c "pkill -INT -f '[r]os2 bag reco
 docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && ros2 bag reindex /home/data/bags/${BAG} > /dev/null 2>&1; true"
 
-stage "2/5 map"
-docker exec autodrive_roboracer_api /bin/bash -c "$R && python3 \
-    /home/autodrive_devkit/src/pit_crew/tools/build_map_from_bag.py \
-    /home/data/bags/${BAG} /home/data/maps/${TRACK}" || exit 1
+# Stages 2-4 used to call extract_centerline and optimize_raceline directly with
+# their DEFAULT parameters -- no centerline-method selection, no drivability
+# gate, and the stock ay 3.0 / ax 3.0 profile rather than the validated one. A
+# finals recon would have produced a slower, ungated line than the pipeline we
+# actually race. They now go through make_track_lines.py, which owns all of it.
+stage "2/5 map (both sensor origins)"
+# The LiDAR sits 0.1933 m ahead of the pose point. Correcting for it sharpens
+# the map -- Porto wall pixels 6.53% -> 4.66% -- and was worth 1.6 s a race
+# there. On ICRA the sharper map yields a line that fails the steering-lock
+# gate. Which one wins is a property of the track, so build both and let the
+# gate decide rather than guessing three days before a deadline.
+for VARIANT in "" "_c"; do
+    OFF=0.0; [ -n "$VARIANT" ] && OFF=0.1933
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "$R && PIT_CREW_LIDAR_OFFSET=$OFF python3 \
+         /home/autodrive_devkit/src/pit_crew/tools/build_map_from_bag.py \
+         /home/data/bags/${BAG} /home/data/maps/${TRACK}${VARIANT}" || exit 1
+done
 
-stage "3/5 centerline"
-.venv/bin/python tools/extract_centerline.py \
-    "data/maps/${TRACK}" "data/racelines/${TRACK}_centerline" || exit 1
+stage "3/5 racing lines from each map, keep whichever is drivable and faster"
+BEST=""; BEST_T=99999
+for VARIANT in "" "_c"; do
+    OUT=$(.venv/bin/python tools/make_track_lines.py "${TRACK}${VARIANT}" 2>&1)
+    echo "$OUT" | sed "s/^/  [${TRACK}${VARIANT}] /"
+    T=$(echo "$OUT" | sed -n 's/.*race line: .* ideal \([0-9.]*\) s.*/\1/p' | tail -1)
+    if [ -n "$T" ] && awk "BEGIN{exit !($T < $BEST_T)}"; then BEST="$VARIANT"; BEST_T="$T"; fi
+done
+[ -z "$BEST$BEST_T" ] && { echo "no drivable line from either map"; exit 1; }
+if [ "$BEST_T" = "99999" ]; then echo "no drivable line from either map"; exit 1; fi
+echo "chosen map: ${TRACK}${BEST:-" (uncorrected)"}  ideal ${BEST_T} s"
 
-stage "4/5 racing lines"
-.venv/bin/python tools/optimize_raceline.py \
-    "data/racelines/${TRACK}_centerline.csv" --out "data/racelines/${TRACK}_raceline"
-.venv/bin/python tools/optimize_raceline.py \
-    "data/racelines/${TRACK}_centerline.csv" --centerline-only \
-    --out "data/racelines/${TRACK}_safe" || exit 1
+stage "4/5 promote the winner to the canonical names"
+if [ -n "$BEST" ]; then
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "for e in pgm yaml; do cp /home/data/maps/${TRACK}${BEST}.\$e /home/data/maps/${TRACK}.\$e; done; \
+         cp /home/data/maps/${TRACK}${BEST}_traj.csv /home/data/maps/${TRACK}_traj.csv" || exit 1
+    for f in centerline safe raceline race; do
+        cp "data/racelines/${TRACK}${BEST}_${f}.csv" "data/racelines/${TRACK}_${f}.csv" 2>/dev/null
+    done
+fi
 
 stage "5/5 footprint clearance check"
 .venv/bin/python tools/footprint_analysis.py "data/maps/${TRACK}" \
