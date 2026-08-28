@@ -117,7 +117,11 @@ def main():
         elif name.endswith('encoder'):
             stamp = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
             if m.position:
-                speed_est.update(name[-13], stamp, m.position[0])
+                # name[-13] happens to yield '/' for left and 'r' for
+                # right -- two distinct keys, so it worked by accident.
+                # Say what is meant instead of relying on that.
+                speed_est.update('L' if 'left' in name else 'R',
+                                 stamp, m.position[0])
         elif name.endswith('lidar'):
             if imu_yaw is None or truth is None:
                 continue

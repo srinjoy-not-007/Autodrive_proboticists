@@ -184,7 +184,14 @@ def main():
         f.write(f"image: {os.path.basename(out)}.pgm\n"
                 f"resolution: {RES}\n"
                 f"origin: [{xmin}, {ymin}, 0.0]\n"
-                f"negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
+                f"negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+                # Stamp the sensor origin this map was built with. The drill
+                # builds BOTH variants and promotes the winner over the
+                # canonical name, at which point nothing recorded which one it
+                # was -- and localization defaulted to 0.0. A map built with the
+                # 0.1933 m correction, localized against with 0.0, is worse than
+                # either done consistently. The map now carries its own answer.
+                f"lidar_offset: {LIDAR_FROM_POSE}\n")
     with open(out + '_traj.csv', 'w') as f:
         f.write('t,x,y,yaw\n')
         for row in traj_rows:

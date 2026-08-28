@@ -49,6 +49,13 @@ class ParticleFilterCore:
         self.ox, self.oy = meta['origin'][0], meta['origin'][1]
         self.H, self.W = dist.shape
         self.centerline = centerline
+        # Rays originate at the LiDAR, not at the pose point. The live node
+        # applies this; the offline copy did not, so the two filters were
+        # different filters and offline results could not transfer. Prefer the
+        # map's own value -- it is the only thing that knows which sensor origin
+        # the map was built with -- then the caller's parameter, then 0.0.
+        self.lidar_offset = float(
+            meta.get('lidar_offset', params.get('lidar_offset') or 0.0))
 
         n = self.p['n_particles']
         self.px = np.zeros(n)
@@ -116,8 +123,10 @@ class ParticleFilterCore:
 
         head = (imu_yaw + self.pth)[:, None]
         world_ang = head + ang[None, :]
-        ex = self.px[:, None] + rr[None, :] * np.cos(world_ang)
-        ey = self.py[:, None] + rr[None, :] * np.sin(world_ang)
+        sx = self.px[:, None] + self.lidar_offset * np.cos(head)
+        sy = self.py[:, None] + self.lidar_offset * np.sin(head)
+        ex = sx + rr[None, :] * np.cos(world_ang)
+        ey = sy + rr[None, :] * np.sin(world_ang)
         gx = ((ex - self.ox) / self.res).astype(np.int32)
         gy = ((ey - self.oy) / self.res).astype(np.int32)
         np.clip(gx, 0, self.W - 1, out=gx)

@@ -106,6 +106,13 @@ class ParticleFilter(Node):
         img = np.flipud(np.array(Image.open(prefix + '.pgm')))
         self.res = float(meta['resolution'])
         self.ox, self.oy = meta['origin'][0], meta['origin'][1]
+        # The map knows which sensor origin it was built with; trust it over the
+        # parameter default, because the two MUST agree and only the map can
+        # say. Older maps have no such key and keep the parameter.
+        if 'lidar_offset' in meta:
+            self.lidar_offset = float(meta['lidar_offset'])
+            self.get_logger().info(
+                f'lidar_offset {self.lidar_offset:.4f} m from map metadata')
         occupied = img <= 50
         from scipy import ndimage
         # Distance (m) from every cell to the nearest wall

@@ -32,6 +32,7 @@ is trusted (see docs/STATUS.md).
 Usage: .venv/bin/python tools/make_track_lines.py <track_name>
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -276,7 +277,7 @@ def main():
 
     for src, dst in ((chosen['centerline'] + '.csv', f'{track}_centerline'),
                      (chosen['safe']['path'] + '.csv', f'{track}_safe')):
-        subprocess.run(['cp', src, f'data/racelines/{dst}.csv'], check=True)
+        shutil.copy(src, f'data/racelines/{dst}.csv')
     # The raceline is promoted to its canonical name ONLY if it passed both
     # gates. It used to be copied unconditionally, which is how an ICRA line
     # that reversed direction twice and asked for a 0.327 m turn radius came to
@@ -286,14 +287,13 @@ def main():
     rl = chosen.get('raceline')
     stale = f'data/racelines/{track}_raceline.csv'
     if rl and rl['ok']:
-        subprocess.run(['cp', rl['path'] + '.csv', stale], check=True)
+        shutil.copy(rl['path'] + '.csv', stale)
     else:
         if os.path.exists(stale):
             os.remove(stale)
         if rl:
-            subprocess.run(['cp', rl['path'] + '.csv',
-                            f'data/racelines/{track}_raceline_REJECTED.csv'],
-                           check=True)
+            shutil.copy(rl['path'] + '.csv',
+                        f'data/racelines/{track}_raceline_REJECTED.csv')
             print(f'  raceline REJECTED, not promoted; kept as '
                   f'{track}_raceline_REJECTED.csv for inspection')
 
@@ -320,8 +320,7 @@ def main():
               f'floor. Racing the roomiest drivable line instead '
               f'({kind}, {win["clearance"]:.3f} m) — UNPROVEN, drive it before '
               f'trusting it, and keep the reactive stack as the fallback.')
-    subprocess.run(['cp', win['path'] + '.csv',
-                    f'data/racelines/{track}_race.csv'], check=True)
+    shutil.copy(win['path'] + '.csv', f'data/racelines/{track}_race.csv')
     other = [f'{k} {v["lap"]:.2f} s' for k, v in viable if k != kind]
     if not viable:
         why = ' (roomiest drivable line; nothing cleared the evidence floor)'

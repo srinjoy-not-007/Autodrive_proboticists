@@ -79,11 +79,24 @@ Two subtleties worth keeping:
 
 `brake_gain` 0.5 measured 91.9 s against 0.3's 91.4 s, so 0.3 stands.
 
+### ay_limit swept — not the lever (Aug 28, later)
+
+The mismatch flagged below (cap 4.5 while the profile plans 5.0) turns out not
+to matter. Porto, same session:
+
+| ay_limit | median | best | collisions | race |
+|---|---|---|---|---|
+| **4.5 (ships)** | 9.14 s | 9.01 s | 0 / 40 | **91.4 s** |
+| 5.0 | 9.14 s | 8.95 s | 0 / 51 | **91.4 s** |
+| 5.5 | 9.11 s | 8.82 s | 1 / 39 | 93.6 s |
+
+Flat from 4.5 to 5.0 and collisions appear at 5.5. **The steering cap is not
+binding — the planned ay is.** Keep 4.5; do not re-sweep without a reason.
+
 ### What to do next
 
-1. **`ay_limit` is still 4.5 while the profile now plans ay 5.0.** That mismatch
-   was not swept and is the most obvious remaining lever — the steering cap may
-   now be the binding constraint rather than the tyre.
+1. Re-measure anything concluded pre-brakes (see below) — that is where the
+   remaining time is, not in the steering cap.
 2. Re-measure anything that was concluded pre-Aug-28 **with brakes on**. The
    grip watchdog, the optimized raceline, the corrected LiDAR map and the
    `w_veh` sweep were all evaluated against a car that could not slow down, so
