@@ -58,22 +58,25 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-Shipping config = safe centerline + MPC, ay 3.5 / ax 6.5 / brake 4.0, with the
+Shipping config = safe centerline + MPC, ay 5.0 / ax 6.5 / brake 4.0, with the
 controller capping its own steering by the lateral grip that exists at the
-current speed. Measured:
+current speed and `brake_gain` 0.3 giving it real braking. Measured:
 
 | Track | Result |
 |---|---|
-| Porto (practice) | **27 laps, 0 collisions**, best **9.81 s**, 10-lap race **101.2 s** |
-| ICRA — never tuned on | **16 laps, 0 collisions**, median **17.95 s/lap** |
+| Porto (practice) | **40 laps, 0 collisions**, best **9.01 s**, 10-lap race **91.4 s** |
+| ICRA — never tuned on | **29 laps, 0 collisions**, median **16.53 s/lap** |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s — clears qualification |
 
 The published winning lap on this same Porto track is 6.53 s (65.41 s race).
-The remaining gap is not the planner or the controller: the tyre holds ~0.9 of
-the curvature asked of it up to 9.9 m/s², then breaks away within one 0.5 m/s
-step, and we know our position to ~0.17 m. Plan closer to that cliff and the
-speed is clipped — by a wall, or by backing off. `docs/STATUS.md` has the four
-independent demonstrations.
+
+Until 2026-08-28 this section said the remaining gap was a grip cliff, and that
+the ceiling had been "demonstrated four independent ways". That was wrong: all
+four were measured while the controller had **no braking authority** — the
+braking branch was unreachable, so the car shed speed only by coasting while the
+velocity profile assumed 4 m/s² of deceleration. Fixing it took the usable
+lateral-acceleration cap from 3.5 to 5.0 and the race from 97.2 to 91.4 s.
+`docs/reviews/deepak-g.md` has the ladder.
 
 `run_race_stack.sh` also exists but starts the arbiter, which measurably makes
 things *worse* — see `docs/STATUS.md`.

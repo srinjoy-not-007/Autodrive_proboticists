@@ -29,7 +29,71 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 28)
+## NEXT SESSION — START HERE (Aug 28, late)
+
+**The controller could not brake, and that was the "grip ceiling".**
+
+`ThrottleController` gated its braking branch behind `kp > 0`, and nothing sets
+`kp`. Every throttle command was `0.040*v_target + 0.005`, strictly positive.
+The car had **no braking authority at all** — it shed speed only by coasting —
+while the offline velocity profile was built assuming 4.0 m/s2 of deceleration.
+It could plan a corner-entry speed it had no way to reach. Found by Deepak G's
+formulation (`docs/Deepak G/25-08-26/`, defect B5); response in
+`docs/reviews/deepak-g.md`.
+
+Every one of the four "independent demonstrations" of the grip ceiling recorded
+below was measured in that state. ay 4.0 (23 collisions) and ay 5.0 (31) are
+what a car with no brakes looks like. **With brakes, both run clean.**
+
+### Shipping config changed
+
+**safe centerline + MPC, ay 5.0 / ax 6.5 / brake 4.0 / jerk 20, `brake_gain`
+0.3.** Porto race 97.2 -> **91.4 s**; ICRA 173.6 -> **165.3 s**. The regenerated
+`safe.csv` on both tracks is byte-identical to the lines actually driven, so
+what ships is what was validated.
+
+| Porto, ~40 laps each | median | best | collisions | race |
+|---|---|---|---|---|
+| ay 3.5, no braking (old shipping) | 9.72 s | 9.59 s | 0 / 37 | 97.2 s |
+| ay 3.5, brake 0.3 | 9.89 s | 9.70 s | 0 / 43 | 98.9 s |
+| ay 4.0, brake 0.3 | 9.54 s | 9.40 s | 0 / 38 | 95.4 s |
+| ay 4.5, brake 0.3 | 9.31 s | 9.13 s | 0 / 39 | 93.1 s |
+| **ay 5.0, brake 0.3** | **9.14 s** | **9.01 s** | **0 / 40** | **91.4 s** |
+| ay 5.5, brake 0.3 | 9.20 s | 8.99 s | 0 / 39 | 92.0 s |
+| ay 6.0, brake 0.3 | 9.44 s | 9.26 s | 0 / 38 | 94.4 s |
+
+| ICRA, never tuned on | median | collisions | race |
+|---|---|---|---|
+| safe, ay 3.5, no braking | 17.36 s | 0 / 27 | 173.6 s |
+| **ay 5.0 + braking** | **16.53 s** | **0 / 29** | **165.3 s** |
+
+Two subtleties worth keeping:
+
+- **Braking alone is slower.** At ay 3.5 it costs 0.17 s/lap, because the car had
+  been overshooting a conservative profile and getting away with it — coast-down
+  was acting as a free speed bonus. Braking only pays once the profile is
+  aggressive enough to need it. Do not evaluate the two changes separately.
+- **ay 6.0 turning back is a real limit.** Past ~5 the car cannot deliver the
+  planned curvature and runs wide (cleanly — `ay_limit` catches it). So there is
+  still a ceiling; it is just further out and differently caused.
+
+`brake_gain` 0.5 measured 91.9 s against 0.3's 91.4 s, so 0.3 stands.
+
+### What to do next
+
+1. **`ay_limit` is still 4.5 while the profile now plans ay 5.0.** That mismatch
+   was not swept and is the most obvious remaining lever — the steering cap may
+   now be the binding constraint rather than the tyre.
+2. Re-measure anything that was concluded pre-Aug-28 **with brakes on**. The
+   grip watchdog, the optimized raceline, the corrected LiDAR map and the
+   `w_veh` sweep were all evaluated against a car that could not slow down, so
+   their negative results are not safe to trust any more.
+3. Cold-start the built submission image and confirm it races the new profile.
+4. Still untouched: `new_track_drill.sh` end to end on a fresh `*-compete` tag.
+
+---
+
+## Aug 28 (earlier) — Vidit Gupta's review, superseded in part by the section above
 
 Worked through **Vidit Gupta's review** (`docs/Vidit Gupta/25 August/`). Full
 response, with every verdict re-derived against current main, is in

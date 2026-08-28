@@ -156,31 +156,35 @@ lateral p95 to **0.041 m** at the original process noise, or **0.039 m** with
 ICRA or beaten 9.81 s. See the first section of `docs/STATUS.md` for the exact
 TODO and validation gate.
 
-Shipping: safe centerline + MPC, **ay 3.5** / **ax 6.5** / brake 4.0 / jerk 20,
-with the controller's **`ay_limit`** capping steering by the grip that exists.
-Ten-lap race time 115.0 -> 101.2 s, and **97.2 s** re-measured on Aug 28 after
-the sim moved to Xvfb (same line and controller — the gain is the measurement
-environment, not the car; see the gotcha above).
+Shipping: safe centerline + MPC, **ay 5.0** / **ax 6.5** / brake 4.0 / jerk 20,
+with the controller's **`ay_limit`** capping steering by the grip that exists
+and **`brake_gain` 0.3** giving it actual braking. Ten-lap race time
+115.0 -> 101.2 -> **91.4 s** (Porto) and **165.3 s** on ICRA. Of that, ~4 s came
+from the Xvfb measurement change and ~5.8 s from the brakes.
 
-| Track | Result |
+| Track | Result (Aug 28, ay 5.0 + braking) |
 |---|---|
-| Porto (practice) | 27 laps, 0 collisions, best **9.81 s**, median 10.12 s |
-| ICRA (never tuned on) | 16 laps, 0 collisions, **17.95 s/lap** |
+| Porto (practice) | 40 laps, 0 collisions, best **9.01 s**, median 9.14 s, race **91.4 s** |
+| ICRA (never tuned on) | 29 laps, 0 collisions, median **16.53 s**, race 165.3 s |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s |
 
 Published winning lap on the same Porto track is **6.53 s** (65.41 s race).
 We track our own plan to within ~5%, so the tracker is not the bottleneck —
 **and neither is the planner, the tyre, or the grip cap.**
 
-**The ceiling has been demonstrated four independent ways** and the median lap
-sits at 10.0-10.8 s through all of them: raising ay alone (31 collisions),
-opening the corners (5x fewer collisions, no net time), the tyre's real
-9.9 m/s2 (unusable on track), and a working breakaway detector (no net time).
-It is set by **10 Hz sensing against an abrupt grip cliff**: the tyres hold
-~0.9 of asked curvature to 9.9 m/s2 then collapse within one 0.5 m/s step, and
-we know our position to 0.17 m laterally. Plan more aggressively and the speed
-is clipped — by a wall, or by the safety net. Further parameter sweeps are
-worth tenths.
+**SUPERSEDED (Aug 28) — the ceiling was the missing brakes.** Every one of the
+four "independent" demonstrations was run while the controller had **no braking
+authority**: `ThrottleController`'s braking branch was gated behind `kp > 0`,
+which nothing sets, so every throttle command was positive and the car shed
+speed only by coasting. It could plan a corner-entry speed it had no way to
+reach. ay 4.0 (23 collisions) and ay 5.0 (31) are exactly what that looks like.
+With braking enabled the same profiles run **perfectly clean**, and the shipping
+cap moved 3.5 -> **5.0**. See `docs/reviews/deepak-g.md`.
+
+There IS still a ceiling, but it is real and further out: ay 6.0 turns back
+(9.44 s against ay 5.0's 9.14 s) because past ~5 the car cannot deliver the
+planned curvature and runs wide. The grip-cliff and 10 Hz-sensing facts below
+remain true; they were just not what was binding.
 
 That 6.53 s was **verified comparable** (Aug 22): the build it was set on
 (`2025-cdc-tf-practice`) and ours have a byte-identical Porto mesh, identical
@@ -197,7 +201,9 @@ physics settings and an identical vehicle, checked asset-by-asset with
   on Porto — it is faster in theory (10.41 s vs 11.05 s ideal) but only leaves
   0.146 m corner clearance and collects ~57 collisions. Clearance beats path
   length when a collision costs +10 s. Better tracking did not rescue it.
-- **Do not keep raising the ay cap.** ay 4.0 gives 10.11 s but 23 collisions;
+- **SUPERSEDED: "do not keep raising the ay cap".** True only without brakes;
+  ay 5.0 now runs clean and ships. The original note, kept because the tyre
+  measurements in it are still correct: ay 4.0 gives 10.11 s but 23 collisions;
   capping lateral jerk at 20 m/s3 as well cuts that to 10 (best lap 9.96 s) but
   still is not clean. **Measured grip, from the race trace and not the asset:**
   the car turns exactly as the bicycle model predicts below 0.10 rad of
