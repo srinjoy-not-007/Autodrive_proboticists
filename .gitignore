@@ -18,3 +18,20 @@ __pycache__/
 build/
 install/
 log/
+
+# Candidate lines that failed the drivability/clearance gate. Kept on disk for
+# inspection, never committed and never shipped.
+data/racelines/*_REJECTED.csv
+
+# Per-w_veh sweep candidates from make_track_lines.py. The tool now sweeps the
+# corridor margin and writes one line per value per centerline method, which is
+# a lot of regenerable files; only the four canonical names per track are
+# tracked. Regenerate with: .venv/bin/python tools/make_track_lines.py <track>
+data/racelines/*_w0.*.csv
+data/racelines/*_w0.*_qc.png
+
+# Corrected-LiDAR-map experiment (docs/reviews/vidit-gupta.md). Rebuild with:
+#   PIT_CREW_LIDAR_OFFSET=0.1933 build_map_from_bag.py <bag> data/maps/track_v2_c
+data/racelines/track_v2_c_*
+data/maps/track_v2_c.*
+data/maps/track_v2_c_*

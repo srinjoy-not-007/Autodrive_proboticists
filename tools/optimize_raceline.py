@@ -17,6 +17,7 @@ safety per side), so w_veh only needs the physical car width + small margin.
 
 import argparse
 import math
+import sys
 
 import numpy as np
 import trajectory_planning_helpers as tph
@@ -25,6 +26,13 @@ from scipy import ndimage
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+# One source of truth for anything measured off the vehicle. This module used
+# to carry an unsourced m_veh=3.906 while compare_sim_builds.py had read 3.47 kg
+# straight off the Unity rigidbody -- the duplication is what let the two drift
+# apart, so take it from the same file the car does.
+sys.path.insert(0, 'src/pit_crew')
+from vehicle import MASS as VEHICLE_MASS   # noqa: E402
 
 # Body box relative to the rear axle (the pose point), from the tech guide:
 # length 0.500 m, width 0.270 m.
@@ -63,7 +71,6 @@ def clearance_speed_cap(xy, kappa, map_prefix, per_metre):
     5.39 m/s where clearance is 0.325 m, i.e. 16.6 m/s per metre. Anything
     faster than that ratio is asking for margin no run has ever demonstrated.
     """
-    import sys
     sys.path.insert(0, 'tools')
     from footprint_analysis import load_dist, clearance as clear_at, CORNERS
 
@@ -226,8 +233,29 @@ def main():
     # solutions show up as curvature spikes that crater the velocity profile.
     win = 5
     kern = np.ones(win) / win
+    alpha_raw = alpha.copy()
     alpha = np.convolve(np.concatenate([alpha[-win:], alpha, alpha[:win]]),
                         kern, mode='same')[win:-win]
+
+    # Smoothing a CONSTRAINED solution can push it back outside the constraint,
+    # and nothing downstream re-checked that. Measured on Porto at w_veh 0.44:
+    # smoothing moves alpha by at most 0.019 m and leaves zero points outside
+    # the corridor the solver was given, so it is safe as written -- but that
+    # is a fact about this track, not a guarantee, so the check stays.
+    #
+    # The bound is `work`, the corridor AFTER the body-sweep shrink, with no
+    # further w_veh/2 taken off: `sweep` already contains the body half-width,
+    # so subtracting it twice would be double-counting.
+    if not args.centerline_only:
+        viol = np.maximum(np.maximum(-work[:, 2] - alpha,
+                                     alpha - work[:, 3]), 0.0)
+        n_v = int((viol > 1e-6).sum())
+        moved = float(np.abs(alpha - alpha_raw).max())
+        msg = (f'  alpha smoothing: moved at most {moved:.3f} m, '
+               f'{n_v} points outside the solved corridor')
+        if n_v:
+            msg += f' -- WARNING, worst by {viol.max():.3f} m'
+        print(msg)
 
     raceline, _, coeffs_x_r, coeffs_y_r, spline_inds, t_vals, s_race, \
         spline_lengths, el_lengths = tph.create_raceline.create_raceline(
@@ -258,7 +286,7 @@ def main():
     vx = tph.calc_vel_profile.calc_vel_profile(
         ggv=ggv, ax_max_machines=ax_machines, v_max=args.vmax,
         kappa=kappa, el_lengths=el_lengths, closed=True,
-        drag_coeff=0.0, m_veh=3.906)
+        drag_coeff=0.0, m_veh=VEHICLE_MASS)
     # Braking-aware acceleration profile
     vx_cl = np.append(vx, vx[0])
     ax_prof = tph.calc_ax_profile.calc_ax_profile(

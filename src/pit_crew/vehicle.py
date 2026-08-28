@@ -11,6 +11,12 @@ WHEEL_RADIUS = 0.059        # m
 MAX_STEER = 0.5236          # rad (±30°); steering_command is normalized [-1, 1]
 STEER_RATE = 3.2            # rad/s actuator slew
 TOP_SPEED = 22.88           # m/s (claimed; calibrate)
+# Read directly off the Unity rigidbody by tools/compare_sim_builds.py
+# (2026-08-23), not from the datasheet. The planner previously carried an
+# unsourced 3.906 kg; with drag_coeff=0 it cancels out of a
+# friction-limited velocity profile, so this is a correctness fix rather
+# than a performance one -- but it is measured and 3.906 was not.
+MASS = 3.47                 # kg
 
 # LiDAR geometry
 # Sensor mounting, measured directly out of the simulator's own scene with
@@ -137,11 +143,18 @@ class SpeedEstimator:
 class ThrottleController:
     """Open-loop throttle from a target speed.
 
-    Open loop on purpose: there is no trustworthy speed feedback on this
-    platform (see SpeedEstimator), and closing the loop on the encoder signal
-    made the car surge back and forth. `ff_gain` is a placeholder until the
-    throttle->steady-state-speed curve is measured; pass `v_meas` only once a
-    real speed estimate (localization-derived) exists.
+    Open loop because of the *loop rate*, not the sensor. SpeedEstimator above
+    is verified good (scale 0.993/0.999 against ground truth on two tracks); an
+    earlier revision of this docstring said the platform had no trustworthy
+    speed feedback, which was retracted and is kept out of here deliberately --
+    that belief cost real time once already.
+
+    What actually stops the loop closing is that every sensor shares one
+    WebSocket at ~10 Hz. Feedback at 10 Hz on an actuator with no torque model
+    made the car surge back and forth, so speed is commanded feedforward from
+    the measured throttle->steady-state-speed curve instead: `ff_gain` defaults
+    to the **measured** 0.040 throttle per m/s, not a placeholder. `kp`
+    defaults to 0, i.e. the loop is open unless someone deliberately closes it.
     """
 
     def __init__(self, kp: float = 0.0, ff_gain: float = 0.040,

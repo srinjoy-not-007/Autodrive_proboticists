@@ -81,8 +81,13 @@ if [ -n "$BEST" ]; then
 fi
 
 stage "5/5 footprint clearance check"
+# <track>_traj.csv is the RECON drive -- the blind Follow-the-Gap lap the map
+# was built from. Checking it says how much room the recon had, which is
+# already known and cannot fail the way a generated line can. The point of the
+# stage is to catch an undrivable racing line before driving it, so check the
+# line we are about to race.
 .venv/bin/python tools/footprint_analysis.py "data/maps/${TRACK}" \
-    "data/maps/${TRACK}_traj.csv"
+    "data/racelines/${TRACK}_race.csv"
 
 stage "DRILL COMPLETE in $(( $(date +%s) - T0 ))s"
 echo "Next: ./scripts/run_pp_only.sh 0.30 ${TRACK} safe"

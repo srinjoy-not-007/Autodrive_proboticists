@@ -14,9 +14,14 @@ echo "map=$MAP line=$LINE scale=$SCALE $EXTRA"
 R="source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash"
 docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && cd /home/autodrive_devkit && colcon build --packages-select pit_crew --symlink-install 2>&1|tail -1"
+# The LiDAR sits 0.1933 m ahead of the pose point. A map built with that
+# correction MUST be localized against with the same offset -- the two have to
+# agree or the sharper map makes things worse, not better. Set
+# LIDAR_OFFSET=0.1933 when racing a *_c (corrected) map.
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew localization --ros-args \
     -p map_prefix:=/home/data/maps/${MAP} \
     -p centerline_csv:=/home/data/racelines/${MAP}_centerline.csv \
+    -p lidar_offset:=${LIDAR_OFFSET:-0.0} \
     -p init_x:=${IX} -p init_y:=${IY} > /tmp/loc.log 2>&1"
 sleep 7
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew ${CONTROLLER:-stanley} --ros-args \

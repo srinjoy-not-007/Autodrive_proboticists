@@ -31,6 +31,7 @@ is trusted (see docs/STATUS.md).
 
 Usage: .venv/bin/python tools/make_track_lines.py <track_name>
 """
+import os
 import subprocess
 import sys
 
@@ -57,6 +58,30 @@ VENV = '.venv/bin/python'
 # Measured with these: Porto 25 laps 0 collisions median 10.75 s (was 11.5),
 # ICRA 15 laps 0 collisions median 18.91 s (was 20.9).
 PROFILE = ['--ay', '3.5', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
+
+# How much lateral margin the min-curvature QP is told to keep, in metres, on
+# top of the swept body footprint. It used to be left at the 0.16 default, and
+# a sweep that stopped at 0.32 produced the standing conclusion that "on Porto
+# the geometry is settled" -- the optimized line buying 0.05 s for 44% of the
+# clearance. That conclusion was an artefact of the grid being too narrow.
+#
+# Widening the margin pushes the solution off the corridor edges, which is what
+# stops min-curvature from spiking locally: it minimises the INTEGRAL of kappa
+# and is otherwise free to spend all its curvature in one corner. Measured on
+# Porto with the shipping profile, worst-corner clearance / peak |kappa| /
+# ideal lap:
+#
+#     safe centerline   0.325 m   1.019   9.59 s
+#     w_veh 0.16        0.146 m   1.717   9.56 s   (rejected on clearance)
+#     w_veh 0.32        0.225 m   1.506   9.44 s
+#     w_veh 0.44        0.283 m   1.153   9.28 s
+#     w_veh 0.52        0.309 m   1.266   9.90 s
+#
+# Non-monotonic in both clearance and time, so the value cannot be reasoned to
+# and must be swept per track -- on ICRA every one of these is rejected on the
+# steering lock and the safe centerline still wins. Credit: Vidit Gupta's
+# review spotted that the parameter had never been pushed past its default.
+W_VEH = (0.16, 0.24, 0.32, 0.40, 0.44, 0.48, 0.52)
 
 
 def worst_corner(map_prefix, line_csv):
@@ -94,9 +119,27 @@ MIN_TURN_R = 0.561      # wheelbase / tan(max steer)
 # untested: worst observed lateral error (0.196) plus the map's own 0.025 m
 # resolution. Measured either side of the gap this leaves open: 0.325 m -> 0
 # collisions over 22 laps, 0.146 m -> ~57 collisions and better tracking did not
-# rescue it. Anything between 0.22 and 0.325 m is admitted but UNPROVEN — it
-# gets written to race.csv, which nothing races until it has been driven.
-MIN_CLEARANCE = 0.22
+# rescue it.
+#
+# That middle range has since been DRIVEN, and 0.22 was too generous. Same
+# session, same controller, 37-40 laps each, Porto:
+#
+#     0.283 m (w_veh 0.44)        4 collisions / 38 laps   race 104.8 s
+#     0.301 m (corrected map)     0 collisions / 37 laps   race  99.0 s
+#     0.325 m (safe centerline)   0 collisions / 37 laps   race  97.2 s
+#
+# The 0.283 m line was 0.29 s/lap FASTER and still lost the race, because every
+# one of its collisions was at its own tightest point. Worse for this file: its
+# *ideal* lap (9.28 s) beat the safe line's (9.59 s) while its DRIVEN lap lost.
+# Offline lap time mispredicted the ranking, so the selector below -- which
+# picks the fastest ideal lap that clears this floor -- will ship the slower
+# line unless the floor stops it. On an unseen track nobody would notice.
+#
+# 0.30 m sits above everything that has collided here and below everything that
+# has run clean. The 0.301 m line ran clean only with the corrected-LiDAR map's
+# better localization, so on an uncorrected map treat 0.30 as the edge rather
+# than a comfortable margin.
+MIN_CLEARANCE = 0.30
 
 
 def ideal_lap(line_csv):
@@ -140,27 +183,46 @@ def build(track, tag, extra):
         return None
 
     out = {'centerline': cl}
-    for kind, args in (('safe', ['--centerline-only']), ('raceline', [])):
+    cands = [('safe', ['--centerline-only'], None)]
+    cands += [('raceline', ['--w-veh', str(w)], w) for w in W_VEH]
+
+    best = None
+    for kind, args, w in cands:
         args = args + PROFILE
-        path = f'data/racelines/{track}_{kind}_{tag}'
+        suffix = tag if w is None else f'{tag}_w{w:g}'
+        path = f'data/racelines/{track}_{kind}_{suffix}'
+        label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
         if subprocess.run([VENV, 'tools/optimize_raceline.py', cl + '.csv',
                            '--out', path] + args,
                           capture_output=True, text=True).returncode != 0:
-            print(f'  {tag:9s} {kind:9s} generation failed')
+            # The QP runs out of corridor at large w_veh. That is an answer
+            # about the track, not an error -- report and carry on.
+            print(f'  {tag:9s} {label:15s} no solution (corridor exhausted)')
             continue
         bad = drivability(path + '.csv')
         try:
             wc = worst_corner(mp, path + '.csv')
         except Exception as e:
-            print(f'  {tag:9s} {kind:9s} clearance check failed ({e})')
+            print(f'  {tag:9s} {label:15s} clearance check failed ({e})')
             continue
         lap = ideal_lap(path + '.csv')
         why = '; '.join(bad) if bad else (
             f'clearance {wc:.3f} < {MIN_CLEARANCE:.2f} m budget'
             if wc < MIN_CLEARANCE else '')
-        print(f'  {tag:9s} {kind:9s} clearance {wc:.3f} m  ideal lap {lap:6.2f} s'
+        print(f'  {tag:9s} {label:15s} clearance {wc:.3f} m  ideal lap {lap:6.2f} s'
               f'{"   REJECTED: " + why if why else ""}')
-        out[kind] = {'path': path, 'clearance': wc, 'lap': lap, 'ok': not why}
+        rec = {'path': path, 'clearance': wc, 'lap': lap, 'ok': not why,
+               'w_veh': w}
+        if kind == 'safe':
+            out['safe'] = rec
+        elif rec['ok'] and (best is None or lap < best['lap']):
+            best = rec
+        elif best is None:
+            out.setdefault('_rejected', rec)   # something to show if all fail
+    if best is not None:
+        out['raceline'] = best
+    elif '_rejected' in out:
+        out['raceline'] = out.pop('_rejected')
     return out
 
 
@@ -186,9 +248,25 @@ def main():
     for src, dst in ((chosen['centerline'] + '.csv', f'{track}_centerline'),
                      (chosen['safe']['path'] + '.csv', f'{track}_safe')):
         subprocess.run(['cp', src, f'data/racelines/{dst}.csv'], check=True)
-    if 'raceline' in chosen:
-        subprocess.run(['cp', chosen['raceline']['path'] + '.csv',
-                        f'data/racelines/{track}_raceline.csv'], check=True)
+    # The raceline is promoted to its canonical name ONLY if it passed both
+    # gates. It used to be copied unconditionally, which is how an ICRA line
+    # that reversed direction twice and asked for a 0.327 m turn radius came to
+    # sit in data/racelines/ and be copied into the submission image -- gated
+    # out of race.csv, but one PIT_CREW_LINE away from being driven. A line
+    # that failed the check must not be reachable by name.
+    rl = chosen.get('raceline')
+    stale = f'data/racelines/{track}_raceline.csv'
+    if rl and rl['ok']:
+        subprocess.run(['cp', rl['path'] + '.csv', stale], check=True)
+    else:
+        if os.path.exists(stale):
+            os.remove(stale)
+        if rl:
+            subprocess.run(['cp', rl['path'] + '.csv',
+                            f'data/racelines/{track}_raceline_REJECTED.csv'],
+                           check=True)
+            print(f'  raceline REJECTED, not promoted; kept as '
+                  f'{track}_raceline_REJECTED.csv for inspection')
 
     # Race the fastest line that can actually cover our error budget.
     viable = [(k, v) for k, v in chosen.items()
@@ -204,7 +282,8 @@ def main():
           f'clearance {win["clearance"]:.3f} m'
           + (f' (beat {", ".join(other)})' if other else
              ' (only candidate that cleared the budget)'))
-    print(f'wrote data/racelines/{track}_{{centerline,safe,raceline,race}}.csv')
+    wrote = ['centerline', 'safe', 'race'] + (['raceline'] if rl and rl['ok'] else [])
+    print(f'wrote data/racelines/{track}_{{{",".join(sorted(wrote))}}}.csv')
 
 
 if __name__ == '__main__':

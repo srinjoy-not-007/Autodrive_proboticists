@@ -2,9 +2,10 @@
 
 Consumes the localization pose and the optimized raceline (with its velocity
 profile) and emits steering/throttle. Speed is commanded open loop from the
-profile because this platform has no usable speed feedback (see
-vehicle.SpeedEstimator); the localization pose derivative provides a coarse
-measured speed for the lookahead schedule only.
+profile because the whole sensor bus runs at ~10 Hz, which is too slow to close
+a throttle loop without surging -- NOT because the encoders are unusable. They
+are fine (see vehicle.SpeedEstimator); an earlier version of this line said
+otherwise and was wrong.
 
 Falls back to publishing nothing when localization is unhealthy, so the
 arbiter/safety layer can hand control to the reactive driver.
