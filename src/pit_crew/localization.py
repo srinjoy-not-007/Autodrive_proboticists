@@ -79,6 +79,23 @@ class ParticleFilter(Node):
         self.lost_count = 0
         self.score = 0.0
         self.initialized = False
+        # Where to seed the particle cloud. The submission entrypoint does NOT
+        # pass init_x/init_y -- only run_stanley.sh does -- so the default has
+        # to be right on its own. It used to be (0.0, 0.0): on Porto the car
+        # spawns at (0.80, 3.16), which is 3.26 m away, more than five times
+        # init_spread, so every particle started somewhere the car had never
+        # been. Every test masked it because the test harness passed the pose.
+        #
+        # The start line is the first point of the centerline we have already
+        # loaded, which is track-agnostic and correct on a circuit nobody has
+        # seen. An explicit parameter still wins if given.
+        if (init_x, init_y) == (0.0, 0.0) and self.centerline is not None \
+                and len(self.centerline):
+            init_x, init_y = (float(self.centerline[0][0]),
+                              float(self.centerline[0][1]))
+            self.get_logger().info(
+                f'no init pose given; seeding at the centerline start '
+                f'({init_x:.2f}, {init_y:.2f})')
         self.init_xy = (init_x, init_y)
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)

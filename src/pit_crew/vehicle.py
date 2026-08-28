@@ -11,12 +11,16 @@ WHEEL_RADIUS = 0.059        # m
 MAX_STEER = 0.5236          # rad (±30°); steering_command is normalized [-1, 1]
 STEER_RATE = 3.2            # rad/s actuator slew
 TOP_SPEED = 22.88           # m/s (claimed; calibrate)
-# Read directly off the Unity rigidbody by tools/compare_sim_builds.py
-# (2026-08-23), not from the datasheet. The planner previously carried an
-# unsourced 3.906 kg; with drag_coeff=0 it cancels out of a
-# friction-limited velocity profile, so this is a correctness fix rather
-# than a performance one -- but it is measured and 3.906 was not.
-MASS = 3.47                 # kg
+# Total vehicle mass. The technical guide gives 3.906 kg = 3.470 sprung +
+# 0.436 unsprung, and compare_sim_builds.py reads 3.47 off the Unity rigidbody
+# because a Unity rigidbody carries only the SPRUNG mass -- the wheels are
+# WheelColliders with their own mass. A review flagged the planner's 3.906 as
+# "unsourced" and it was briefly changed to 3.47; that was wrong, 3.906 is the
+# figure a velocity profile wants. With drag_coeff=0 mass cancels out of a
+# friction-limited profile either way, so no line ever moved -- but the constant
+# should say what it means.
+MASS = 3.906                # kg, total (sprung + unsprung)
+SPRUNG_MASS = 3.470         # kg, what the Unity rigidbody reports
 
 # LiDAR geometry
 # Sensor mounting, measured directly out of the simulator's own scene with
