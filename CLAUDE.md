@@ -44,6 +44,7 @@ been measured.
 
 ```bash
 ./scripts/sim_restart_connect.sh                    # restart sim + click Connection, verify data flows
+VISIBLE=1 ./scripts/sim_restart_connect.sh          # ...on the real display, to watch a run (steals the pointer)
 CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping config
 ./scripts/stop_run.sh                               # stop nodes and zero the actuators
 ./scripts/new_track_drill.sh <name> <sim_tag> <s>   # the whole unseen-track pipeline, timed
@@ -76,7 +77,20 @@ colcon build --packages-select pit_crew --symlink-install
 
 - **Headless freezes the LiDAR.** `-batchmode -nographics` keeps publishing a
   *stale* scan forever — the LiDAR is GPU-raytraced and needs real rendering.
-  Run the sim windowed.
+- **The sim runs on Xvfb `:99` inside its own container, and that is faster.**
+  Not the frozen-LiDAR trap: Xvfb is a real X server, Unity really renders, and
+  the raytracer goes through CUDA — measured 10.97 Hz, ten consecutive scans all
+  distinct. It also stops the sim competing with the desktop compositor for the
+  GPU, worth **~0.4 s/lap**: the identical shipping config measured 101.2 s on
+  Aug 23 and **97.2 s** on Aug 28. **Never compare a lap time against a
+  pre-Aug-28 number** — only against one measured in the same session.
+- **There is no API to connect the sim; the button must be clicked.** Verified,
+  do not re-derive: `-ip`/`-port` only pre-fill the fields (zero
+  `WebSocket.Connect` attempts in the Unity log without a click), PlayerPrefs
+  hold only window geometry, and Unity ignores `xdotool --window` (XSendEvent).
+  Unity's UI also needs the pointer to *enter* the control and needs the press
+  and release in separate frames, so `mousemove away; mousemove on; mousedown;
+  sleep; mouseup` lands where `xdotool click` silently misses.
 - **LiDAR arrives at ~10 Hz**, not the 40 Hz on the spec sheet. Every sensor
   shares one WebSocket at ~10 Hz, so controllers dead-reckon the pose to "now".
 - **`lap_count` and `collision_count` are cumulative across runs**, resetting
@@ -144,7 +158,9 @@ TODO and validation gate.
 
 Shipping: safe centerline + MPC, **ay 3.5** / **ax 6.5** / brake 4.0 / jerk 20,
 with the controller's **`ay_limit`** capping steering by the grip that exists.
-Ten-lap race time 115.0 -> **101.2 s**.
+Ten-lap race time 115.0 -> 101.2 s, and **97.2 s** re-measured on Aug 28 after
+the sim moved to Xvfb (same line and controller — the gain is the measurement
+environment, not the car; see the gotcha above).
 
 | Track | Result |
 |---|---|
@@ -210,10 +226,22 @@ physics settings and an identical vehicle, checked asset-by-asset with
   telling it the tyres deliver less only makes it command more lock, deeper into
   saturation. `vehicle.achieved_curvature()` is correct and kept; it belongs in
   the **planner**, capping planned curvature at what the car can achieve.
-- **On Porto the geometry is settled.** The best optimized line beats the safe
-  centerline by 0.05 s of ideal lap while giving up 44% of its clearance and two
-  thirds of its steering reserve (`tools/sweep_lines.py`). All remaining lap time
-  is in the velocity profile.
+- **SUPERSEDED: "on Porto the geometry is settled" was wrong, but the
+  conclusion survives for a different reason.** That claim came from
+  `tools/sweep_lines.py`, whose grid stopped at `w_veh 0.32` and which ties
+  `--ax` to `--ay` instead of using the shipping profile. Swept properly, the
+  optimized line beats the centerline by **0.31 s** of ideal lap for **13%** of
+  its clearance (w_veh 0.44: 0.283 m, 9.28 s vs 0.325 m, 9.59 s), not 0.05 s for
+  44%. `make_track_lines.py` now sweeps `w_veh` per track.
+  **It still loses when driven**: 9.43 s median but 4 collisions in 38 laps, all
+  at its own tightest point, against 9.72 s clean — race 104.8 s vs 97.2 s. The
+  corrected-LiDAR map did not rescue it. Tighter lines also *track* worse:
+  driven/ideal 4.2% against the safe line's 1.4%.
+- **Offline ideal lap time mispredicts the driven ranking.** `race.csv` is
+  chosen by fastest ideal lap above `MIN_CLEARANCE`, and on Porto that rule
+  picked the line that drives *slower*. `MIN_CLEARANCE` is **0.30 m**, set from
+  what collides (0.283) and what does not (0.301, 0.325) — not from an error
+  budget. Do not lower it without driving what the lower floor admits.
 - **Do not re-tune the centering strength** of the centerline extractor —
   harder centering makes the line jagged and clearance *worse*.
 - `--kappa-bound` in `optimize_raceline.py` does nothing on Porto; the corridor

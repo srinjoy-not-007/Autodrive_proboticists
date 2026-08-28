@@ -29,7 +29,89 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 23, stopped for the day)
+## NEXT SESSION — START HERE (Aug 28)
+
+Worked through **Vidit Gupta's review** (`docs/Vidit Gupta/25 August/`). Full
+response, with every verdict re-derived against current main, is in
+`docs/reviews/vidit-gupta.md`. Six real defects fixed; the performance idea was
+real offline and lost when driven.
+
+**Two things here change how you read every other number in this file.**
+
+### 1. The simulator now runs on an offscreen display, and it is faster
+
+`sim_restart_connect.sh` runs the sim under **Xvfb :99 inside its own
+container** instead of on the host X server. Two reasons: it no longer hijacks
+the pointer of whoever is using the machine, and it does not compete with the
+desktop compositor for the GPU.
+
+The second one moved the numbers. The shipping config, byte-identical line and
+controller, measured **97.2 s** on Aug 28 against the **101.2 s** recorded on
+Aug 23. Every lap time in this file from before Aug 28 was measured under GPU
+contention and is **pessimistic by roughly 0.4 s/lap**.
+
+Rankings measured A/B inside one session are unaffected. **Cross-session
+comparisons against pre-Aug-28 numbers are not valid** — that mistake is what
+made a losing line look like a winner for an hour today.
+
+This is not the frozen-LiDAR trap (`-batchmode -nographics`). Xvfb is a real X
+server, Unity really renders, and the GPU raytracer is reached through CUDA:
+measured 10.97 Hz with ten consecutive scans all distinct. There is no API to
+connect the sim without a click — `-ip`/`-port` only pre-fill the fields, Unity
+PlayerPrefs hold no connection state, and Unity ignores XSendEvent — so the
+click is still a real click, just on a display nobody is looking at.
+`VISIBLE=1 ./scripts/sim_restart_connect.sh` puts it back on the real display
+for watching a run; it takes over the pointer, so only use it when asked.
+
+### 2. Offline ideal lap time mispredicts the driven ranking
+
+`make_track_lines.py` picks `race.csv` as the fastest **ideal** lap above the
+clearance floor. On Porto that rule chose a 9.28 s-ideal line over a 9.59 s-ideal
+one, and the 9.28 s line **drives slower** (9.43 s median with 4 collisions in
+38 laps, versus 9.72 s clean). With `MIN_CLEARANCE` at 0.22 m the pipeline would
+have shipped the worse line on a track nobody had driven.
+
+`MIN_CLEARANCE` is now **0.30 m**, from driven evidence rather than an error
+budget: 0.283 m collides, 0.301 m and 0.325 m do not. Porto selects `safe` again.
+Do not lower it without driving the line that the lower floor admits.
+
+### Measured Aug 28 — same session, same sim, 37-40 laps each
+
+| config | median | best | collisions | 10-lap race |
+|---|---|---|---|---|
+| **`safe`, ay 3.5 (shipping)** | **9.72 s** | 9.59 s | **0 / 37** | **97.2 s** |
+| `w_veh 0.44` @ scale 0.97 | 9.69 s | 9.52 s | 1 / 40 | 99.4 s |
+| `w_veh 0.44` @ scale 1.00 | 9.43 s | **9.29 s** | 4 / 38 | 104.8 s |
+| corrected LiDAR map + `w_veh 0.52` | 9.90 s | 9.74 s | 0 / 37 | 99.0 s |
+
+`--w-veh` had never been pushed past its default and `sweep_lines.py`'s grid
+stopped at 0.32 (and tied `--ax` to `--ay`). That is where **"on Porto the
+geometry is settled" came from, and it was wrong** — the optimized line beats
+the centerline by 0.31 s of ideal lap for 13% of the clearance, not 0.05 s for
+44%. `make_track_lines.py` now sweeps `w_veh` per track and lets the gates
+choose. On ICRA every optimized line is still rejected on the steering lock.
+
+The line still loses when driven, because all four of its collisions are at its
+own tightest point, and because tighter lines track worse: driven/ideal is 1.4%
+on the safe line and 4.2% on the optimized one. The corrected-LiDAR map (lateral
+p95 0.155 -> 0.041 m) did not rescue it either.
+
+### What to do next
+
+1. **Do not chase lap time through line geometry on Porto.** It has now been
+   measured three ways and the plain centerline wins every time.
+2. The remaining honest gap is the **driven/ideal ratio on tight lines** — the
+   controller loses 4.2% on the optimized line against 1.4% on the safe one.
+   That is a tracking question, not a planning one, and it is the first thing
+   that has pointed at the controller in a while.
+3. Re-baseline anything you intend to compare against: pre-Aug-28 numbers are
+   ~0.4 s/lap pessimistic.
+4. Still untouched from Aug 23: run `new_track_drill.sh` on a genuinely fresh
+   `*-compete` track end to end, and cold-start the built submission image.
+
+---
+
+## HISTORICAL — START HERE as of Aug 23 (superseded by the Aug 28 section above)
 
 **Shipping: safe centerline + MPC, ay 3.5 / ax 6.5 / brake 4.0 / jerk 20, with
 `ay_limit` 4.5. Porto 101.2 s race, best 9.81 s; ICRA 17.95 s/lap; zero
