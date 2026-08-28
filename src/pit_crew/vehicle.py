@@ -158,15 +158,32 @@ class ThrottleController:
     """
 
     def __init__(self, kp: float = 0.0, ff_gain: float = 0.040,
-                 brake_gain: float = 0.6, idle: float = 0.005):
+                 brake_gain: float = 0.0, idle: float = 0.005,
+                 brake_deadband: float = 0.5):
         self.kp = kp
         self.ff = ff_gain
+        # Default 0.0: braking stays OFF unless a caller asks for it, so this
+        # change cannot alter any node that has not opted in.
         self.brake_gain = brake_gain
         self.idle = idle
+        self.brake_deadband = brake_deadband
 
     def command(self, v_target: float, v_meas: float = None) -> float:
+        """Throttle in [-1, 1]. Negative is braking.
+
+        The braking branch used to be gated behind `kp > 0`, and nothing sets
+        `kp`, so it was unreachable: every command was `ff*v_target + idle`,
+        which is strictly positive. The car had **no braking authority at all**
+        and shed speed only by coasting -- while the offline velocity profile
+        was built assuming 4.0 m/s2 of deceleration it could not produce.
+        Braking now depends on `brake_gain` alone, so it can be enabled without
+        also closing the proportional loop (which surges at 10 Hz).
+        """
         u = self.ff * v_target + self.idle
-        if v_meas is not None and self.kp > 0.0:
+        if v_meas is not None:
             err = v_target - v_meas
-            u = self.brake_gain * err if err < -0.5 else u + self.kp * err
+            if err < -self.brake_deadband and self.brake_gain > 0.0:
+                u = self.brake_gain * err          # negative -> braking
+            elif self.kp > 0.0:
+                u = u + self.kp * err
         return max(-1.0, min(1.0, u))

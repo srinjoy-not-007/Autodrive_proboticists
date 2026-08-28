@@ -35,3 +35,7 @@ data/racelines/*_w0.*_qc.png
 data/racelines/track_v2_c_*
 data/maps/track_v2_c.*
 data/maps/track_v2_c_*
+
+# ay-ladder experiment lines (docs/reviews/deepak-g.md). Regenerable via PROFILE.
+data/racelines/*_ay[0-9]*.csv
+data/racelines/*_ay[0-9]*_qc.png

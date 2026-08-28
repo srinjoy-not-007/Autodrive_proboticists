@@ -80,6 +80,7 @@ class MPCTracker(Node):
             ('max_predict_s', 0.35),
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
+            ('brake_gain', 0.3),         # real braking; 0 disables (see below)
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
@@ -91,7 +92,7 @@ class MPCTracker(Node):
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
-         self.brake_horizon, throttle_gain) = [x.value for x in p]
+         self.brake_horizon, throttle_gain, brake_gain) = [x.value for x in p]
         self.control_dt = 1.0 / control_hz
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
@@ -105,7 +106,15 @@ class MPCTracker(Node):
         self.kappa = ndimage.uniform_filter1d(rl[:, 4], size=2 * span + 1,
                                               mode='wrap')
 
-        self.throttle_ctl = vehicle.ThrottleController(ff_gain=throttle_gain)
+        # Braking is OFF by default. With brake_gain 0 the command is
+        # ff*v_target + idle, strictly positive -- the car sheds speed by
+        # coasting, while the offline profile assumes 4.0 m/s2 of braking.
+        # Enabling it feeds the ENCODER speed back (validated, scale
+        # 0.993/0.999) and lets the controller command negative throttle
+        # when it is above the profile by more than the deadband.
+        self.brake_gain = brake_gain
+        self.throttle_ctl = vehicle.ThrottleController(
+            ff_gain=throttle_gain, brake_gain=brake_gain)
         self.pose = None
         self.gyro_z = 0.0
         self.speed = 0.0            # commanded profile speed (throttle target)
@@ -409,6 +418,14 @@ class MPCTracker(Node):
         # leaves the rollout unable to evaluate committing to a larger angle,
         # and the cost differences between neighbouring candidates become
         # noise. Keep 4x. `reach_steps` exists to re-test, not to tune blindly.
+        #
+        # But that fixed the wrong variable. With reach_steps 4 and 9
+        # candidates the grid spacing is 2*(4*rate*dt)/8 = rate*dt, EXACTLY the
+        # step the applied command is clipped to below -- so however the search
+        # votes, only three applied values are reachable: one step left, hold,
+        # one step right. The search has 9 options and the actuator has 3.
+        # Range and resolution are separate knobs; keep the range that was
+        # measured to matter and buy resolution with `n_candidates` instead.
         reach = self.steer_rate * self.control_dt * self.reach_steps
         lo = max(-steer_cap, self.steer - reach)
         hi = min(steer_cap, self.steer + reach)
@@ -432,9 +449,10 @@ class MPCTracker(Node):
         self.speed = float(self.v_prof[idx].min()) * self.speed_scale
 
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
+        v_fb = self.speed_est.speed if self.brake_gain > 0.0 else None
         self.pub_throttle.publish(
             Float32(data=float(self.throttle_ctl.command(
-                self.speed * self.grip_scale))))
+                self.speed * self.grip_scale, v_fb))))
         self.pub_cte.publish(Float32(data=float(e_lat)))
 
     def publish(self, steer, throttle):

@@ -57,7 +57,23 @@ VENV = '.venv/bin/python'
 #   jerk 20   the lateral-jerk ceiling the clean shipping profile already met.
 # Measured with these: Porto 25 laps 0 collisions median 10.75 s (was 11.5),
 # ICRA 15 laps 0 collisions median 18.91 s (was 20.9).
-PROFILE = ['--ay', '3.5', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
+# ay 5.0, not the 3.5 that shipped until 2026-08-28. The old cap was set because
+# ay 4.0 collided 23 times and ay 5.0 collided 31 -- but that was measured while
+# the CONTROLLER HAD NO BRAKES: ThrottleController's braking branch was gated
+# behind kp>0, which nothing sets, so every throttle command was positive and
+# the car shed speed only by coasting. It could plan a corner-entry speed it had
+# no way to reach. With braking enabled (mpc `brake_gain`, default 0.3) the same
+# ay 5.0 profile runs perfectly clean. Driven, Porto, ~40 laps each:
+#     ay 3.5  9.72 s median  0 collisions   race 97.2 s   (no braking)
+#     ay 4.0  9.54 s         0              race 95.4 s
+#     ay 4.5  9.31 s         0              race 93.1 s
+#     ay 5.0  9.14 s         0              race 91.4 s   <-- optimum
+#     ay 5.5  9.20 s         0              race 92.0 s
+#     ay 6.0  9.44 s         0              race 94.4 s
+# ay 6.0 turning back is a real limit, not an artefact: past ~5 the car cannot
+# deliver the planned curvature and runs wide. Confirmed on ICRA, never tuned
+# on: 17.36 -> 16.53 s median, 0 collisions across 29 laps.
+PROFILE = ['--ay', '5.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
 
 # How much lateral margin the min-curvature QP is told to keep, in metres, on
 # top of the swept body footprint. It used to be left at the 0.16 default, and
@@ -140,6 +156,19 @@ MIN_TURN_R = 0.561      # wheelbase / tan(max steer)
 # better localization, so on an uncorrected map treat 0.30 as the edge rather
 # than a comfortable margin.
 MIN_CLEARANCE = 0.30
+
+# ...but 0.30 is derived entirely from PORTO collisions, and the finals track is
+# released three days before the deadline. On a genuinely narrow circuit every
+# candidate could sit below it, and refusing outright would abort the drill and
+# leave us with nothing but the reactive fallback.
+#
+# So the floor is two-tier. 0.30 is the EVIDENCE bar: above it, lines have been
+# driven clean here. ABSOLUTE_FLOOR is the PHYSICS bar and is not track-specific
+# — worst observed lateral localization error (0.196 m) plus the map's own
+# 0.025 m resolution. Below that the car cannot be kept off the wall by any
+# amount of good driving, so refusing is correct. Between the two, race the
+# roomiest line available and say loudly that it is unproven.
+ABSOLUTE_FLOOR = 0.22
 
 
 def ideal_lap(line_csv):
@@ -271,17 +300,37 @@ def main():
     # Race the fastest line that can actually cover our error budget.
     viable = [(k, v) for k, v in chosen.items()
               if isinstance(v, dict) and v.get('ok')]
-    if not viable:
-        sys.exit('no line clears the error budget on this track — '
-                 'widen the corridor or improve localization before racing')
-    kind, win = min(viable, key=lambda kv: kv[1]['lap'])
+    if viable:
+        kind, win = min(viable, key=lambda kv: kv[1]['lap'])
+    else:
+        # Nothing cleared the driven-evidence floor. Fall back to the ROOMIEST
+        # line above the physics floor rather than producing nothing -- but
+        # never to the fastest, because the whole reason we are here is that
+        # clearance is scarce, and ideal lap time has already been shown to
+        # mispredict which line actually drives better.
+        fallback = [(k, v) for k, v in chosen.items()
+                    if isinstance(v, dict) and not drivability(v['path'] + '.csv')
+                    and v['clearance'] >= ABSOLUTE_FLOOR]
+        if not fallback:
+            sys.exit(f'no drivable line reaches even the {ABSOLUTE_FLOOR:.2f} m '
+                     'physical floor on this track — race the reactive stack '
+                     '(PIT_CREW_MODE=reactive) rather than this map')
+        kind, win = max(fallback, key=lambda kv: kv[1]['clearance'])
+        print(f'*** WARNING: nothing cleared the {MIN_CLEARANCE:.2f} m evidence '
+              f'floor. Racing the roomiest drivable line instead '
+              f'({kind}, {win["clearance"]:.3f} m) — UNPROVEN, drive it before '
+              f'trusting it, and keep the reactive stack as the fallback.')
     subprocess.run(['cp', win['path'] + '.csv',
                     f'data/racelines/{track}_race.csv'], check=True)
     other = [f'{k} {v["lap"]:.2f} s' for k, v in viable if k != kind]
+    if not viable:
+        why = ' (roomiest drivable line; nothing cleared the evidence floor)'
+    elif other:
+        why = f' (beat {", ".join(other)})'
+    else:
+        why = ' (only candidate that cleared the budget)'
     print(f'race line: {kind} — ideal {win["lap"]:.2f} s, '
-          f'clearance {win["clearance"]:.3f} m'
-          + (f' (beat {", ".join(other)})' if other else
-             ' (only candidate that cleared the budget)'))
+          f'clearance {win["clearance"]:.3f} m' + why)
     wrote = ['centerline', 'safe', 'race'] + (['raceline'] if rl and rl['ok'] else [])
     print(f'wrote data/racelines/{track}_{{{",".join(sorted(wrote))}}}.csv')
 
