@@ -97,6 +97,18 @@ binding — the planned ay is.** Keep 4.5; do not re-sweep without a reason.
 
 1. Re-measure anything concluded pre-brakes (see below) — that is where the
    remaining time is, not in the steering cap.
+1b. **Submit different configs for the two phases.** Qualification is explicitly
+   speed-independent ("complete 10 laps; speed doesn't matter") while the final
+   is ranked purely on time — opposite risk profiles, and we currently ship one
+   config for both. Phase 1 (Sep 12): the most robust thing we have, since a
+   faster lap earns nothing and a collision only hurts. Phase 2 (Sep 19): the
+   fastest clean config. Selectable at runtime already via `PIT_CREW_MODE` /
+   `PIT_CREW_LINE` / `PIT_CREW_SPEED_SCALE`.
+1c. **Open TODO — teleport-robust centerline tracing.** Priyanshu's Fault 4
+   (excise the retry segment between a >0.5 m jump and the nearest past point).
+   Two earlier attempts were reverted for breaking the ICRA line, so START a
+   session with this, never end one with it, and gate it on
+   `./scripts/check_pipeline.sh`. Not near a deadline.
 2. Re-measure anything that was concluded pre-Aug-28 **with brakes on**. The
    grip watchdog, the optimized raceline, the corrected LiDAR map and the
    `w_veh` sweep were all evaluated against a car that could not slow down, so
