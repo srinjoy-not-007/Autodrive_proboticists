@@ -29,6 +29,61 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
+## NEXT SESSION — START HERE (Aug 29)
+
+Session ended abruptly mid-run. **Shipping state is committed and safe:
+Porto 91.4 s / ICRA 165.3 s, zero collisions.** Nothing is half-applied.
+
+### 1. Ship planner `--brake` 7.0 — validated, not yet shipped
+
+Driven Porto: **39 laps, 0 collisions, median 9.11 s, best 8.87 s -> 91.1 s**
+against the shipping 91.4 s. Change `PROFILE` in `tools/make_track_lines.py`
+from `--brake 4.0` to `7.0`, regenerate both tracks, run `check_pipeline.sh`.
+The 4.0 was chosen when the car physically could not brake.
+
+### 2. The lateral-jerk limiter has a real bug — the biggest lead
+
+`limit_lat_jerk` in `tools/optimize_raceline.py`, at a curvature **sign
+reversal**, computes `allowed = lim - |ay_small|`. That is usually negative, so
+`target` clamps to 0 and the speed is slammed to the `v_floor` of 0.5 m/s. It is
+effectively demanding the car nearly stop at every sign change. Measured, Porto,
+ay 5.0:
+
+| line | jerk off | jerk 20 |
+|---|---|---|
+| safe (ships) | ideal **8.27 s** | 8.51 s, v_min 2.10 at kappa 0.042 |
+| `w_veh 0.44` | ideal **7.89 s** | 8.58 s, **v_min 0.50 at kappa 0.028** |
+
+A 0.50 m/s minimum on a *nearly straight* section is not physical. **The on-track
+run testing jerk-off was interrupted and never completed — run it first.** If it
+is clean, either drop jerk limiting or fix the opposite-sign branch. It was
+introduced pre-brakes to cut ay-4.0 collisions 23 -> 10; with working brakes it
+may simply be unnecessary.
+
+### 3. Re-measurement backlog (everything below was judged pre-brakes)
+
+- **DONE — optimized raceline still loses with brakes.** `w_veh 0.44` at ay 5.0
+  drove 95.1 s with 1 collision in 37 laps, against the safe line's 91.1 s.
+  `MIN_CLEARANCE` 0.30 and the safe-centerline choice stand.
+- TODO: corrected-LiDAR map with brakes.
+- TODO: grip watchdog with brakes (low priority — lost in every configuration).
+- TODO: `--ax` 6.5 -> 7.1.
+
+### 4. Where the remaining time actually is
+
+Measured on the ay 5.0 race trace: the tyres deliver **0.95-0.96 of asked
+curvature** at every steering angle and never saturate, and the **sustained
+cornering limit is 4.64 m/s2** — right on the tyre's 4.91 asymptote. So lateral
+grip is genuinely maxed and the tracker is not the problem. The driven/ideal gap
+(1.4% at ay 3.5, **6.5%** at ay 5.0, 10.2% on ICRA) is the planner promising
+more than the tyre sustains. Remaining time is **longitudinal and in the
+planner** — items 1 and 2 above.
+
+Also still open: the teleport-excision centerline fix, and shipping different
+configs for the two phases (qualification is speed-independent).
+
+---
+
 ## NEXT SESSION — START HERE (Aug 28, late)
 
 **The controller could not brake, and that was the "grip ceiling".**
