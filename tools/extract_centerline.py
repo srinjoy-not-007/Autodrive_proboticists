@@ -142,7 +142,20 @@ def walk_cycle(skel, tx, ty, ox, oy, res):
                     if j is not None:
                         nbrs[i].append(j)
 
-    # Start where the car started, so orientation is decided on real evidence.
+    # The driven trajectory is the only evidence of what is actually drivable,
+    # so use it to break ties at junctions. 8-connectivity leaves a handful of
+    # degree-3 nodes, and on ICRA-2026 the flood-filled corridor also merges an
+    # infield passage into the skeleton: walking "straightest" there takes the
+    # shortcut, covers 69% of the cycle and cuts the corner. The infield is not
+    # on the trajectory, so preferring the branch nearest the driven path
+    # follows the real circuit instead.
+    from scipy.spatial import cKDTree
+    traj_px = np.column_stack([(np.asarray(ty) - oy) / res,
+                               (np.asarray(tx) - ox) / res])
+    ttree = cKDTree(traj_px)
+    near = ttree.query(pts.astype(float))[0]     # px distance, per skeleton node
+    tol = max(3.0, 0.5 / res)                    # within half a metre counts
+
     start = int(np.argmin((pts[:, 1] - (tx[0] - ox) / res) ** 2 +
                           (pts[:, 0] - (ty[0] - oy) / res) ** 2))
     best = []
@@ -155,9 +168,11 @@ def walk_cycle(skel, tx, ty, ox, oy, res):
             cand = [j for j in nbrs[cur] if j not in seen]
             if not cand:
                 break
-            # keep going straight: maximise the dot product with the last step
-            nxt = max(cand, key=lambda j: float(
-                (pts[j][0] - pts[cur][0]) * dy + (pts[j][1] - pts[cur][1]) * dx))
+            # on the trajectory first, then straightest among those
+            nxt = max(cand, key=lambda j: (
+                near[j] <= tol,
+                float((pts[j][0] - pts[cur][0]) * dy
+                      + (pts[j][1] - pts[cur][1]) * dx)))
             order.append(nxt)
             seen.add(nxt)
         if len(order) > len(best):
@@ -342,17 +357,30 @@ def main():
         # same skeleton. The second is what breaks the 2025 circuits -- their
         # net turn is a clean -1.00 and the line still doubles back once the
         # periodic spline is fitted through the repeated points.
+        # Trigger on SELF-OVERLAP, which is the failure that actually breaks a
+        # track, and not on net turn alone. Both 2025 circuits emitted ~1.7x
+        # the cycle length because consecutive shortest paths retread the same
+        # skeleton, and the periodic spline folds through the repeated points;
+        # nothing downstream can recover that. ICRA-2026's trace also folds
+        # (net turn -0.00) but at 1.01x, and `excise_spurs` plus the spline
+        # clean it up -- it has shipped that way for weeks. Walking the cycle
+        # there is strictly worse: the corridor merges an infield passage into
+        # the skeleton and the walk cuts across it, taking the line's minimum
+        # corridor width from 1.32 m to 0.05 m.
         turns = net_turn(order)
         overlap = len(order) / max(int(cyc.sum()), 1)
-        if abs(abs(turns) - 1.0) > 0.25 or overlap > 1.15:
-            print(f'  waypoint trace unusable (net turn {turns:+.2f} turns, '
-                  f'{overlap:.2f}x cycle length) -- walking the skeleton cycle')
+        if overlap > 1.15:
+            print(f'  waypoint trace retreads itself ({overlap:.2f}x cycle '
+                  f'length, net turn {turns:+.2f}) -- walking the cycle')
             order = walk_cycle(cyc, tx, ty, ox, oy, res)
             turns = net_turn(order)
             if abs(abs(turns) - 1.0) > 0.25:
                 sys.exit(f'centerline ordering failed: net turn {turns:+.2f} '
                          f'turns, expected +/-1. Refusing to emit a line that '
                          f'doubles back.')
+        elif abs(abs(turns) - 1.0) > 0.25:
+            print(f'  note: trace folds (net turn {turns:+.2f}) but does not '
+                  f'retread; spur excision and the periodic spline handle it')
         pts = np.stack([ox + order[:, 1] * res, oy + order[:, 0] * res], axis=1)
         print(f'centerline (skeleton): {len(pts)} pts, net turn {turns:+.2f}')
     else:
