@@ -80,7 +80,7 @@ class MPCTracker(Node):
             ('max_predict_s', 0.35),
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
-            ('brake_gain', 0.3),         # real braking; 0 disables (see below)
+            ('brake_gain', 0.05),        # real braking; 0 disables (see below)
             ('throttle_kp', 0.0),        # close the speed loop; 0 = open loop
             ('throttle_a_gain', 0.0),    # throttle per m/s2 of planned accel
         ])

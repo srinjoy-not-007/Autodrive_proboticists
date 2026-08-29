@@ -11,6 +11,23 @@ WHEEL_RADIUS = 0.059        # m
 MAX_STEER = 0.5236          # rad (±30°); steering_command is normalized [-1, 1]
 STEER_RATE = 3.2            # rad/s actuator slew
 TOP_SPEED = 22.88           # m/s (claimed; calibrate)
+# Calibrated plausibility bounds for the wheel-encoder derivative. The fastest
+# the car has ever been planned to go is 7.29 m/s and the fastest measured is
+# 6.58, so 9.0 leaves headroom without admitting nonsense; it reverses only
+# under the escape manoeuvre, at around 1 m/s.
+SPEED_MAX = 9.0             # m/s, largest believable forward wheel speed
+# The bound has to stay tight: the glitches run from -2 to -10.8 m/s with a
+# MEDIAN of -5.4, so loosening it to 9.0 lets most of them straight through
+# (measured: RMS back to 1.42 m/s from 0.46). Tightness alone is a trap in the
+# other direction -- the estimator then cannot SEE a real fast reverse, keeps
+# reporting a stale forward speed, and the brake goes on firing, which is what
+# drives the reverse. So the discriminator is not the magnitude but whether it
+# PERSISTS: reject an isolated excursion, believe a sustained one (clamped).
+REVERSE_MAX = 3.0           # m/s, largest believable reverse wheel speed
+MAX_ENC_GAP = 0.5           # s, older than this and we re-seed instead
+MAX_CONSEC_REJECT = 6       # rejections before we re-seed rather than hold
+BRAKE_MIN_SPEED = 1.0       # m/s below which a negative command is just reverse
+BRAKE_MAX = 0.45            # largest braking command, magnitude
 # Total vehicle mass. The technical guide gives 3.906 kg = 3.470 sprung +
 # 0.436 unsprung, and compare_sim_builds.py reads 3.47 off the Unity rigidbody
 # because a Unity rigidbody carries only the SPRUNG mass -- the wheels are
@@ -108,23 +125,61 @@ class SpeedEstimator:
         self.alpha = alpha          # low-pass factor for the derivative
         self.speed = 0.0            # m/s, filtered
         self._last = {}             # wheel -> (stamp_sec, position_rad)
+        self._per = {}              # wheel -> filtered speed for that wheel
+        self._rej = {}              # wheel -> consecutive rejected samples
         self.jumped = False         # set when a sample implies a teleport
 
     def update(self, wheel: str, stamp_sec: float, position_rad: float) -> float:
         last = self._last.get(wheel)
+        if last is None:
+            self._last[wheel] = (stamp_sec, position_rad)
+            return self.speed
+        dt = stamp_sec - last[0]
+        if dt <= 1e-4:
+            return self.speed                    # duplicate / out-of-order
+        if dt >= MAX_ENC_GAP:
+            self._last[wheel] = (stamp_sec, position_rad)
+            return self.speed                    # too stale to differentiate
+        v = WHEEL_RADIUS * (position_rad - last[1]) / dt
+        # Plausibility. `TOP_SPEED` is a spec CLAIM (22.88 m/s, and its own
+        # comment says "calibrate"), so the old bound of 1.1x it -- 25 m/s --
+        # rejected essentially nothing. Measured on a clean 120 s Porto run:
+        # the cumulative wheel angle steps BACKWARDS on 6.7% of samples, in
+        # pairs one sample apart, by up to 18.5 rad. Every one of those passed
+        # the old guard and was fed in as a speed down to -10.8 m/s.
+        if not -REVERSE_MAX <= v <= SPEED_MAX:
+            # Holding the reference is right for an isolated glitch and wrong
+            # for sustained motion outside the bounds: the estimate then
+            # freezes at its last good value and the controller steers by a
+            # stale number. Re-seed after a few consecutive rejections so the
+            # worst case is a short gap, not an indefinite lie.
+            self._rej[wheel] = self._rej.get(wheel, 0) + 1
+            if self._rej[wheel] >= MAX_CONSEC_REJECT:
+                # Persisted: this is motion, not a glitch. Believe it, clamped,
+                # so a car that really is reversing hard is reported as
+                # reversing instead of holding a stale forward speed forever.
+                self._last[wheel] = (stamp_sec, position_rad)
+                self._rej[wheel] = 0
+                cl = max(-REVERSE_MAX, min(SPEED_MAX, v))
+                self._per[wheel] = cl
+                self.speed = float(sum(self._per.values()) / len(self._per))
+                return self.speed
+            # Do NOT advance `_last` here. It used to be advanced before the
+            # check, so a rejected sample poisoned the NEXT one too: the
+            # recovery step then measured the whole glitch as real motion in
+            # the opposite direction. Holding the last good reference makes the
+            # next sample differentiate cleanly across the gap instead.
+            if abs(v) > SPEED_MAX * 2.0:
+                self.jumped = True               # a real teleport / reset
+            return self.speed
+        self._rej[wheel] = 0
         self._last[wheel] = (stamp_sec, position_rad)
-        if last is not None:
-            dt = stamp_sec - last[0]
-            if 1e-4 < dt < 0.5:
-                v = WHEEL_RADIUS * (position_rad - last[1]) / dt
-                # Reject teleports/encoder resets (checkpoint resets zero the
-                # encoders → derivative explodes); track can't exceed top speed
-                if abs(v) <= TOP_SPEED * 1.1:
-                    self.speed += self.alpha * (v - self.speed)
-                else:
-                    # Physically impossible derivative: a dropped or duplicated
-                    # sample rather than real motion.
-                    self.jumped = True
+        # One filter per wheel, then average. Both wheels used to feed a single
+        # shared filter alternately, so in a corner -- where the inner and outer
+        # wheels genuinely differ -- the estimate chattered between them.
+        self._per[wheel] = self._per.get(wheel, v) + self.alpha * (
+            v - self._per.get(wheel, v))
+        self.speed = float(sum(self._per.values()) / len(self._per))
         return self.speed
 
     def consume_jump(self) -> bool:
@@ -196,8 +251,19 @@ class ThrottleController:
         u = self.ff * v_target + self.idle + self.a_gain * max(a_target, 0.0)
         if v_meas is not None:
             err = v_target - v_meas
-            if err < -self.brake_deadband and self.brake_gain > 0.0:
-                u = self.brake_gain * err          # negative -> braking
+            if (err < -self.brake_deadband and self.brake_gain > 0.0
+                    and v_meas > BRAKE_MIN_SPEED):
+                # Negative throttle in this simulator is REVERSE DRIVE, not a
+                # brake pedal, so an unclamped `brake_gain * err` will happily
+                # drive the car backwards into a wall. That stayed hidden while
+                # the encoder speed read ~20% low and was mostly noise: braking
+                # barely fired. With the corrected estimator it fires properly,
+                # and unclamped it put the car in reverse for 52% of a run --
+                # 176 collisions. Two guards: never brake below a walking pace,
+                # where any negative command is just reverse; and cap the
+                # magnitude, because at 10 Hz the car can cross zero between
+                # samples however good the deadband is.
+                u = max(-BRAKE_MAX, self.brake_gain * err)
             elif self.kp > 0.0:
                 u = u + self.kp * err
         return max(-1.0, min(1.0, u))
