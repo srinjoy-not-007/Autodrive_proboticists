@@ -75,41 +75,75 @@ unproven**. The mechanism addresses the documented failure; it still needs a run
 that actually triggers it. FTG also needs a narrower bubble on tight tracks
 (`FTG_ARGS` in the drill).
 
-## CHECKPOINTS — improving race time, in priority order
+## CHECKPOINTS — race time (1-3 DONE Aug 30, outcomes below)
 
-All of these came out of measurement this week; none is speculative.
+Shipping is now **ay 4.5 / ax 6.5 / brake 4.0 / jerk 40**, re-validated by
+driving both tracks: Porto **91.1 s** (36 laps, 0 collisions) and ICRA-2026
+**165.6 s** (24 laps, 0 collisions).
 
-- [ ] **1. Fix the lateral-jerk limiter's sign-reversal branch — worth 1.5 s of
-      ideal lap at high grip.** `allowed = lim - |ay_small|` goes negative at a
-      curvature sign reversal and the speed clamps to the 0.5 m/s floor. Cost
-      scales with the ay cap: 0.24 s at ay 5.0, **1.5 s at ay 9.0** (ideal 8.1 s
-      vs 6.6 s). **Do not simply delete it** — it is accidentally the
-      corner-entry brake at Porto's s = 15.3 that keeps the lap clean; removing
-      it costs 3 collisions in 69 laps. Replace what it does, then remove it.
-- [ ] **2. Raise the ay cap once 1 is done.** Ideal lap at the winner's measured
-      ay 9.0 / ax 7.1 is **6.6 s** (safe line) and **6.2 s** (min-curvature) —
-      the published 6.53 s sits inside that band, so the geometry supports the
-      benchmark. Today ay 6.0 turns back because the car cannot deliver the
-      planned curvature.
-- [ ] **3. Close the tyre-limit control gap.** The tyre's 9.81 m/s2 peak sits at
-      0.01 slip and its asymptote is 4.91; we sustain 4.64. Using the peak needs
-      slip-regulated control. We sense at 10 Hz and drive the throttle open
-      loop. This is the real ceiling, and items 1-2 are worthless without it.
-- [ ] **4. Make the plan honest through Porto's s ~ 16 corner.** It produces
-      *every* collision in *every* configuration tried. Cross-track p95 is
-      0.18 m lap-wide and **0.31 m (0.59 m worst)** through that entry. Re-cut
-      the line locally to cut d(kappa)/ds, holding clearance >= 0.325 m.
-- [ ] **5. Cap planned curvature at `vehicle.achieved_curvature()` in the
-      PLANNER.** Documented as the right home for it, still not done. It is what
-      would make turn-in honest without the jerk limiter's accident.
-- [ ] **6. Do NOT chase the plan-tracking deficit.** Measured and closed: the
+- [x] **1. Jerk limiter fixed.** Across a sign change
+      |ay_big - ay_small| = |ay_big| + |ay_small|, so |ay_big| <= lim -
+      |ay_small|. The algebra was right, the remedy was not: when the SMALLER
+      side alone exceeds the budget the constraint is infeasible with it held
+      fixed, and the old code drove the other side to zero, clamping it to the
+      0.5 m/s floor, instead of reducing both. Splitting the budget is worth
+      0.3 s of ideal lap at ay 9.0. **The cap mattered more:** at j_max >= 40
+      the limiter stops binding (ay 5.0: 8.5 -> 8.2 s; ay 9.0: 7.8 -> 6.8 s).
+      j_max 20 was set pre-brakes and never revisited.
+- [x] **2. The ay cap cannot be raised — it had to be LOWERED, to 4.5.** At
+      j_max 20 the buggy branch was also the corner-entry brake into the
+      s ~ 16 corner; freeing the cap removes it, so the ay cap must do that job
+      honestly. Driven on Porto, one session:
+
+      ay 5.0 jerk 20 (old)  18 laps  0 coll  median 9.179   91.8 s
+      ay 5.0 jerk 40        33 laps  1 coll  median 8.944   92.5 s
+      ay 5.5 jerk 40        34 laps  8 coll  median 8.899  111.8 s
+      ay 4.8 jerk 40        37 laps  1 coll  median 8.979   92.5 s
+      ay 4.5 jerk 40        36 laps  0 coll  median 9.112   91.1 s  <-- ships
+
+      The collision threshold sits between 4.5 and 4.8, which is exactly the
+      measured 4.64 m/s2 sustained cornering limit. ay 5.5 buys 0.045 s of
+      median and pays 8 collisions for it.
+- [x] **3. Control resolution is NOT the limit — hypothesis disproved.** The
+      MPC's 9 candidates land exactly one rate-limit step apart, so only three
+      applied values are reachable. That was documented as a defect and never
+      tested. With 17 candidates: 36 laps, 0 collisions, median 9.165 against
+      9.112, means identical at 9.13/9.14. Do not spend more here.
+
+### What this means for the 6.53 s benchmark
+
+The geometry supports it (6.6 s ideal on the safe line at ay 9.0), and the
+planner no longer distorts the profile. **The binding constraint is now purely
+the tyre operating point.** We sustain 4.64 m/s2; the 9.81 peak sits at 0.01
+slip, on the rising side of the curve. Holding it needs slip regulation, and
+every sensor shares one WebSocket at ~10 Hz. Three independent things are now
+ruled out as the cause: the planner's optimizer, the tracker's fidelity
+(0.95-0.96 of asked curvature), and its steering resolution.
+
+### Remaining, in priority order
+
+- [ ] **4. Slip-regulated lateral control** — the only remaining route to the
+      envelope. Needs a slip estimate (IMU yaw rate + encoder speed + steer)
+      and a controller that regulates it rather than commanding curvature open
+      loop. High effort, uncertain, and the 10 Hz sensing may make it
+      impossible. Nothing else moves lap time materially.
+- [ ] **5. Make the plan honest through Porto's s ~ 16 corner.** It still
+      produces every collision above ay 4.5. Cross-track p95 is 0.18 m lap-wide
+      and 0.31 m (0.59 m worst) through that entry. Re-cut the line locally to
+      cut d(kappa)/ds, holding clearance >= 0.325 m.
+- [ ] **6. Cap planned curvature at `vehicle.achieved_curvature()` in the
+      PLANNER.** Still not done, still the documented right home for it.
+- [ ] **7. Do NOT chase the plan-tracking deficit.** Measured and closed: the
       car sits 0.35 m/s under its own plan and that is load-bearing.
       `throttle_kp` 0.08 goes bang-bang at 10 Hz (75 collisions);
-      `throttle_a_gain` 0.041 is stable but arrives at the s ~ 16 corner at plan
-      speed and cannot hold it (5 collisions, 102.5 s). Both knobs exist,
-      both default 0.
-- [ ] **7. Smaller, unfinished:** `--ax` 6.5 -> 7.1; corrected-LiDAR map with
-      brakes; grip watchdog with brakes (low — lost everywhere).
+      `throttle_a_gain` 0.041 is stable but cannot hold the s ~ 16 corner
+      (5 collisions, 102.5 s). Both knobs exist, both default 0.
+- [ ] **8. Prove the Follow-the-Gap direction lock.** It has never engaged in a
+      run. FTG is the RECON DRIVER, not just a fallback: it sets the racing
+      direction of every line we build, and a backwards recon means zero
+      counted laps however cleanly we drive.
+- [ ] **9. Smaller:** `--ax` 6.5 -> 7.1; corrected-LiDAR map with brakes; grip
+      watchdog with brakes (low — lost everywhere).
 
 ## SUPERSEDED — was START HERE (Aug 29, evening); still current on lap times
 
