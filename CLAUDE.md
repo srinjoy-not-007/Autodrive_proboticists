@@ -258,17 +258,25 @@ physics settings and an identical vehicle, checked asset-by-asset with
   within one 0.5 m/s step. **That grip is real and still unusable on track** —
   planning ay 5.0 gives 31 collisions, because breakaway is abrupt and we know
   our position to only 0.17 m.
-- **The offline pipeline fails on tracks we have not tuned on — 2 for 2.**
-  `2025-icra-compete` and `2025-cdc-tf-compete` both produce ZERO drivable lines,
-  one of them at 0.354 m clearance (comfortably over `MIN_CLEARANCE`). Cause is
-  the centerline tracer, not the track: the ordered line has **net turn 0 deg**
-  with reversals at exactly N/2 and N, i.e. it walks the corridor out and
-  retraces it. Both maps are committed as fixtures. This is the top priority —
-  it is the finals, not a lap time.
-- **Follow-the-Gap has no direction prior and will drive a circuit backwards.**
-  On 2025 ICRA it circulated 2.75 times at -990 deg net heading and the sim
-  counted **zero laps**. Shipping params: 0 laps, 16 collisions in 101 s.
-  Our only fallback would fail qualification there.
+- **FIXED (Aug 30): unseen tracks now work.** Both 2025 circuits produce a
+  drivable line and drive clean — SRL 2025 CDC-TF **20 laps, 0 collisions,
+  124.5 s**; SRL 2025 ICRA 17 laps, 5 collisions, 199.5 s; Porto 18 laps, 0
+  collisions, 91.8 s. Score any run the competition's way with
+  `tools/score_race.py <log> <centerline>`.
+- **The centerline tracer's failure was SELF-OVERLAP, not folding.** Trigger the
+  `walk_cycle` fallback on overlap ratio > 1.15 only. ICRA-2026's trace folds
+  (net turn -0.00) at 1.01x and is fine — `excise_spurs` and the spline clean it
+  up. Walking its cycle instead cuts across the infield leak and takes the
+  line's minimum corridor width from 1.32 m to 0.05 m. Do not "fix" that fold.
+- **A line tighter than the steering lock is not disqualifying.** It costs a
+  bounded apex deviation of (r_lock - r_line), charged against corner clearance
+  by `apex_deviation()`. Vetoing it outright cost us both 2025 circuits.
+- **Follow-the-Gap is a weak fallback on a narrow track**: 24 collisions in
+  194 s on 2025 ICRA, which would be a DQ. It also has no notion of travel
+  direction and has been seen to circulate a track backwards, which the sim
+  counts as zero laps. A gyro-based `direction_lock_s` was added but has **not
+  yet engaged in a run — unproven**. Use `FTG_ARGS` in the drill for a narrower
+  bubble on tight tracks.
 - **6.53 s is physically reachable on our own Porto geometry** — ideal lap at the
   winner's measured ay 9.0 / ax 7.1 is **6.6 s** on the safe centerline and
   **6.2 s** on the min-curvature line, *with lateral-jerk limiting off*. With it

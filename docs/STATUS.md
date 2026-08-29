@@ -29,81 +29,87 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 29, night) — THE PIPELINE FAILS ON UNSEEN TRACKS
+## NEXT SESSION — START HERE (Aug 30) — UNSEEN TRACKS NOW WORK
 
-**This overrides the lap-time work below. It is the only thing that matters.**
+The pipeline failure recorded below is **fixed and verified by driving**. Scored
+the competition's own way (1 warm-up + 10 scored laps, race = 10 x median +
+10 s per collision, >10 collisions = DQ) with `tools/score_race.py`:
 
-Tested the offline pipeline on the two genuinely unseen competition circuits we
-had never pulled (`2025-icra-compete`, `2025-cdc-tf-compete` — both verified
-distinct meshes, identical vehicle and tyre). **On both, every candidate line was
-rejected and the drill produced nothing drivable.** We are 2-for-2 on failure on
-tracks we have not tuned.
+| round | track | tuned? | laps | collisions | median | race | result |
+|---|---|---|---|---|---|---|---|
+| 1 qualification | Porto | yes | 18 | **0** | 9.179 s | **91.8 s** | PASS |
+| 2 finals | SRL 2025 CDC-TF | **never** | 20 | **0** | 12.451 s | **124.5 s** | PASS |
+| 2 finals (harder) | SRL 2025 ICRA | **never** | 17 | 5 | 17.012 s | 199.5 s | PASS |
 
-| track | recon | best safe-line clearance | result |
-|---|---|---|---|
-| Porto (tuned) | fine | 0.325 m | ships, 91.9 s |
-| SRL 2026 ICRA (tuned) | fine | 0.564 m | ships, 164.8 s |
-| **SRL 2025 ICRA** | circulated 2.75x | 0.293 m | **no drivable line** |
-| **SRL 2025 CDC-TF** | circulated 2.75x | **0.354 m** | **no drivable line** |
+Both 2025 circuits previously produced **no drivable line at all**. Three
+defects, all found using the two committed map fixtures:
 
-The CDC-TF line cleared `MIN_CLEARANCE` comfortably at 0.354 m and was still
-rejected. The reason is always the same and it is a **bug, not track geometry**:
+1. `trace_via_waypoints` chains Dijkstra shortest paths, and the shortest route
+   between two points on a loop may go either way round. It **retreads
+   itself**: both 2025 circuits emitted ~1.7x the cycle length, and the periodic
+   spline folds through the repeats. Detected by overlap ratio and handed to a
+   new `walk_cycle`, which walks the pruned skeleton directly (all four
+   skeletons are single components with zero endpoints, so the cycle was always
+   there). **Trigger on overlap, not on net turn** — ICRA-2026's trace also
+   folds, at 1.01x, and `excise_spurs` plus the spline have cleaned that up for
+   weeks; walking its cycle instead is strictly worse, because the corridor
+   merges an infield passage and the walk cuts across it (min corridor width
+   1.32 m -> 0.05 m).
+2. A line merely **tighter than the steering lock** was vetoed as hard as one
+   that doubles back. What tightness costs is a bounded apex deviation of
+   (r_lock - r_line) — 0.018 m and 0.074 m on these tracks — which now gets
+   charged against corner clearance. Only under half the lock is vetoed.
+3. `open_corners.py` is wired in as a fallback candidate, promoted only when the
+   plain centerline is not drivable. On these narrow tracks it loses (it halves
+   clearance and doubles the ideal lap), but it costs nothing to offer.
 
-```
-cdctf2025_c_safe_skeleton  N=646  reversals at [406, 515]   net turn    0 deg
-cdctf2025_safe_skeleton    N=655  reversals at [406, 521]   net turn    0 deg
-icra2025_c_safe_skeleton   N=992  reversals at [494, 990]   net turn   -0 deg
-icra2025_safe_skeleton     N=986  reversals at [491, 984]   net turn   -0 deg
-```
+Porto and ICRA-2026 are **byte-identical**; `check_pipeline.sh` passes.
 
-**Net turn 0 degrees.** A closed circuit must accumulate +/-360. The tracer walks
-the corridor out to one end and retraces it, so the reversals land at exactly
-N/2 and N. Porto and ICRA-2026 happen to skeletonize into clean single cycles;
-these two do not, and `trace_via_waypoints` folds them.
+### Still weak: the reactive fallback
 
-### Do this first, in this order
+Follow-the-Gap took 24 collisions in 194 s on 2025 ICRA — it would be
+disqualified. A direction lock was added (gyro-integrated heading, held for
+`direction_lock_s` after an escape, so the car cannot resume back down the
+track) but **it did not engage in that run — zero escapes — so it is
+unproven**. The mechanism addresses the documented failure; it still needs a run
+that actually triggers it. FTG also needs a narrower bubble on tight tracks
+(`FTG_ARGS` in the drill).
 
-1. **Make the centerline tracer produce a cycle or fail loudly.** Assert net
-   heading ~ +/-360 deg after ordering; if not, the ordering is wrong. Both new
-   maps are committed as fixtures (`data/maps/{icra2025,cdctf2025}{,_c}`) — the
-   concrete failing cases the two reverted attempts never had. Gate on
-   `./scripts/check_pipeline.sh`, which must keep Porto and ICRA byte-identical.
-2. **Give Follow-the-Gap a direction prior.** On 2025 ICRA it drove the loop
-   **backwards** — circulated 2.75 times, net heading -990 deg, and the sim
-   counted **zero laps** because laps only count in the racing direction. With
-   shipping params it also managed 0 laps / 16 collisions in 101 s; retuned
-   (`bubble_radius 0.22`, `extend_margin 0.18`, `fov 100`) it got 2 laps / 22
-   collisions in 204 s. **As it stands the reactive fallback would fail
-   qualification on that track outright.** It is our only fallback.
-3. `new_track_drill.sh` now gates on recon circulation (accumulated heading, not
-   `lap_count`, precisely because of the direction bug) and starts the race
-   logger during recon. `FTG_ARGS` passes recon overrides for a narrow track.
+## CHECKPOINTS — improving race time, in priority order
 
-### Is the 6.53 s winning lap reachable? Yes — and grip is not what stops us
+All of these came out of measurement this week; none is speculative.
 
-Ideal lap on OUR Porto geometry at the winner's measured envelope
-(ay 9.0 / ax 7.1, `--vmax 10`):
-
-| line | jerk 20 | jerk off |
-|---|---|---|
-| safe centerline | 8.1 s | **6.6 s** |
-| min-curvature raceline | — | **6.2 s** |
-
-The published 6.53 s sits inside that band, so the benchmark is real and the
-geometry supports it. Two things stand between us and it:
-
-- **The lateral-jerk limiter costs 1.5 s of ideal lap at high grip** (8.1 vs
-  6.6 s), because the sign-reversal branch slams `v_min` to the 0.50 m/s floor.
-  At ay 5.0 the same bug costs only 0.24 s and pays for itself in collisions
-  (see below) — its cost scales with the ay cap.
-- **The tyre's asymptote is 4.91 m/s2 and its 9.81 peak sits at 0.01 slip.**
-  Our sustained measured limit is 4.64. Using 9 m/s2 means holding the tyre on
-  the stable side of a peak 0.01 slip wide, which needs slip-regulated control;
-  we sense at 10 Hz and drive the throttle open loop.
-
-So the honest gap is: **not grip, not the tracker, not the planner's optimizer —
-it is control bandwidth at the tyre limit, plus a jerk limiter that is doing
-corner-entry braking by accident.**
+- [ ] **1. Fix the lateral-jerk limiter's sign-reversal branch — worth 1.5 s of
+      ideal lap at high grip.** `allowed = lim - |ay_small|` goes negative at a
+      curvature sign reversal and the speed clamps to the 0.5 m/s floor. Cost
+      scales with the ay cap: 0.24 s at ay 5.0, **1.5 s at ay 9.0** (ideal 8.1 s
+      vs 6.6 s). **Do not simply delete it** — it is accidentally the
+      corner-entry brake at Porto's s = 15.3 that keeps the lap clean; removing
+      it costs 3 collisions in 69 laps. Replace what it does, then remove it.
+- [ ] **2. Raise the ay cap once 1 is done.** Ideal lap at the winner's measured
+      ay 9.0 / ax 7.1 is **6.6 s** (safe line) and **6.2 s** (min-curvature) —
+      the published 6.53 s sits inside that band, so the geometry supports the
+      benchmark. Today ay 6.0 turns back because the car cannot deliver the
+      planned curvature.
+- [ ] **3. Close the tyre-limit control gap.** The tyre's 9.81 m/s2 peak sits at
+      0.01 slip and its asymptote is 4.91; we sustain 4.64. Using the peak needs
+      slip-regulated control. We sense at 10 Hz and drive the throttle open
+      loop. This is the real ceiling, and items 1-2 are worthless without it.
+- [ ] **4. Make the plan honest through Porto's s ~ 16 corner.** It produces
+      *every* collision in *every* configuration tried. Cross-track p95 is
+      0.18 m lap-wide and **0.31 m (0.59 m worst)** through that entry. Re-cut
+      the line locally to cut d(kappa)/ds, holding clearance >= 0.325 m.
+- [ ] **5. Cap planned curvature at `vehicle.achieved_curvature()` in the
+      PLANNER.** Documented as the right home for it, still not done. It is what
+      would make turn-in honest without the jerk limiter's accident.
+- [ ] **6. Do NOT chase the plan-tracking deficit.** Measured and closed: the
+      car sits 0.35 m/s under its own plan and that is load-bearing.
+      `throttle_kp` 0.08 goes bang-bang at 10 Hz (75 collisions);
+      `throttle_a_gain` 0.041 is stable but arrives at the s ~ 16 corner at plan
+      speed and cannot hold it (5 collisions, 102.5 s). Both knobs exist,
+      both default 0.
+- [ ] **7. Smaller, unfinished:** `--ax` 6.5 -> 7.1; corrected-LiDAR map with
+      brakes; grip watchdog with brakes (low — lost everywhere).
 
 ## SUPERSEDED — was START HERE (Aug 29, evening); still current on lap times
 

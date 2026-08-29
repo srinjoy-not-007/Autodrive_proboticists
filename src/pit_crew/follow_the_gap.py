@@ -11,7 +11,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from sensor_msgs.msg import LaserScan, JointState
+from sensor_msgs.msg import Imu, LaserScan, JointState
 from std_msgs.msg import Float32
 
 from pit_crew import vehicle
@@ -39,6 +39,7 @@ class FollowTheGap(Node):
             ('stuck_clearance', 0.45),      # m ahead that counts as stuck
             ('stuck_seconds', 1.5),         # how long before reversing out
             ('escape_seconds', 1.2),        # how long to reverse
+            ('direction_lock_s', 4.0),      # s after an escape to hold heading
             ('output_ns', ''),              # set to route via the arbiter
         ])
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
@@ -46,7 +47,21 @@ class FollowTheGap(Node):
          fov_deg, self.range_clip, self.steer_sign,
          self.steer_alpha, self.center_gain, throttle_gain,
          self.stuck_clearance, self.stuck_seconds,
-         self.escape_seconds, output_ns) = [x.value for x in p]
+         self.escape_seconds, self.dir_lock_s, output_ns) = [x.value for x in p]
+        # Heading integrated from the gyro, and the heading the car was
+        # travelling in before it got stuck. Follow-the-Gap has no notion of
+        # travel direction: measured on the 2025 ICRA circuit, it circulated
+        # 2.75 times at -990 deg net heading and the simulator counted ZERO
+        # laps, because laps only count in the racing direction. The car does
+        # not U-turn in one scan -- the per-scan forward bias below already
+        # stops that. It turns round during the reverse-out escape, which ends
+        # with the car pointing back the way it came and the deepest gap right
+        # in front of it. So remember where we were going and, for a few
+        # seconds after an escape, refuse gaps that point back down the track.
+        self.yaw = 0.0
+        self._yaw_t = None
+        self._committed_yaw = None
+        self._lock_until = 0.0
         self._steer_filt = 0.0
         self._stuck_since = None
         self._escape_until = None
@@ -62,6 +77,7 @@ class FollowTheGap(Node):
                          reliability=QoSReliabilityPolicy.BEST_EFFORT,
                          history=QoSHistoryPolicy.KEEP_LAST)
         ns = '/autodrive/roboracer_1'
+        self.create_subscription(Imu, f'{ns}/imu', self.on_imu, qos)
         self.create_subscription(LaserScan, f'{ns}/lidar', self.on_scan, qos)
         self.create_subscription(JointState, f'{ns}/left_encoder',
                                  lambda m: self.on_encoder('L', m), qos)
@@ -73,6 +89,12 @@ class FollowTheGap(Node):
         self.pub_throttle = self.create_publisher(Float32, th, 1)
 
         self.get_logger().info('Follow-the-Gap ready (v_max=%.1f m/s)' % self.v_max)
+
+    def on_imu(self, msg: Imu):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._yaw_t is not None:
+            self.yaw += float(msg.angular_velocity.z) * (now - self._yaw_t)
+        self._yaw_t = now
 
     def on_encoder(self, wheel, msg: JointState):
         # FTG deliberately ignores measured speed: it commands a fixed v_max
@@ -143,13 +165,27 @@ class FollowTheGap(Node):
                 right = float(np.median(r[(angles < math.radians(-20)) &
                                           (angles > math.radians(-90))]))
                 self._escape_steer = -1.0 if left > right else 1.0
-                self.get_logger().warn('stuck: reversing out')
+                self._lock_until = now + self.dir_lock_s
+                self.get_logger().warn(
+                    f'stuck: reversing out (holding heading '
+                    f'{math.degrees(self._committed_yaw or 0.0):.0f} deg)')
                 return
         else:
             self._stuck_since = None
+            if now >= self._lock_until:
+                self._committed_yaw = self.yaw   # healthy: this is our direction
 
         # Pick the deepest point of the widest free gap within the FOV
         free = (proc > self.bubble_r) & fov_mask
+        if now < self._lock_until and self._committed_yaw is not None:
+            # World-frame direction of each beam, relative to where we were
+            # going before the escape. Anything more than 90 deg off that is
+            # back down the track.
+            off = np.abs((self.yaw + angles - self._committed_yaw + math.pi)
+                         % (2 * math.pi) - math.pi)
+            keep = free & (off < math.pi / 2)
+            if keep.any():
+                free = keep
         best_idx = self._best_gap_point(free, proc)
         if best_idx is None:                       # boxed in: stop
             self._publish(0.0, 0.0)
