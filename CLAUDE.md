@@ -258,6 +258,26 @@ physics settings and an identical vehicle, checked asset-by-asset with
   within one 0.5 m/s step. **That grip is real and still unusable on track** —
   planning ay 5.0 gives 31 collisions, because breakaway is abrupt and we know
   our position to only 0.17 m.
+- **The car is under its own plan, and that is load-bearing.** Measured Aug 29:
+  it is below the planned speed on 62% of samples, by 0.96 m/s wherever the
+  profile asks ax > 3. Closing the gap makes it *slower*. `throttle_kp` 0.08
+  (closed loop) goes bang-bang at 10 Hz — 75 collisions, car reversing.
+  `throttle_a_gain` 0.041 (open-loop acceleration feedforward, measured from the
+  trace) is well behaved but arrives at the s ~ 16 corner at plan speed and
+  cannot hold it: 5 collisions, race 102.5 s against 91.9 s. Both knobs exist
+  and both default to 0.
+- **One corner produces every collision, in every configuration** —
+  (-1.84, -3.42), s ~ 16.2 on Porto, where kappa ramps 0.04 -> 0.38 in half a
+  metre. Cross-track p95 is 0.18 m lap-wide and 0.31 m (0.59 m worst) through
+  that entry. The remaining time is geometric, not longitudinal.
+- **SUPERSEDED: `--brake` 7.0 is ready to ship.** Over 78 laps it takes a
+  collision and its median gain is 0.05 s. Shipping brake 4.0 measured 91.9 s
+  against its 92.7 s in the same session. 39 laps was not enough evidence.
+- **The lateral-jerk limiter's bug is doing useful work.** At a curvature sign
+  reversal `allowed = lim - |ay_small|` collapses the plan to 2.10 m/s at
+  s = 15.3 — the entry to that corner. Removing the limiter is worth 0.22 s of
+  median and costs 3 collisions in 69 laps. Do not "fix" it without replacing
+  the corner-entry brake it accidentally provides.
 - **The grip watchdog works and loses.** Closed-loop breakaway detection
   (`grip_watchdog`) cuts collisions 31 -> 3 at ay 5.0 and 2 -> 0 at ay 4.0, and
   costs more race time than it saves in *every* configuration — at the shipping

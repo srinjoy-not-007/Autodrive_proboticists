@@ -81,6 +81,8 @@ class MPCTracker(Node):
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
             ('brake_gain', 0.3),         # real braking; 0 disables (see below)
+            ('throttle_kp', 0.0),        # close the speed loop; 0 = open loop
+            ('throttle_a_gain', 0.0),    # throttle per m/s2 of planned accel
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
@@ -92,12 +94,14 @@ class MPCTracker(Node):
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
-         self.brake_horizon, throttle_gain, brake_gain) = [x.value for x in p]
+         self.brake_horizon, throttle_gain, brake_gain,
+         throttle_kp, throttle_a_gain) = [x.value for x in p]
         self.control_dt = 1.0 / control_hz
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
         self.xy = rl[:, 1:3]
         self.v_prof = rl[:, 5]
+        self.a_prof = rl[:, 6] if rl.shape[1] > 6 else np.zeros(len(rl))
         seg = np.hypot(np.diff(self.xy[:, 0]), np.diff(self.xy[:, 1]))
         self.spacing = float(np.median(seg)) if len(seg) else 0.1
         span = max(1, int(round(0.5 / max(self.spacing, 1e-3))))
@@ -112,12 +116,23 @@ class MPCTracker(Node):
         # Enabling it feeds the ENCODER speed back (validated, scale
         # 0.993/0.999) and lets the controller command negative throttle
         # when it is above the profile by more than the deadband.
+        #
+        # `throttle_kp` closes the loop the other way. Measured on the Aug 29
+        # brake-7.0 race trace: the car sat BELOW its own plan on 62% of
+        # samples -- by 0.96 m/s wherever the profile asked for ax > 3, and by
+        # 1.2 m/s wherever it asked for more than 5 m/s. Feedforward alone
+        # encodes the target SPEED and knows nothing about the acceleration
+        # needed to reach it, so on every corner exit the car cruises out at
+        # the steady-state throttle for a speed it has not got yet. Default 0
+        # keeps the loop open unless a caller asks.
         self.brake_gain = brake_gain
         self.throttle_ctl = vehicle.ThrottleController(
-            ff_gain=throttle_gain, brake_gain=brake_gain)
+            ff_gain=throttle_gain, brake_gain=brake_gain, kp=throttle_kp,
+            a_gain=throttle_a_gain)
         self.pose = None
         self.gyro_z = 0.0
         self.speed = 0.0            # commanded profile speed (throttle target)
+        self.accel = 0.0            # planned longitudinal accel at the car
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         self.steer = 0.0
         self._trail = []            # (t, x, y) of the localized pose
@@ -447,12 +462,24 @@ class MPCTracker(Node):
         n_ahead = max(2, int(horizon / max(self.spacing, 1e-3)))
         idx = (i0 + np.arange(n_ahead)) % len(self.v_prof)
         self.speed = float(self.v_prof[idx].min()) * self.speed_scale
+        # Planned acceleration for the throttle feedforward. Only pay it when
+        # the braking horizon is NOT already holding the car back: `self.speed`
+        # above is the MINIMUM profile speed over the horizon, so on the run-up
+        # to a corner the target has already dropped while the plan's ax at the
+        # car is still positive. Feeding that forward adds throttle exactly
+        # where the car should be lifting -- measured, it put 12-14 collisions
+        # a run into the same corner complex that every other collision this
+        # session landed in.
+        here = float(self.v_prof[i0 % len(self.v_prof)]) * self.speed_scale
+        self.accel = (float(self.a_prof[i0 % len(self.a_prof)])
+                      if self.speed >= here - 1e-3 else 0.0)
 
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
-        v_fb = self.speed_est.speed if self.brake_gain > 0.0 else None
+        v_fb = (self.speed_est.speed
+                if self.brake_gain > 0.0 or self.throttle_ctl.kp > 0.0 else None)
         self.pub_throttle.publish(
             Float32(data=float(self.throttle_ctl.command(
-                self.speed * self.grip_scale, v_fb))))
+                self.speed * self.grip_scale, v_fb, self.accel))))
         self.pub_cte.publish(Float32(data=float(e_lat)))
 
     def publish(self, steer, throttle):

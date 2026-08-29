@@ -163,8 +163,17 @@ class ThrottleController:
 
     def __init__(self, kp: float = 0.0, ff_gain: float = 0.040,
                  brake_gain: float = 0.0, idle: float = 0.005,
-                 brake_deadband: float = 0.5):
+                 brake_deadband: float = 0.5, a_gain: float = 0.0):
         self.kp = kp
+        # Throttle per m/s2 of PLANNED acceleration -- open loop, so unlike kp
+        # it cannot oscillate against the 10 Hz feedback. Measured by least
+        # squares on the Aug 29 brake-7.0 race trace (7492 samples):
+        #   throttle = 0.0144*v + 0.0414*a + 0.055
+        # The binned form is blunter still: at 3-6 m/s a throttle of 0.18-0.30
+        # produced only +1.44 m/s2 where the profile was asking for 6.5, and
+        # the car sat 0.96 m/s under its own plan wherever ax > 3. Default 0.0
+        # so no caller changes behaviour without asking.
+        self.a_gain = a_gain
         self.ff = ff_gain
         # Default 0.0: braking stays OFF unless a caller asks for it, so this
         # change cannot alter any node that has not opted in.
@@ -172,7 +181,8 @@ class ThrottleController:
         self.idle = idle
         self.brake_deadband = brake_deadband
 
-    def command(self, v_target: float, v_meas: float = None) -> float:
+    def command(self, v_target: float, v_meas: float = None,
+                a_target: float = 0.0) -> float:
         """Throttle in [-1, 1]. Negative is braking.
 
         The braking branch used to be gated behind `kp > 0`, and nothing sets
@@ -183,7 +193,7 @@ class ThrottleController:
         Braking now depends on `brake_gain` alone, so it can be enabled without
         also closing the proportional loop (which surges at 10 Hz).
         """
-        u = self.ff * v_target + self.idle
+        u = self.ff * v_target + self.idle + self.a_gain * max(a_target, 0.0)
         if v_meas is not None:
             err = v_target - v_meas
             if err < -self.brake_deadband and self.brake_gain > 0.0:

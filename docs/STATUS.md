@@ -29,62 +29,91 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 29)
+## NEXT SESSION — START HERE (Aug 29, evening)
 
-Session ended abruptly mid-run. **Shipping state is committed and safe:
-Porto 91.4 s / ICRA 165.3 s, zero collisions.** Nothing is half-applied.
+**Shipping is unchanged and is still the best thing measured: safe centerline
++ MPC, ay 5.0 / ax 6.5 / brake 4.0 / jerk 20, `brake_gain` 0.3.** Everything
+tried this session lost. Three new knobs exist and all three default to OFF, so
+`check_pipeline.sh` reports the shipping lines byte-identical.
 
-### 1. Ship planner `--brake` 7.0 — validated, not yet shipped
+### The one finding that matters
 
-Driven Porto: **39 laps, 0 collisions, median 9.11 s, best 8.87 s -> 91.1 s**
-against the shipping 91.4 s. Change `PROFILE` in `tools/make_track_lines.py`
-from `--brake 4.0` to `7.0`, regenerate both tracks, run `check_pipeline.sh`.
-The 4.0 was chosen when the car physically could not brake.
+**The car is 0.35 m/s under its own plan on average, and that deficit is
+load-bearing.** Measured on the brake-7.0 race trace (7492 samples): it is below
+plan on 62% of samples, by **0.96 m/s** wherever the profile asks ax > 3 and by
+**1.2 m/s** wherever it asks for more than 5 m/s. Least squares gives
+`throttle = 0.0144*v + 0.0414*a + 0.055`, against a controller that commands
+`0.040*v + 0.005` and knows nothing about `a`.
 
-### 2. The lateral-jerk limiter has a real bug — the biggest lead
+That looks like free time. It is not. **Every attempt to make the car track its
+own plan more faithfully made it slower**, because the plan through one corner
+is already past what the car can hold and the under-delivery is what keeps it
+clean:
 
-`limit_lat_jerk` in `tools/optimize_raceline.py`, at a curvature **sign
-reversal**, computes `allowed = lim - |ay_small|`. That is usually negative, so
-`target` clamps to 0 and the speed is slammed to the `v_floor` of 0.5 m/s. It is
-effectively demanding the car nearly stop at every sign change. Measured, Porto,
-ay 5.0:
+| change | laps | collisions | median | race |
+|---|---|---|---|---|
+| **shipping** (brake 4.0, jerk 20) | 59 | **0** | 9.190 | **91.9 s** |
+| brake 7.0, jerk 20 | 78 | 1 | 9.140 | 92.7 s |
+| brake 7.0, jerk off | 69 | 3 | 8.920 | 93.5 s |
+| + accel feedforward `a_gain` 0.041, gated | 65 | 5 | 9.480 | 102.5 s |
+| + accel feedforward, ungated | ~20 | 14 | — | aborted |
+| + closed speed loop `throttle_kp` 0.08 | ~20 | 75 | — | aborted |
 
-| line | jerk off | jerk 20 |
-|---|---|---|
-| safe (ships) | ideal **8.27 s** | 8.51 s, v_min 2.10 at kappa 0.042 |
-| `w_veh 0.44` | ideal **7.89 s** | 8.58 s, **v_min 0.50 at kappa 0.028** |
+All measured in one session on Xvfb, so they are comparable to each other.
 
-A 0.50 m/s minimum on a *nearly straight* section is not physical. **The on-track
-run testing jerk-off was interrupted and never completed — run it first.** If it
-is clean, either drop jerk limiting or fix the opposite-sign branch. It was
-introduced pre-brakes to cut ay-4.0 collisions 23 -> 10; with working brakes it
-may simply be unnecessary.
+### What is settled now
 
-### 3. Re-measurement backlog (everything below was judged pre-brakes)
+- **Do not ship `--brake` 7.0.** Last session's 39 clean laps were not enough
+  evidence. Over 78 laps it takes a collision, and its median gain is 0.05 s —
+  noise. Race estimate is *worse* than shipping.
+- **Do not remove the lateral-jerk limiter.** Removing it is worth 0.22 s of
+  median but costs 3 collisions in 69 laps. The bug in it is real and now
+  understood: at a curvature sign reversal `allowed = lim - |ay_small|`, and on
+  the safe line that fires at **s = 15.3**, slamming the plan to 2.10 m/s. That
+  point is the entry to the s ~ 16 corner. **The bug is accidentally acting as
+  the corner-entry brake that keeps the lap clean.** Fixing it without replacing
+  what it does will reintroduce the collisions.
+- **Closed-loop speed control is confirmed unusable at 10 Hz.** `throttle_kp`
+  0.08 goes bang-bang: throttle saturated at ±1.0 on 62% of samples, full ±2.0
+  swings between steps, the car driving backwards into walls. The
+  `ThrottleController` docstring warned about exactly this and was right.
+- **Acceleration feedforward is open loop and still loses.** Ungated it adds
+  throttle while the braking horizon is already lifting; gated on the horizon it
+  is well behaved but the car simply arrives at the s ~ 16 corner at plan speed
+  and cannot hold it.
 
-- **DONE — optimized raceline still loses with brakes.** `w_veh 0.44` at ay 5.0
-  drove 95.1 s with 1 collision in 37 laps, against the safe line's 91.1 s.
-  `MIN_CLEARANCE` 0.30 and the safe-centerline choice stand.
-- TODO: corrected-LiDAR map with brakes.
-- TODO: grip watchdog with brakes (low priority — lost in every configuration).
-- TODO: `--ax` 6.5 -> 7.1.
+### Where the remaining time actually is
 
-### 4. Where the remaining time actually is
+**One corner produces every collision in every configuration** — (-1.84, -3.42),
+s ~ 16.2, where kappa ramps 0.04 -> 0.38 in half a metre. Lap-wide cross-track
+p95 is 0.18 m; through that entry it is **0.31 m with a 0.59 m worst case**, and
+the car is 1.05 m/s under plan at the apex while still running wide.
 
-Measured on the ay 5.0 race trace: the tyres deliver **0.95-0.96 of asked
-curvature** at every steering angle and never saturate, and the **sustained
-cornering limit is 4.64 m/s2** — right on the tyre's 4.91 asymptote. So lateral
-grip is genuinely maxed and the tracker is not the problem. The driven/ideal gap
-(1.4% at ay 3.5, **6.5%** at ay 5.0, 10.2% on ICRA) is the planner promising
-more than the tyre sustains. Remaining time is **longitudinal and in the
-planner** — items 1 and 2 above.
+So the next gain is **geometric, not longitudinal**: make the plan through
+s = 14-20 something the car can hold, rather than making the car chase a plan it
+cannot. Concretely, in order:
 
-Also still open: the teleport-excision centerline fix, and shipping different
-configs for the two phases (qualification is speed-independent).
+1. Re-cut the safe line locally through that corner to cut the curvature *rate*
+   (`tools/open_corners.py` maximises the smallest radius; what is needed here
+   is the smallest d(kappa)/ds), holding clearance at or above 0.325 m.
+2. Cap planned curvature at `vehicle.achieved_curvature()` **in the planner** —
+   still not done, still the documented right home for it. It is what would make
+   the plan honest at turn-in without the jerk limiter's accident.
+3. `--turn-in` (added this session, default 0) is a blunt first cut at the same
+   idea: it caps speed on the forward-window maximum curvature. Offline it costs
+   0.17-0.43 s of ideal lap and it did not target the entry sharply enough to be
+   worth driving on its own. Keep it as a comparison, not a candidate.
 
----
+### Still open from before
 
-## NEXT SESSION — START HERE (Aug 28, late)
+- Corrected-LiDAR map re-measured with brakes.
+- Grip watchdog re-measured with brakes (low priority — lost everywhere).
+- `--ax` 6.5 -> 7.1.
+- Teleport-excision centerline fix (Priyanshu Fault 4) — start a session with
+  it, gate on `check_pipeline.sh`, not near a deadline.
+- Two-phase submission: Phase 1 (Sep 12) robust, Phase 2 (Sep 19) fast.
+
+## SUPERSEDED — was START HERE (Aug 28, late); see the Aug 29 evening section above
 
 **The controller could not brake, and that was the "grip ceiling".**
 

@@ -86,6 +86,38 @@ def clearance_speed_cap(xy, kappa, map_prefix, per_metre):
     return np.maximum(worst, 0.0) * per_metre, worst
 
 
+def turn_in_kappa(kappa, el_lengths, window):
+    """Curvature the ay cap should be sized for, looking `window` metres ahead.
+
+    The velocity profile caps speed point-by-point on the curvature AT that
+    point, which implicitly assumes the car can be at the cornering attitude
+    the instant the corner starts. It cannot: it has to build steering angle
+    and let the tyres build slip, and until it has, the plan is asking for a
+    curvature the car is not yet producing.
+
+    Measured on Porto (Aug 29): every collision in two ~70-lap runs -- 1 in 78
+    with lateral jerk limiting, 3 in 69 without it -- happened at the SAME
+    corner, s ~ 16.2, where kappa ramps 0.04 -> 0.38 in half a metre. Lap-wide
+    cross-track p95 there was 0.18 m; through that entry it was 0.31 m with a
+    0.59 m worst case. The car was running wide on turn-in, not sliding at the
+    apex.
+
+    Replacing kappa with its forward-window maximum makes the cap bind `window`
+    metres early, which is a corner-entry brake that costs nothing on a
+    straight, nothing on corner exit, and nothing in a corner of constant
+    radius. It only ever reduces speed.
+    """
+    if window <= 0.0:
+        return kappa
+    ds = float(np.median(el_lengths))
+    n = max(1, int(round(window / max(ds, 1e-6))))
+    mag = np.abs(kappa)
+    ahead = np.max([np.roll(mag, -k) for k in range(n + 1)], axis=0)
+    # Keep the sign of the point itself: only the magnitude drives the ay cap,
+    # and the sign is what the jerk limiter reads to spot a real reversal.
+    return np.where(mag > 0, ahead * np.sign(kappa), ahead)
+
+
 def limit_lat_jerk(vx, kappa, el_lengths, j_max, ax_max, ax_brake,
                    rounds=40, v_floor=0.5):
     """Cap how fast lateral acceleration is allowed to change along the lap.
@@ -180,6 +212,11 @@ def main():
                     help='cap d(ay)/dt in m/s3. Off by default. The shipping '
                          'ay-3.0 profile peaks at 21 m/s3 and runs clean, so '
                          'that is the level known to be survivable.')
+    ap.add_argument('--turn-in', type=float, default=0.0,
+                    metavar='M',
+                    help='look this many metres ahead when applying the ay '
+                         'cap, so the car is already slow when a corner '
+                         'tightens. 0 disables (default).')
     ap.add_argument('--stepsize', type=float, default=0.10)
     ap.add_argument('--sweep-iters', type=int, default=2,
                     help='corridor shrink / re-optimize passes for body sweep')
@@ -283,9 +320,14 @@ def main():
                            np.full_like(v_steps, args.ax),
                            np.full_like(v_steps, args.ay)])
     ax_machines = np.column_stack([v_steps, np.full_like(v_steps, args.ax)])
+    kappa_cap = turn_in_kappa(kappa, el_lengths, args.turn_in)
+    if args.turn_in > 0.0:
+        n_early = int(np.sum(np.abs(kappa_cap) > np.abs(kappa) + 1e-9))
+        print(f'turn-in lookahead {args.turn_in:.2f} m: ay cap raised early at '
+              f'{n_early} of {len(kappa)} points')
     vx = tph.calc_vel_profile.calc_vel_profile(
         ggv=ggv, ax_max_machines=ax_machines, v_max=args.vmax,
-        kappa=kappa, el_lengths=el_lengths, closed=True,
+        kappa=kappa_cap, el_lengths=el_lengths, closed=True,
         drag_coeff=0.0, m_veh=VEHICLE_MASS)
     # Braking-aware acceleration profile
     vx_cl = np.append(vx, vx[0])
