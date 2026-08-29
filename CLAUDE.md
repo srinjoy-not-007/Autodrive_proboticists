@@ -277,6 +277,21 @@ physics settings and an identical vehicle, checked asset-by-asset with
   counts as zero laps. A gyro-based `direction_lock_s` was added but has **not
   yet engaged in a run — unproven**. Use `FTG_ARGS` in the drill for a narrower
   bubble on tight tracks.
+- **The wheel-encoder speed estimate was badly broken until Aug 30, and the
+  brake gain was tuned around it.** The cumulative wheel angle steps BACKWARDS
+  on 6.7% of samples (in pairs, up to 18.5 rad) and the old guard -- 1.1x the
+  *claimed* `TOP_SPEED` of 22.88 -- let every one through as a speed down to
+  -10.8 m/s. Against IPS: RMS 1.949 -> 0.489 m/s, corr 0.275 -> 0.898. Bounds
+  are now calibrated (+9.0/-3.0), `_last` only advances on an accepted sample,
+  and each wheel has its own filter. **Reject-only latches** -- it cannot see a
+  sustained reverse, so the brake keeps firing, which is what causes the
+  reverse; the discriminator is persistence (`MAX_CONSEC_REJECT` 6), not
+  magnitude.
+- **`brake_gain` is 0.05, not 0.3, and negative throttle is REVERSE DRIVE, not
+  a brake pedal.** 0.3 was tuned against the broken sensor, so braking barely
+  fired. With a correct sensor: 0.3 -> 176 collisions (throttle 52% negative);
+  0.3 plus a magnitude clamp and a low-speed guard -> 342; 0.10 -> 3; **0.05 ->
+  0 over 36 laps.** Do not raise it.
 - **The ay cap is 4.5, not 5.0, and the lateral-jerk cap is 40, not 20.** They
   changed together (Aug 30) and only make sense together: the jerk limiter's
   sign-reversal branch was infeasible AND was accidentally the corner-entry

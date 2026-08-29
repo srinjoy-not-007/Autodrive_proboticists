@@ -120,6 +120,32 @@ every sensor shares one WebSocket at ~10 Hz. Three independent things are now
 ruled out as the cause: the planner's optimizer, the tracker's fidelity
 (0.95-0.96 of asked curvature), and its steering resolution.
 
+### Encoders (Aug 30) — the sensor was broken; race time is unchanged
+
+The `SpeedEstimator` that the MPC's braking and the particle filter's motion
+model both read was measured against IPS ground truth for the first time:
+
+|  | bias | RMS | p95 abs | scale | corr |
+|---|---|---|---|---|---|
+| before | -0.608 | 1.949 | 5.570 | 0.785 | 0.275 |
+| after | -0.171 | **0.489** | **1.110** | 0.937 | **0.898** |
+
+The cumulative wheel angle steps backwards on **6.7%** of samples, in pairs one
+apart, by up to 18.5 rad; the guard was 1.1x the *claimed* `TOP_SPEED` of
+22.88 m/s and let all of them through as speeds down to -10.8 m/s. `_last` was
+also advanced before the check, so each glitch poisoned the following sample
+too, and both wheels shared one filter.
+
+**Fixing it destabilised the car**, because `brake_gain` 0.3 was tuned against
+that broken signal — braking barely fired. Negative throttle here is reverse
+drive: at 0.3 the throttle went 52% negative and the car averaged -2.95 m/s,
+176 collisions. `brake_gain` is now **0.05**: Porto 36 laps 0 collisions
+**91.2 s**, ICRA-2026 24 laps 0 collisions **164.9 s**.
+
+**Race time is neutral.** What this buys is a correct sensor, a matching brake
+gain, and one latent latch removed — reject-only cannot see a sustained
+reverse, so the brake keeps firing, which is what causes the reverse.
+
 ### Remaining, in priority order
 
 - [ ] **4. Slip-regulated lateral control** — the only remaining route to the
