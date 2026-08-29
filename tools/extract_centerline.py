@@ -97,6 +97,76 @@ def excise_spurs(pts, min_gap=0.5, max_len=6.0):
     return pts[~drop] if drop.any() else pts
 
 
+def net_turn(pts):
+    """Total heading change around a closed order, in units of full turns.
+
+    A line that really goes round a circuit accumulates +/-1. A line that walks
+    the corridor out and retraces it accumulates 0 -- which is exactly what the
+    waypoint tracer produced on both untested competition circuits, folding at
+    precisely N/2 and N.
+    """
+    if len(pts) < 8:
+        return 0.0
+    d = np.diff(np.vstack([pts, pts[:1]]), axis=0)
+    hd = np.arctan2(d[:, 1], d[:, 0])
+    dh = (np.diff(np.concatenate([hd, hd[:1]])) + np.pi) % (2 * np.pi) - np.pi
+    return float(dh.sum() / (2 * math.pi))
+
+
+def walk_cycle(skel, tx, ty, ox, oy, res):
+    """Order a skeleton cycle by walking it, rather than chaining shortest paths.
+
+    `trace_via_waypoints` asks Dijkstra for the route between consecutive
+    waypoints, and the shortest route between two points on a loop is free to
+    go either way round. When it picks the wrong way the chained order doubles
+    back, and the result is a line with net turn 0 that every drivability gate
+    rejects. Measured on `2025-icra-compete` and `2025-cdc-tf-compete`: every
+    candidate line rejected, one of them at 0.354 m clearance.
+
+    The pruned skeleton on all four tracks we have is a single connected
+    component with NO endpoints and almost every node of degree 2 -- i.e. it
+    already is the cycle. So walk it: step to an unvisited neighbour, and where
+    a junction offers a choice (8-connectivity leaves a handful of degree-3
+    nodes) keep going as straight as possible, which follows the circuit rather
+    than turning into a stub.
+    """
+    ys, xs = np.nonzero(skel)
+    pts = np.stack([ys, xs], axis=1)
+    idx_of = {(int(y), int(x)): i for i, (y, x) in enumerate(pts)}
+    nbrs = [[] for _ in range(len(pts))]
+    for i, (y, x) in enumerate(pts):
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy or dx:
+                    j = idx_of.get((int(y) + dy, int(x) + dx))
+                    if j is not None:
+                        nbrs[i].append(j)
+
+    # Start where the car started, so orientation is decided on real evidence.
+    start = int(np.argmin((pts[:, 1] - (tx[0] - ox) / res) ** 2 +
+                          (pts[:, 0] - (ty[0] - oy) / res) ** 2))
+    best = []
+    for first in nbrs[start]:               # try each way round; keep the longer
+        order = [start, first]
+        seen = {start, first}
+        while True:
+            cur, prev = order[-1], order[-2]
+            dy, dx = pts[cur] - pts[prev]
+            cand = [j for j in nbrs[cur] if j not in seen]
+            if not cand:
+                break
+            # keep going straight: maximise the dot product with the last step
+            nxt = max(cand, key=lambda j: float(
+                (pts[j][0] - pts[cur][0]) * dy + (pts[j][1] - pts[cur][1]) * dx))
+            order.append(nxt)
+            seen.add(nxt)
+        if len(order) > len(best):
+            best = order
+    frac = len(best) / max(len(pts), 1)
+    print(f'  cycle walk: {len(best)}/{len(pts)} skeleton px ({frac:.0%})')
+    return np.array(pts[best], dtype=float)
+
+
 def trace_via_waypoints(skel, tx, ty, ox, oy, res, n_wp=10):
     """Order the centerline by chaining skeleton shortest paths through
     waypoints taken from the driven trajectory (in driving order).
@@ -260,8 +330,31 @@ def main():
         cyc = prune_to_cycle(skel)
         print(f'skeleton px: {skel.sum()}, after spur pruning: {cyc.sum()}')
         order = trace_via_waypoints(cyc, tx, ty, ox, oy, res)
+        # Validate the ORDER, not the geometry. The waypoint tracer is kept as
+        # the default because it is what Porto and ICRA-2026 ship on and it is
+        # robust to corridor leaks; it is simply not always a loop. When it is
+        # not, walk the cycle instead. Only tracks that were already broken can
+        # change here, so shipping lines stay byte-identical.
+        # Two ways the waypoint trace goes wrong, and both have to be caught:
+        # it can fold (net turn 0 instead of +/-1), and it can go round the
+        # right way while OVERLAPPING itself, emitting 1.7x more points than
+        # the cycle has pixels because consecutive shortest paths retread the
+        # same skeleton. The second is what breaks the 2025 circuits -- their
+        # net turn is a clean -1.00 and the line still doubles back once the
+        # periodic spline is fitted through the repeated points.
+        turns = net_turn(order)
+        overlap = len(order) / max(int(cyc.sum()), 1)
+        if abs(abs(turns) - 1.0) > 0.25 or overlap > 1.15:
+            print(f'  waypoint trace unusable (net turn {turns:+.2f} turns, '
+                  f'{overlap:.2f}x cycle length) -- walking the skeleton cycle')
+            order = walk_cycle(cyc, tx, ty, ox, oy, res)
+            turns = net_turn(order)
+            if abs(abs(turns) - 1.0) > 0.25:
+                sys.exit(f'centerline ordering failed: net turn {turns:+.2f} '
+                         f'turns, expected +/-1. Refusing to emit a line that '
+                         f'doubles back.')
         pts = np.stack([ox + order[:, 1] * res, oy + order[:, 0] * res], axis=1)
-        print(f'centerline (skeleton): {len(pts)} pts')
+        print(f'centerline (skeleton): {len(pts)} pts, net turn {turns:+.2f}')
     else:
         pts = centerline_from_trajectory(tx, ty, corridor, res, ox, oy)
         print(f'centerline (trajectory-anchored): {len(pts)} pts '

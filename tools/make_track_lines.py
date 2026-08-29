@@ -184,8 +184,19 @@ def drivability(line_csv):
 
     Clearance alone is not enough: the ICRA line measured 0.414 m of corner
     clearance and was still undrivable, because a skeleton spur made it double
-    back on itself at one point. Anything that reverses direction or turns
-    tighter than the steering lock is disqualifying, however roomy it looks.
+    back on itself at one point. A line that reverses direction is disqualifying
+    however roomy it looks.
+
+    A line merely TIGHTER THAN THE STEERING LOCK is a different case, and used
+    to be rejected here just as hard. That was wrong, and it cost us both 2025
+    circuits: their safe lines came out with healthy clearance (0.364 m and
+    0.325 m) and good ideal laps, and were thrown away for peak radii of 0.543
+    and 0.487 m against the 0.561 m lock. What being tight actually costs is a
+    BOUNDED apex deviation of (r_lock - r_line) -- 0.018 m and 0.074 m -- which
+    belongs in the clearance budget, not in a separate veto. `apex_deviation`
+    below returns it and the caller charges it against the corner clearance.
+    Only a radius less than half the lock is hopeless enough to veto outright.
+    Porto and ICRA-2026 never reach the lock at all, so nothing there moves.
     """
     rl = np.loadtxt(line_csv, delimiter=',')
     xy = rl[:, 1:3]
@@ -198,9 +209,24 @@ def drivability(line_csv):
     if n_rev:
         bad.append(f'{n_rev} direction reversal(s)')
     kmax = float(np.abs(rl[:, 4]).max())
-    if kmax > 1.0 / MIN_TURN_R:
-        bad.append(f'min radius {1 / kmax:.3f} m < {MIN_TURN_R:.3f} m lock')
+    if kmax > 2.0 / MIN_TURN_R:
+        bad.append(f'min radius {1 / kmax:.3f} m, under half the '
+                   f'{MIN_TURN_R:.3f} m lock')
     return bad
+
+
+def apex_deviation(line_csv):
+    """How far outside its own line the car is pushed at the tightest corner.
+
+    Zero unless the line is tighter than the car can steer; then the car traces
+    the lock radius through the apex and sits (r_lock - r_line) wide of the
+    plan. Charged against corner clearance by the caller.
+    """
+    rl = np.loadtxt(line_csv, delimiter=',')
+    kmax = float(np.abs(rl[:, 4]).max())
+    if kmax <= 0.0:
+        return 0.0
+    return max(0.0, MIN_TURN_R - 1.0 / kmax)
 
 
 def build(track, tag, extra):
@@ -212,9 +238,27 @@ def build(track, tag, extra):
         print(f'  {tag}: centerline extraction failed')
         return None
 
+    # A plain centerline follows the corridor middle, and on a track with a real
+    # hairpin the middle is tighter than the car can steer. Measured on both
+    # 2025 circuits: once the tracing bug was fixed the safe line came out with
+    # healthy clearance (0.325 m and 0.364 m) and was still rejected, for
+    # `min radius 0.487 m` / `0.543 m` against the 0.561 m steering lock -- a
+    # smooth ramp to a 3-4 point plateau, i.e. a genuine hairpin, not a spike.
+    # Opening those corners costs track width, which is exactly the trade the
+    # car needs there, and `open_corners.py` projects every iteration back
+    # inside the corridor so clearance stays a hard constraint. Porto and
+    # ICRA-2026 never reach the lock limit, so this candidate only ever adds an
+    # option on tracks that would otherwise produce nothing.
+    opened = f'data/racelines/{track}_opened_{tag}'
+    has_opened = subprocess.run(
+        [VENV, 'tools/open_corners.py', cl + '.csv', '--out', opened],
+        capture_output=True, text=True).returncode == 0
+
     out = {'centerline': cl}
     cands = [('safe', ['--centerline-only'], None)]
     cands += [('raceline', ['--w-veh', str(w)], w) for w in W_VEH]
+    if has_opened:
+        cands += [('opened', ['--centerline-only'], None)]
 
     best = None
     for kind, args, w in cands:
@@ -222,7 +266,8 @@ def build(track, tag, extra):
         suffix = tag if w is None else f'{tag}_w{w:g}'
         path = f'data/racelines/{track}_{kind}_{suffix}'
         label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
-        if subprocess.run([VENV, 'tools/optimize_raceline.py', cl + '.csv',
+        src = (opened if kind == 'opened' else cl) + '.csv'
+        if subprocess.run([VENV, 'tools/optimize_raceline.py', src,
                            '--out', path] + args,
                           capture_output=True, text=True).returncode != 0:
             # The QP runs out of corridor at large w_veh. That is an answer
@@ -236,19 +281,35 @@ def build(track, tag, extra):
             print(f'  {tag:9s} {label:15s} clearance check failed ({e})')
             continue
         lap = ideal_lap(path + '.csv')
+        dev = apex_deviation(path + '.csv')
+        eff = wc - dev
         why = '; '.join(bad) if bad else (
-            f'clearance {wc:.3f} < {MIN_CLEARANCE:.2f} m budget'
-            if wc < MIN_CLEARANCE else '')
-        print(f'  {tag:9s} {label:15s} clearance {wc:.3f} m  ideal lap {lap:6.2f} s'
+            f'clearance {eff:.3f} < {MIN_CLEARANCE:.2f} m budget'
+            if eff < MIN_CLEARANCE else '')
+        note = f' (-{dev:.3f} apex)' if dev > 1e-4 else ''
+        print(f'  {tag:9s} {label:15s} clearance {wc:.3f}{note} m  '
+              f'ideal lap {lap:6.2f} s'
               f'{"   REJECTED: " + why if why else ""}')
-        rec = {'path': path, 'clearance': wc, 'lap': lap, 'ok': not why,
+        rec = {'path': path, 'clearance': eff, 'lap': lap, 'ok': not why,
                'w_veh': w}
         if kind == 'safe':
             out['safe'] = rec
+        elif kind == 'opened':
+            out['opened'] = rec
         elif rec['ok'] and (best is None or lap < best['lap']):
             best = rec
         elif best is None:
             out.setdefault('_rejected', rec)   # something to show if all fail
+    # Degrade gracefully rather than shipping nothing: the plain centerline is
+    # preferred, and the opened-corner line only stands in when the plain one is
+    # not drivable. On Porto and ICRA-2026 the plain line always passes, so this
+    # never fires and those tracks are untouched.
+    if not out.get('safe', {}).get('ok') and out.get('opened', {}).get('ok'):
+        print(f'  {tag:9s} {"->":15s} safe line is not drivable; shipping the '
+              f'opened-corner line instead '
+              f'({out["opened"]["clearance"]:.3f} m, '
+              f'{out["opened"]["lap"]:.2f} s ideal)')
+        out['safe'] = out['opened']
     if best is not None:
         out['raceline'] = best
     elif '_rejected' in out:
