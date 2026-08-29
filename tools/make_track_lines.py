@@ -74,7 +74,26 @@ VENV = '.venv/bin/python'
 # ay 6.0 turning back is a real limit, not an artefact: past ~5 the car cannot
 # deliver the planned curvature and runs wide. Confirmed on ICRA, never tuned
 # on: 17.36 -> 16.53 s median, 0 collisions across 29 laps.
-PROFILE = ['--ay', '5.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '20']
+# Aug 30: ay 5.0 -> 4.5 and jerk 20 -> 40, together. They only make sense
+# together. The lateral-jerk limiter's sign-reversal branch was infeasible --
+# it drove one side of the reversal to the 0.5 m/s floor instead of splitting
+# the budget -- and at j_max 20 that accident was ALSO the corner-entry brake
+# into Porto's s ~ 16 corner, the one that produces every collision. Fixing the
+# branch and freeing the cap (at j_max >= 40 it stops binding: ideal 8.5 -> 8.2 s
+# at ay 5.0) removes that accidental brake, so the ay cap has to do the job
+# honestly instead. Driven on Porto, one session, scored the competition's way:
+#
+#   ay 5.0  jerk 20 (old shipping)  18 laps  0 coll  median 9.179   91.8 s
+#   ay 5.0  jerk 40                 33 laps  1 coll  median 8.944   92.5 s
+#   ay 5.5  jerk 40                 34 laps  8 coll  median 8.899  111.8 s
+#   ay 4.8  jerk 40                 37 laps  1 coll  median 8.979   92.5 s
+#   ay 4.5  jerk 40                 36 laps  0 coll  median 9.112   91.1 s  <--
+#
+# The collision threshold sits between 4.5 and 4.8, which is exactly the
+# measured sustained cornering limit of 4.64 m/s2. Raising the cap does not
+# work even with the limiter fixed: ay 5.5 buys 0.045 s of median and pays 8
+# collisions for it.
+PROFILE = ['--ay', '4.5', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '40']
 
 # How much lateral margin the min-curvature QP is told to keep, in metres, on
 # top of the swept body footprint. It used to be left at the 0.16 default, and

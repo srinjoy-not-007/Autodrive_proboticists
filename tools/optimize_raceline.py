@@ -156,7 +156,27 @@ def limit_lat_jerk(vx, kappa, el_lengths, j_max, ax_max, ax_brake,
             if kap[big] < 1e-6:
                 continue                     # straight: ay is ~0 regardless of v
             same = sgn[big] == sgn[small]
-            allowed = lim[i] + abs(ay[small]) if same else lim[i] - abs(ay[small])
+            if same:
+                allowed = lim[i] + abs(ay[small])
+            else:
+                # Opposite signs: |ay_big - ay_small| = |ay_big| + |ay_small|,
+                # so |ay_big| <= lim - |ay_small|. The algebra is right and the
+                # remedy used to be wrong. When the SMALLER side alone already
+                # exceeds the budget the constraint is infeasible with it held
+                # fixed, and the old code drove `big` to zero -- clamping it to
+                # the 0.5 m/s floor -- instead of reducing both. Measured cost:
+                # 0.24 s of ideal lap at ay 5.0 and 1.5 s at ay 9.0, where it
+                # was pinning the plan to 0.5 m/s on nearly straight sections.
+                # Splitting the budget is the feasible answer and, like every
+                # other branch here, only ever reduces speed.
+                allowed = lim[i] - abs(ay[small])
+                if allowed < 0.0:
+                    half = 0.5 * lim[i]
+                    if kap[small] >= 1e-6:
+                        t_s = min(abs(ay[small]), half)
+                        v[small] = max(v_floor, math.sqrt(t_s / kap[small]))
+                        ay[small] = v[small] * v[small] * kappa[small]
+                    allowed = half
             target = min(abs(ay[big]), max(0.0, allowed))
             v[big] = max(v_floor, math.sqrt(target / kap[big]))
             ay[big] = v[big] * v[big] * kappa[big]
