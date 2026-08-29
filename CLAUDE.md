@@ -277,6 +277,17 @@ physics settings and an identical vehicle, checked asset-by-asset with
   counts as zero laps. A gyro-based `direction_lock_s` was added but has **not
   yet engaged in a run — unproven**. Use `FTG_ARGS` in the drill for a narrower
   bubble on tight tracks.
+- **The ay cap is 4.5, not 5.0, and the lateral-jerk cap is 40, not 20.** They
+  changed together (Aug 30) and only make sense together: the jerk limiter's
+  sign-reversal branch was infeasible AND was accidentally the corner-entry
+  brake into the s ~ 16 corner. Fixing it frees the profile, so the ay cap has
+  to do that job honestly. Driven: ay 4.5/j40 = 36 laps 0 collisions 91.1 s;
+  ay 4.8 = 1 collision; ay 5.5 = 8 collisions and 111.8 s. The threshold sits
+  at the measured 4.64 m/s2 sustained limit. **Raising ay does not work.**
+- **MPC steering resolution is NOT a limit — do not re-test.** 9 candidates land
+  one rate-limit step apart so only 3 applied values are reachable; that is real
+  but costs nothing. 17 candidates: median 9.165 vs 9.112, means identical,
+  both clean over 36 laps.
 - **6.53 s is physically reachable on our own Porto geometry** — ideal lap at the
   winner's measured ay 9.0 / ax 7.1 is **6.6 s** on the safe centerline and
   **6.2 s** on the min-curvature line, *with lateral-jerk limiting off*. With it
