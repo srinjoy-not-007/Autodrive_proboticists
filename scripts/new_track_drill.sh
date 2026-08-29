@@ -26,8 +26,19 @@ R="source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/se
 docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && cd /home/autodrive_devkit && colcon build --packages-select pit_crew --symlink-install 2>&1|tail -1"
 BAG="recon_${TRACK}_$(date +%H%M%S)"
+# FTG_ARGS lets a narrow track be reconned with a smaller safety bubble. The
+# defaults were tuned on Porto (0.67 m mean corridor); on the 2025 ICRA circuit
+# (0.63 m, and tighter in places) they close every gap, and the recon completed
+# ZERO laps -- which silently produced a map of only part of the track, whose
+# skeleton is a dead-end corridor rather than a cycle. The centerline tracer
+# then walked it out and back, and every candidate line was rejected for
+# "direction reversals". Stage 1b below now catches that instead of letting it
+# through.
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew follow_the_gap \
-    --ros-args --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml > /tmp/ftg.log 2>&1"
+    --ros-args --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml \
+    ${FTG_ARGS:-} > /tmp/ftg.log 2>&1"
+docker exec -d autodrive_roboracer_api /bin/bash -c "$R && python3 \
+    /home/autodrive_devkit/src/pit_crew/tools/race_logger.py > /tmp/logger.log 2>&1"
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 bag record -o /home/data/bags/${BAG} \
     /autodrive/roboracer_1/lidar /autodrive/roboracer_1/imu \
     /autodrive/roboracer_1/left_encoder /autodrive/roboracer_1/right_encoder \
@@ -44,6 +55,43 @@ docker exec autodrive_roboracer_api /bin/bash -c \
 # gate, and the stock ay 3.0 / ax 3.0 profile rather than the validated one. A
 # finals recon would have produced a slower, ungated line than the pipeline we
 # actually race. They now go through make_track_lines.py, which owns all of it.
+stage "1b/5 did the recon actually go round? a map is worthless otherwise"
+# Deliberately NOT the sim's lap_count. Follow-the-Gap has no notion of travel
+# direction, and on the 2025 ICRA circuit it drives the loop BACKWARDS: it
+# circulated 2.75 times in 225 s and the sim still reported zero laps, because
+# laps only count in the racing direction. Accumulated heading sees the
+# circulation either way. What it does catch is the failure that matters here:
+# a recon that never goes round produces a map of part of the track, whose
+# skeleton is a dead-end corridor, and the centerline tracer then walks it out
+# and back -- every candidate line rejected for "direction reversal(s)".
+RECON=$(.venv/bin/python - <<'PYEOF'
+import csv, glob, os, sys
+import numpy as np
+logs = sorted(glob.glob('data/logs/race_*.csv'), key=os.path.getmtime)
+rows = list(csv.DictReader(open(logs[-1]))) if logs else []
+if len(rows) < 50:
+    print('0 0 0'); sys.exit()
+xy = np.array([[float(r['x']), float(r['y'])] for r in rows])
+cc = [int(r['collision_count']) for r in rows]
+d = np.diff(xy, axis=0)
+hd = np.arctan2(d[:, 1], d[:, 0])
+dh = (np.diff(hd) + np.pi) % (2 * np.pi) - np.pi
+turns = abs(dh.sum()) / (2 * np.pi)
+print(f'{turns:.2f} {cc[-1]-cc[0]} {int(np.sign(dh.sum()))}')
+PYEOF
+)
+set -- $RECON
+TURNS="$1"; RECON_COLL="$2"; RECON_DIR="$3"
+echo "recon circulated ${TURNS} times (dir ${RECON_DIR}), ${RECON_COLL} collisions"
+if awk "BEGIN{exit !($TURNS < 1.5)}"; then
+    echo "RECON DID NOT GO ROUND (${TURNS} circuits) -- the map would cover only"
+    echo "part of the track and every line would be rejected for direction"
+    echo "reversals. Retry with a smaller safety bubble, e.g.:"
+    echo "  FTG_ARGS='-p bubble_radius:=0.22 -p extend_margin:=0.18 -p fov_limit_deg:=100.0' \\"
+    echo "    ./scripts/new_track_drill.sh $TRACK $TAG $RECORD_S"
+    exit 1
+fi
+
 stage "2/5 map (both sensor origins)"
 # The LiDAR sits 0.1933 m ahead of the pose point. Correcting for it sharpens
 # the map -- Porto wall pixels 6.53% -> 4.66% -- and was worth 1.6 s a race

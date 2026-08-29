@@ -258,6 +258,24 @@ physics settings and an identical vehicle, checked asset-by-asset with
   within one 0.5 m/s step. **That grip is real and still unusable on track** —
   planning ay 5.0 gives 31 collisions, because breakaway is abrupt and we know
   our position to only 0.17 m.
+- **The offline pipeline fails on tracks we have not tuned on — 2 for 2.**
+  `2025-icra-compete` and `2025-cdc-tf-compete` both produce ZERO drivable lines,
+  one of them at 0.354 m clearance (comfortably over `MIN_CLEARANCE`). Cause is
+  the centerline tracer, not the track: the ordered line has **net turn 0 deg**
+  with reversals at exactly N/2 and N, i.e. it walks the corridor out and
+  retraces it. Both maps are committed as fixtures. This is the top priority —
+  it is the finals, not a lap time.
+- **Follow-the-Gap has no direction prior and will drive a circuit backwards.**
+  On 2025 ICRA it circulated 2.75 times at -990 deg net heading and the sim
+  counted **zero laps**. Shipping params: 0 laps, 16 collisions in 101 s.
+  Our only fallback would fail qualification there.
+- **6.53 s is physically reachable on our own Porto geometry** — ideal lap at the
+  winner's measured ay 9.0 / ax 7.1 is **6.6 s** on the safe centerline and
+  **6.2 s** on the min-curvature line, *with lateral-jerk limiting off*. With it
+  on, 8.1 s: the sign-reversal bug costs **1.5 s of ideal lap at high grip**
+  (only 0.24 s at ay 5.0). What blocks the envelope is control bandwidth — the
+  tyre's 9.81 peak sits at 0.01 slip, its asymptote is 4.91, we sustain 4.64,
+  and we sense at 10 Hz with an open-loop throttle.
 - **The car is under its own plan, and that is load-bearing.** Measured Aug 29:
   it is below the planned speed on 62% of samples, by 0.96 m/s wherever the
   profile asks ax > 3. Closing the gap makes it *slower*. `throttle_kp` 0.08

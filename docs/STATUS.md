@@ -29,7 +29,83 @@ winning car's demonstrated envelope.
 Sources: [ICRA 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/),
 [CDC-TF 2025 results](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/)
 
-## NEXT SESSION — START HERE (Aug 29, evening)
+## NEXT SESSION — START HERE (Aug 29, night) — THE PIPELINE FAILS ON UNSEEN TRACKS
+
+**This overrides the lap-time work below. It is the only thing that matters.**
+
+Tested the offline pipeline on the two genuinely unseen competition circuits we
+had never pulled (`2025-icra-compete`, `2025-cdc-tf-compete` — both verified
+distinct meshes, identical vehicle and tyre). **On both, every candidate line was
+rejected and the drill produced nothing drivable.** We are 2-for-2 on failure on
+tracks we have not tuned.
+
+| track | recon | best safe-line clearance | result |
+|---|---|---|---|
+| Porto (tuned) | fine | 0.325 m | ships, 91.9 s |
+| SRL 2026 ICRA (tuned) | fine | 0.564 m | ships, 164.8 s |
+| **SRL 2025 ICRA** | circulated 2.75x | 0.293 m | **no drivable line** |
+| **SRL 2025 CDC-TF** | circulated 2.75x | **0.354 m** | **no drivable line** |
+
+The CDC-TF line cleared `MIN_CLEARANCE` comfortably at 0.354 m and was still
+rejected. The reason is always the same and it is a **bug, not track geometry**:
+
+```
+cdctf2025_c_safe_skeleton  N=646  reversals at [406, 515]   net turn    0 deg
+cdctf2025_safe_skeleton    N=655  reversals at [406, 521]   net turn    0 deg
+icra2025_c_safe_skeleton   N=992  reversals at [494, 990]   net turn   -0 deg
+icra2025_safe_skeleton     N=986  reversals at [491, 984]   net turn   -0 deg
+```
+
+**Net turn 0 degrees.** A closed circuit must accumulate +/-360. The tracer walks
+the corridor out to one end and retraces it, so the reversals land at exactly
+N/2 and N. Porto and ICRA-2026 happen to skeletonize into clean single cycles;
+these two do not, and `trace_via_waypoints` folds them.
+
+### Do this first, in this order
+
+1. **Make the centerline tracer produce a cycle or fail loudly.** Assert net
+   heading ~ +/-360 deg after ordering; if not, the ordering is wrong. Both new
+   maps are committed as fixtures (`data/maps/{icra2025,cdctf2025}{,_c}`) — the
+   concrete failing cases the two reverted attempts never had. Gate on
+   `./scripts/check_pipeline.sh`, which must keep Porto and ICRA byte-identical.
+2. **Give Follow-the-Gap a direction prior.** On 2025 ICRA it drove the loop
+   **backwards** — circulated 2.75 times, net heading -990 deg, and the sim
+   counted **zero laps** because laps only count in the racing direction. With
+   shipping params it also managed 0 laps / 16 collisions in 101 s; retuned
+   (`bubble_radius 0.22`, `extend_margin 0.18`, `fov 100`) it got 2 laps / 22
+   collisions in 204 s. **As it stands the reactive fallback would fail
+   qualification on that track outright.** It is our only fallback.
+3. `new_track_drill.sh` now gates on recon circulation (accumulated heading, not
+   `lap_count`, precisely because of the direction bug) and starts the race
+   logger during recon. `FTG_ARGS` passes recon overrides for a narrow track.
+
+### Is the 6.53 s winning lap reachable? Yes — and grip is not what stops us
+
+Ideal lap on OUR Porto geometry at the winner's measured envelope
+(ay 9.0 / ax 7.1, `--vmax 10`):
+
+| line | jerk 20 | jerk off |
+|---|---|---|
+| safe centerline | 8.1 s | **6.6 s** |
+| min-curvature raceline | — | **6.2 s** |
+
+The published 6.53 s sits inside that band, so the benchmark is real and the
+geometry supports it. Two things stand between us and it:
+
+- **The lateral-jerk limiter costs 1.5 s of ideal lap at high grip** (8.1 vs
+  6.6 s), because the sign-reversal branch slams `v_min` to the 0.50 m/s floor.
+  At ay 5.0 the same bug costs only 0.24 s and pays for itself in collisions
+  (see below) — its cost scales with the ay cap.
+- **The tyre's asymptote is 4.91 m/s2 and its 9.81 peak sits at 0.01 slip.**
+  Our sustained measured limit is 4.64. Using 9 m/s2 means holding the tyre on
+  the stable side of a peak 0.01 slip wide, which needs slip-regulated control;
+  we sense at 10 Hz and drive the throttle open loop.
+
+So the honest gap is: **not grip, not the tracker, not the planner's optimizer —
+it is control bandwidth at the tyre limit, plus a jerk limiter that is doing
+corner-entry braking by accident.**
+
+## SUPERSEDED — was START HERE (Aug 29, evening); still current on lap times
 
 **Shipping is unchanged and is still the best thing measured: safe centerline
 + MPC, ay 5.0 / ax 6.5 / brake 4.0 / jerk 20, `brake_gain` 0.3.** Everything
