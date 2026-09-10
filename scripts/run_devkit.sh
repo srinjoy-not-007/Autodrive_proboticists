@@ -17,7 +17,7 @@ docker rm -f autodrive_roboracer_api 2>/dev/null || true
 # (These must also go into the submission Dockerfile — task #12.)
 install_deps() {
     docker exec autodrive_roboracer_api /bin/bash -c \
-        "python3 -c 'import scipy' 2>/dev/null || pip3 install -q scipy >/dev/null 2>&1; \
+        "python3 -c 'import scipy' 2>/dev/null || pip3 install -q 'numpy<2' 'scipy==1.10.1' >/dev/null 2>&1; \
          which xdotool >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq xdotool imagemagick) >/dev/null 2>&1; true"
 }
 

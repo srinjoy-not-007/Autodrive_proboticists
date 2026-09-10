@@ -192,15 +192,36 @@ class ParticleFilter(Node):
         self.speed_cmd = max(0.0, float(msg.data)) * self.throttle_to_mps
 
     def on_imu(self, msg: Imu):
+        q = msg.orientation
+        if not all(math.isfinite(v) for v in (q.x, q.y, q.z, q.w)):
+            return
         self.imu_yaw = yaw_from_quat(msg.orientation)
+        self.imu_received = self.get_clock().now().nanoseconds * 1e-9
 
     def on_scan(self, scan: LaserScan):
         if self.imu_yaw is None:
+            return
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self.imu_received > 0.35:
+            return
+        ranges = np.asarray(scan.ranges, dtype=float)
+        ranges = ranges[::max(1, len(ranges) // self.n_beams)]
+        if (not math.isfinite(scan.angle_min)
+                or not math.isfinite(scan.angle_increment)
+                or scan.angle_increment <= 0
+                or not math.isfinite(scan.range_max)
+                or np.count_nonzero(np.isfinite(ranges)
+                    & (ranges > scan.range_min)
+                    & (ranges < scan.range_max * 0.95)) < 8):
             return
         if not self.initialized:
             self.init_particles_near(*self.init_xy, self.init_spread)
 
         t = scan.header.stamp.sec + scan.header.stamp.nanosec * 1e-9
+        if t <= 0 or now - t > 0.35 or t > now + 0.1:
+            return
+        if self.last_t is not None and t <= self.last_t:
+            return
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
         self.last_t = t
 

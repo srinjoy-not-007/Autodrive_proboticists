@@ -102,10 +102,13 @@ drill until Aug 23 and would have produced a slower, ungated line at the finals.
 ## Submission
 
 ```bash
-docker build --build-arg TAG=2026-iros-compete -t <user>/roboracer:iros2026 \
+docker build --platform linux/amd64 --build-arg TAG=2026-iros-practice -t <user>/roboracer:iros2026-qualification \
     -f submission/Dockerfile .
-docker push <user>/roboracer:iros2026
+docker push <user>/roboracer:iros2026-qualification
 ```
+
+See [submission/README.md](submission/README.md) for the deadline, exact run
+command, DockerHub overview, and qualification acceptance procedure.
 
 The image builds FROM the official devkit, leaves `autodrive_roboracer`
 untouched, and starts everything from `autodrive_devkit.sh` (never `.bashrc`),

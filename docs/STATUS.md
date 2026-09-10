@@ -1,5 +1,57 @@
 # Status — measured, not assumed
 
+## NEXT SESSION — START HERE (September 10: qualification audit)
+
+Qualification closes September 12 AoE (September 13, 17:30 IST). Use the
+`2026-iros-practice` base, not `compete`. Packaging/run instructions are in
+`submission/README.md`. DockerHub publication and the Phase 1 form are separate
+from GitHub; the DockerHub repository name is still needed from the team.
+
+Fresh measurements on September 10:
+
+| configuration | first ten scored laps | scored collisions | fastest sampled lap |
+|---|---:|---:|---:|
+| existing main, development runner, default graphics | 90.965 s | 0 | 8.965 s |
+| audited standalone image, Ultra graphics, no mounts | 89.547 s | 0 | 8.907 s |
+
+The standalone run reached 20 counted laps with zero collisions before explicit
+failure injection. LiDAR: 20/20 distinct scans at 10.36 Hz. These lap times use
+host timestamps at simulator lap-counter transitions (about one sensor-update
+timing uncertainty), not official high-resolution lap timing. The environments
+differed, so their difference is NOT an isolated performance improvement.
+
+**Scoring correction:** older sections claiming `10 * median` plus proportional
+collisions was the competition scoring are wrong. `tools/score_race.py` now uses
+the actual ten-lap window after warm-up and the collision-counter difference
+inside that window. It rejects late recordings, missing transitions and resets.
+It cannot declare a backwards run successful based on geometric gate crossings.
+Historical race-time estimates remain historical; re-score their logs before
+comparing them with current results.
+
+Audit changes: supervised child processes and process-group shutdown; preserved
+bridge while publishing final zeros; preflight asset checks; no stale/NaN pose
+refresh; invalid LiDAR and stale IMU rejection; reactive stale-scan watchdog;
+complete encoder reset; line-buffered evaluation logger; consistent pinned
+development SciPy; reduced baked map assets. Runtime subscriptions were inspected
+on the live image: no restricted inputs in MPC or localization. Additional shell
+starts no duplicate nodes. Missing raceline exits before starting the bridge.
+Suspended localization caused zero throttle; killing MPC caused zero throttle
+and container exit 1. The original upstream package is not edited.
+
+Validation: six pure-Python tests, three real ROS-node watchdog tests, and
+`scripts/check_pipeline.sh` pass. Both shipping track artifacts are unchanged.
+The simulator initially crashed without the documented privileged GPU flags;
+the normal official flags worked. The dev runner previously installed NumPy 2
+via unpinned SciPy; the standalone image retains NumPy 1.22.2 / SciPy 1.10.1.
+
+The unfinished local edits found on arrival were preserved in branch
+`experiments/pre-submission-20260910` at `64322d1`. They are not part of the
+qualification image. Substantial performance changes stay on separate branches.
+
+Remaining: matched performance experiment, final image build/test record,
+DockerHub push/access check, and Phase 1 submission form. The final-track pipeline
+still needs its own race validation after the September 16 release.
+
 ## Target: what winning actually looks like
 
 Published results, **same Porto practice track we develop on**:

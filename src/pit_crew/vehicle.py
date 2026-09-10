@@ -130,6 +130,8 @@ class SpeedEstimator:
         self.jumped = False         # set when a sample implies a teleport
 
     def update(self, wheel: str, stamp_sec: float, position_rad: float) -> float:
+        if not (math.isfinite(stamp_sec) and math.isfinite(position_rad)):
+            return self.speed
         last = self._last.get(wheel)
         if last is None:
             self._last[wheel] = (stamp_sec, position_rad)
@@ -196,6 +198,8 @@ class SpeedEstimator:
         self.jumped = False
         self.speed = 0.0
         self._last.clear()
+        self._per.clear()
+        self._rej.clear()
         return True
 
 

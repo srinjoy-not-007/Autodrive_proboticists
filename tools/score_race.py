@@ -1,83 +1,69 @@
 #!/usr/bin/env python3
-"""Score a run the way the competition scores it, from a race log alone.
+"""Score actual simulator lap transitions; never infer race success from geometry.
 
-Format (6th RoboRacer Sim Racing League): one warm-up lap, then ten scored
-laps, optional cool-down. Race time is 10 x median scored lap plus a ten second
-penalty per collision. More than ten collisions is a disqualification.
-
-Deliberately knows nothing about which controller produced the log -- it reads
-positions, the simulator's own lap counter and its collision counter, and says
-pass or fail. Laps are counted by gate traversal rather than by the simulator's
-counter, because that counter only increments in the racing direction and we
-have a reactive fallback that will happily drive a circuit backwards.
-
-Usage: score_race.py <race_log.csv> <centerline.csv> [--laps 10]
+One warm-up, ten consecutive scored laps, +10 seconds per scored collision.
+CSV sampling timestamps approximate crossing times to one sensor update; official
+simulator timing remains authoritative. Logs must begin before warm-up ends.
+The optional legacy centerline argument is accepted but never used for scoring.
 """
 
+import argparse
 import csv
-import sys
-
-import numpy as np
-
-N_GATES = 12
-GATE_RADIUS = 0.55
-PENALTY_S = 10.0
-MAX_COLLISIONS = 10
+import math
 
 
-def laps_from_gates(xy, t, centre):
-    idx = np.linspace(0, len(centre), N_GATES, endpoint=False).astype(int)
-    gates = centre[idx]
-    laps, want, t0, seen = [], 0, None, 0
-    for p, ti in zip(xy, t):
-        if np.hypot(*(p - gates[want])) < GATE_RADIUS:
-            if want == 0 and t0 is not None and seen == N_GATES:
-                laps.append(ti - t0)
-                t0, seen = ti, 0
-            elif want == 0 and t0 is None:
-                t0 = ti
-            want = (want + 1) % N_GATES
-            seen += 1
-    return laps
+def score_rows(rows, n_scored=10):
+    """Return the scored interval or reject incomplete/ambiguous telemetry."""
+    if not rows or n_scored < 1:
+        raise ValueError('empty log or invalid lap count')
+    samples = [(float(r['t']), int(r['lap_count']), int(r['collision_count']))
+               for r in rows]
+    if any(not math.isfinite(t) for t, _, _ in samples):
+        raise ValueError('nonfinite timestamps')
+    if samples[0][1] != 0:
+        raise ValueError('log starts after warm-up; cannot certify the first race')
+    if any(b[0] < a[0] or b[1] < a[1] or b[2] < a[2]
+           for a, b in zip(samples, samples[1:])):
+        raise ValueError('time/counter reset within log; score separate runs')
+    crossings = []
+    prev = samples[0]
+    for sample in samples[1:]:
+        if sample[1] != prev[1]:
+            if sample[1] != prev[1] + 1:
+                raise ValueError('missing lap transition; cannot certify timing')
+            crossings.append(sample)
+        prev = sample
+    if len(crossings) < n_scored + 1:
+        raise ValueError(f'need warm-up plus {n_scored} counted laps; '
+                         f'only {len(crossings)} transitions')
+    selected = crossings[:n_scored + 1]
+    laps = [b[0] - a[0] for a, b in zip(selected, selected[1:])]
+    collisions = selected[-1][2] - selected[0][2]
+    elapsed = selected[-1][0] - selected[0][0]
+    return dict(laps=laps, collisions=collisions, elapsed=elapsed,
+                race_time=elapsed + 10.0 * collisions,
+                passed=collisions <= 10, start=selected[0][0], end=selected[-1][0])
 
 
 def main():
-    log, cl = sys.argv[1], sys.argv[2]
-    n_scored = int(sys.argv[sys.argv.index('--laps') + 1]) \
-        if '--laps' in sys.argv else 10
-
-    rows = list(csv.DictReader(open(log)))
-    xy = np.array([[float(r['x']), float(r['y'])] for r in rows])
-    t = np.array([float(r['t']) for r in rows])
-    coll = np.array([int(r['collision_count']) for r in rows])
-    centre = np.loadtxt(cl, delimiter=',', skiprows=1)[:, :2]
-
-    laps = laps_from_gates(xy, t, centre)
-    total_coll = int(coll[-1] - coll[0])
-    print(f'log {log.split("/")[-1]}: {t[-1]-t[0]:.0f} s, '
-          f'{len(laps)} complete laps, {total_coll} collisions')
-
-    if len(laps) < n_scored + 1:
-        print(f'  RESULT: FAIL — needed {n_scored + 1} laps '
-              f'(1 warm-up + {n_scored} scored), completed {len(laps)}')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('log')
+    parser.add_argument('centerline', nargs='?', help='legacy argument, unused')
+    parser.add_argument('--laps', type=int, default=10)
+    args = parser.parse_args()
+    try:
+        with open(args.log) as stream:
+            result = score_rows(list(csv.DictReader(stream)), args.laps)
+    except (ValueError, KeyError, OSError) as exc:
+        print(f'UNVERIFIED: {exc}')
         return 1
-
-    scored = np.array(laps[1:1 + n_scored])          # drop the warm-up
-    med = float(np.median(scored))
-    # Collisions are cumulative over the whole log; scale to the scored window.
-    share = total_coll * n_scored / max(len(laps), 1)
-    race = 10.0 * med + PENALTY_S * share
-    print(f'  warm-up {laps[0]:.2f} s; scored laps '
-          f'{", ".join(f"{x:.2f}" for x in scored)}')
-    print(f'  median {med:.3f} s  best {scored.min():.2f} s  '
-          f'collisions in window ~{share:.1f}')
-    if total_coll > MAX_COLLISIONS:
-        print(f'  RESULT: DISQUALIFIED — {total_coll} collisions > '
-              f'{MAX_COLLISIONS}')
-        return 1
-    print(f'  RESULT: PASS — race time {race:.1f} s')
-    return 0
+    print('Scored laps: ' + ', '.join(f'{t:.3f}' for t in result['laps']))
+    print(f"Elapsed {result['elapsed']:.3f} s; scored collisions "
+          f"{result['collisions']}; race {result['race_time']:.3f} s; "
+          f"best {min(result['laps']):.3f} s")
+    print('PASS' if result['passed'] else 'DISQUALIFIED')
+    return 0 if result['passed'] else 1
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    raise SystemExit(main())

@@ -140,6 +140,16 @@ angle in radians).
 
 ## Where things stand
 
+**September 10 takes precedence over the historical summaries below.** The
+qualification audit is at the top of `docs/STATUS.md`; packaging and DockerHub
+instructions are in `submission/README.md`. Current profile is ay 4.5 / ax 6.5 /
+brake 4 / jerk 40, controller brake_gain 0.05. Standalone Ultra-graphics image:
+first ten scored laps 89.547 s, zero collisions; 20 counted laps clean before
+fault tests. This uses logged lap transitions, with sensor-period uncertainty.
+Older `10 * median` race scores and scaled collision counts were incorrect;
+use the corrected `tools/score_race.py`. Preserve the qualification image while
+testing substantial changes on a separate branch.
+
 **Aug 23 correction — this overrides the older ceiling claims below.** Official
 winner onboard telemetry demonstrates roughly **8.6-9.5 m/s2** lateral
 acceleration on the same Porto vehicle/physics, and its sampled path is close to

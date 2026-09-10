@@ -27,7 +27,7 @@ class RaceLogger(Node):
     def __init__(self, out_csv):
         super().__init__('race_logger')
         os.makedirs(os.path.dirname(out_csv), exist_ok=True)
-        self.f = open(out_csv, 'w', newline='')
+        self.f = open(out_csv, 'w', newline='', buffering=1)
         self.csv = csv.writer(self.f)
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',

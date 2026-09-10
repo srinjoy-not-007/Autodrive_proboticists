@@ -99,6 +99,9 @@ class MPCTracker(Node):
         self.control_dt = 1.0 / control_hz
 
         rl = np.loadtxt(raceline_csv, delimiter=',')
+        if (rl.ndim != 2 or rl.shape[0] < 3 or rl.shape[1] < 6
+                or not np.isfinite(rl).all() or np.any(rl[:, 5] < 0)):
+            raise ValueError('raceline needs >=3 finite rows and nonnegative speeds')
         self.xy = rl[:, 1:3]
         self.v_prof = rl[:, 5]
         self.a_prof = rl[:, 6] if rl.shape[1] > 6 else np.zeros(len(rl))
@@ -165,6 +168,8 @@ class MPCTracker(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_imu(self, msg: Imu):
+        if not math.isfinite(msg.angular_velocity.z):
+            return
         self.gyro_z = float(msg.angular_velocity.z)
         self.update_grip()
 
@@ -237,7 +242,14 @@ class MPCTracker(Node):
         # this callback happened to fire. Fall back if the stamp looks unusable.
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         now = self.now()
-        t = stamp if 0.0 <= now - stamp < 1.0 else now
+        # Relabeling an old pose as fresh defeats the stale-pose watchdog.
+        if not all(math.isfinite(v) for v in (mx, my, myaw, stamp)):
+            return
+        if stamp <= 0.0 or stamp > now + 0.1 or now - stamp > self.stale_pose_s:
+            return
+        t = stamp
+        if self.pose is not None and t <= self.pose[3]:
+            return
         if self.pose is None:
             self.pose = (mx, my, myaw, t)
             return

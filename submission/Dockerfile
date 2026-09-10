@@ -31,7 +31,8 @@ COPY src /home/autodrive_devkit/src/pit_crew
 # Gated out of race.csv, but one PIT_CREW_LINE typo away from being driven in
 # the final. A line nobody has cleared should not be reachable inside the
 # submission at all.
-COPY data/maps /home/data/maps
+COPY data/maps/track_v2.pgm data/maps/track_v2.yaml \
+     data/maps/icra2026.pgm data/maps/icra2026.yaml /home/data/maps/
 COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
      data/racelines/track_v2_centerline.csv \
      data/racelines/icra2026_safe.csv data/racelines/icra2026_race.csv \
@@ -51,4 +52,4 @@ RUN chmod +x /home/autodrive_devkit.sh
 # run boots the race stack instead of idling. Passing `-c "..."` still overrides
 # this, so nothing that works today changes.
 ENTRYPOINT ["/bin/bash"]
-CMD ["-c", "/home/autodrive_devkit.sh"]
+CMD ["-c", "exec /home/autodrive_devkit.sh"]

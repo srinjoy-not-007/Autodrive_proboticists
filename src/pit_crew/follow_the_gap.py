@@ -87,6 +87,8 @@ class FollowTheGap(Node):
         th = f'{output_ns}/throttle' if output_ns else f'{ns}/throttle_command'
         self.pub_steer = self.create_publisher(Float32, st, 1)
         self.pub_throttle = self.create_publisher(Float32, th, 1)
+        self._valid_scan_at = None
+        self.create_timer(0.05, self.check_scan_freshness)
 
         self.get_logger().info('Follow-the-Gap ready (v_max=%.1f m/s)' % self.v_max)
 
@@ -105,8 +107,23 @@ class FollowTheGap(Node):
 
     # ------------------------------------------------------------------ #
 
+    def check_scan_freshness(self):
+        """Clear latched throttle when perception stops delivering usable scans."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._valid_scan_at is None or now - self._valid_scan_at > 0.35:
+            self._publish_raw(
+                self.steer_sign * vehicle.steer_to_cmd(self._steer_filt), 0.0)
+
     def on_scan(self, scan: LaserScan):
         r = np.asarray(scan.ranges, dtype=np.float64)
+        now = self.get_clock().now().nanoseconds * 1e-9
+        stamp = scan.header.stamp.sec + scan.header.stamp.nanosec * 1e-9
+        if (r.size < 8 or np.count_nonzero(np.isfinite(r) & (r > 0)) < 8
+                or not 0 <= now - stamp <= 0.35
+                or not math.isfinite(scan.angle_increment)
+                or scan.angle_increment <= 0):
+            return
+        self._valid_scan_at = stamp
         n = r.size
         angles = self.angles if n == vehicle.LIDAR_N else \
             scan.angle_min + np.arange(n) * scan.angle_increment
