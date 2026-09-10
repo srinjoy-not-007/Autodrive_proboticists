@@ -48,9 +48,14 @@ The unfinished local edits found on arrival were preserved in branch
 `experiments/pre-submission-20260910` at `64322d1`. They are not part of the
 qualification image. Substantial performance changes stay on separate branches.
 
-Remaining: matched performance experiment, final image build/test record,
-DockerHub push/access check, and Phase 1 submission form. The final-track pipeline
-still needs its own race validation after the September 16 release.
+Matched Ultra-graphics performance experiment completed: correcting the MPC
+pose-blend timestamp produced 89.835 s / zero collisions / 8.900 s best, against
+main's 89.547 s / zero / 8.907 s. The best-lap difference is below the logger's
+roughly 0.1 s sample period and total time was 0.288 s worse, so the change was
+rejected and removed. No performance experiment is merged into qualification.
+
+Remaining: DockerHub push/access check and Phase 1 submission form. The final
+track pipeline still needs its own race validation after the September 16 release.
 
 ## Target: what winning actually looks like
 
