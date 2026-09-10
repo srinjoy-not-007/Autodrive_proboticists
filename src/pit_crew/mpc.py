@@ -81,6 +81,7 @@ class MPCTracker(Node):
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
             ('brake_gain', 0.05),        # real braking; 0 disables (see below)
+            ('brake_gain_entry', 0.0),   # braking on corner run-up; 0 = use brake_gain
             ('throttle_kp', 0.0),        # close the speed loop; 0 = open loop
             ('throttle_a_gain', 0.0),    # throttle per m/s2 of planned accel
         ])
@@ -94,7 +95,7 @@ class MPCTracker(Node):
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.max_predict,
-         self.brake_horizon, throttle_gain, brake_gain,
+         self.brake_horizon, throttle_gain, brake_gain, brake_gain_entry,
          throttle_kp, throttle_a_gain) = [x.value for x in p]
         self.control_dt = 1.0 / control_hz
 
@@ -128,7 +129,7 @@ class MPCTracker(Node):
         self.brake_gain = brake_gain
         self.throttle_ctl = vehicle.ThrottleController(
             ff_gain=throttle_gain, brake_gain=brake_gain, kp=throttle_kp,
-            a_gain=throttle_a_gain)
+            a_gain=throttle_a_gain, brake_gain_entry=brake_gain_entry)
         self.pose = None
         self.gyro_z = 0.0
         self.speed = 0.0            # commanded profile speed (throttle target)
@@ -471,15 +472,24 @@ class MPCTracker(Node):
         # a run into the same corner complex that every other collision this
         # session landed in.
         here = float(self.v_prof[i0 % len(self.v_prof)]) * self.speed_scale
-        self.accel = (float(self.a_prof[i0 % len(self.a_prof)])
-                      if self.speed >= here - 1e-3 else 0.0)
+        # `self.speed` is the MINIMUM profile speed over the braking horizon,
+        # so `speed < here` means the profile is pulling the target down ahead
+        # of us: we are on the run-up to a corner. That is exactly the window
+        # where `brake_gain_entry` should replace `brake_gain`, and it needs no
+        # per-track tuning -- it reads the plan, not a hard-coded arclength.
+        self.entering = self.speed < here - 1e-3
+        self.accel = 0.0 if self.entering else float(
+            self.a_prof[i0 % len(self.a_prof)])
 
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
         v_fb = (self.speed_est.speed
-                if self.brake_gain > 0.0 or self.throttle_ctl.kp > 0.0 else None)
+                if self.brake_gain > 0.0
+                or self.throttle_ctl.brake_gain_entry > 0.0
+                or self.throttle_ctl.kp > 0.0 else None)
         self.pub_throttle.publish(
             Float32(data=float(self.throttle_ctl.command(
-                self.speed * self.grip_scale, v_fb, self.accel))))
+                self.speed * self.grip_scale, v_fb, self.accel,
+                self.entering))))
         self.pub_cte.publish(Float32(data=float(e_lat)))
 
     def publish(self, steer, throttle):

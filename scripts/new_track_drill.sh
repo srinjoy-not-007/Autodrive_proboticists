@@ -127,6 +127,19 @@ if [ -n "$BEST" ]; then
         cp "data/racelines/${TRACK}${BEST}_${f}.csv" "data/racelines/${TRACK}_${f}.csv" 2>/dev/null
     done
 fi
+# Record which sensor origin the promoted map was built with. A map built with
+# the 0.1933 m LiDAR offset MUST be localized against with the same offset --
+# the mismatch is not neutral, it regresses total lateral p95 to 0.370 m, worse
+# than either consistent pairing. Before this file existed the drill promoted a
+# corrected map to the canonical name and then told the operator to race it
+# with the runtime default of 0.0, silently creating exactly that mismatch on
+# every unseen track. run_stanley.sh reads this unless LIDAR_OFFSET is set.
+OFFSET=0.0; [ -n "$BEST" ] && OFFSET=0.1933
+# Written from inside the container: data/maps is a bind mount owned by root,
+# so the host user cannot create files there.
+docker exec autodrive_roboracer_api /bin/bash -c \
+    "echo $OFFSET > /home/data/maps/${TRACK}.offset"
+echo "  sensor origin for ${TRACK}: ${OFFSET} m (written to data/maps/${TRACK}.offset)"
 
 stage "5/5 footprint clearance check"
 # <track>_traj.csv is the RECON drive -- the blind Follow-the-Gap lap the map

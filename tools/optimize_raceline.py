@@ -86,7 +86,7 @@ def clearance_speed_cap(xy, kappa, map_prefix, per_metre):
     return np.maximum(worst, 0.0) * per_metre, worst
 
 
-def turn_in_kappa(kappa, el_lengths, window):
+def turn_in_kappa(kappa, el_lengths, window, gate=0.0):
     """Curvature the ay cap should be sized for, looking `window` metres ahead.
 
     The velocity profile caps speed point-by-point on the curvature AT that
@@ -106,6 +106,18 @@ def turn_in_kappa(kappa, el_lengths, window):
     metres early, which is a corner-entry brake that costs nothing on a
     straight, nothing on corner exit, and nothing in a corner of constant
     radius. It only ever reduces speed.
+
+    Applied at EVERY point it is far too blunt on a track this twisty: at
+    window 0.5 m it fires at 166 of Porto's 299 points and costs 0.40 s of
+    ideal lap (8.64 -> 9.04). `gate` restricts it to the points where the
+    corner ahead is genuinely tighter than the one we are in, by more than
+    `gate` 1/m. That is the shape that hurts: where kappa jumps the ay
+    constraint is briefly inactive, so the profile ACCELERATES into the ramp.
+    Measured on the shipping line, s 15.2-15.7: kappa 0.042 -> 0.379 while the
+    plan goes 3.44 -> 3.57 -> 3.44 m/s, arriving at ay 4.50 against a cap of
+    4.50 -- zero margin, and 3 of the lap's 20 at-the-cap points. Gate 0.20
+    with window 0.5 m selects 21 of 299 points, which are precisely the four
+    corner entries that hold every at-the-cap point on the lap.
     """
     if window <= 0.0:
         return kappa
@@ -113,6 +125,9 @@ def turn_in_kappa(kappa, el_lengths, window):
     n = max(1, int(round(window / max(ds, 1e-6))))
     mag = np.abs(kappa)
     ahead = np.max([np.roll(mag, -k) for k in range(n + 1)], axis=0)
+    if gate > 0.0:
+        # Only where the corner ahead is materially tighter than this point.
+        ahead = np.where(ahead - mag > gate, ahead, mag)
     # Keep the sign of the point itself: only the magnitude drives the ay cap,
     # and the sign is what the jerk limiter reads to spot a real reversal.
     return np.where(mag > 0, ahead * np.sign(kappa), ahead)
@@ -237,6 +252,13 @@ def main():
                     help='look this many metres ahead when applying the ay '
                          'cap, so the car is already slow when a corner '
                          'tightens. 0 disables (default).')
+    ap.add_argument('--turn-in-gate', type=float, default=0.0,
+                    metavar='K',
+                    help='apply --turn-in only where the corner ahead is more '
+                         'than K 1/m tighter than the present point. Keeps the '
+                         'lookahead on the corner ENTRIES that have no grip '
+                         'margin instead of spending it lap-wide. 0 = apply '
+                         'everywhere (default).')
     ap.add_argument('--stepsize', type=float, default=0.10)
     ap.add_argument('--sweep-iters', type=int, default=2,
                     help='corridor shrink / re-optimize passes for body sweep')
@@ -340,10 +362,12 @@ def main():
                            np.full_like(v_steps, args.ax),
                            np.full_like(v_steps, args.ay)])
     ax_machines = np.column_stack([v_steps, np.full_like(v_steps, args.ax)])
-    kappa_cap = turn_in_kappa(kappa, el_lengths, args.turn_in)
+    kappa_cap = turn_in_kappa(kappa, el_lengths, args.turn_in,
+                              args.turn_in_gate)
     if args.turn_in > 0.0:
         n_early = int(np.sum(np.abs(kappa_cap) > np.abs(kappa) + 1e-9))
-        print(f'turn-in lookahead {args.turn_in:.2f} m: ay cap raised early at '
+        print(f'turn-in lookahead {args.turn_in:.2f} m '
+              f'(gate {args.turn_in_gate:.2f} 1/m): ay cap raised early at '
               f'{n_early} of {len(kappa)} points')
     vx = tph.calc_vel_profile.calc_vel_profile(
         ggv=ggv, ax_max_machines=ax_machines, v_max=args.vmax,

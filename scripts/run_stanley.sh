@@ -16,8 +16,14 @@ docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && cd /home/autodrive_devkit && colcon build --packages-select pit_crew --symlink-install 2>&1|tail -1"
 # The LiDAR sits 0.1933 m ahead of the pose point. A map built with that
 # correction MUST be localized against with the same offset -- the two have to
-# agree or the sharper map makes things worse, not better. Set
-# LIDAR_OFFSET=0.1933 when racing a *_c (corrected) map.
+# agree or the sharper map makes things worse, not better (mismatched, total
+# lateral p95 regresses to 0.370 m). new_track_drill.sh records the offset its
+# promoted map was built with in data/maps/<map>.offset, so the right value is
+# used without anyone having to remember; set LIDAR_OFFSET to override.
+if [ -z "${LIDAR_OFFSET:-}" ] && [ -f "data/maps/${MAP}.offset" ]; then
+    LIDAR_OFFSET=$(tr -d '[:space:]' < "data/maps/${MAP}.offset")
+    echo "sensor origin from data/maps/${MAP}.offset: ${LIDAR_OFFSET} m"
+fi
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew localization --ros-args \
     -p map_prefix:=/home/data/maps/${MAP} \
     -p centerline_csv:=/home/data/racelines/${MAP}_centerline.csv \

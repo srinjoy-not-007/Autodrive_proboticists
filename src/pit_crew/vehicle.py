@@ -218,7 +218,8 @@ class ThrottleController:
 
     def __init__(self, kp: float = 0.0, ff_gain: float = 0.040,
                  brake_gain: float = 0.0, idle: float = 0.005,
-                 brake_deadband: float = 0.5, a_gain: float = 0.0):
+                 brake_deadband: float = 0.5, a_gain: float = 0.0,
+                 brake_gain_entry: float = 0.0):
         self.kp = kp
         # Throttle per m/s2 of PLANNED acceleration -- open loop, so unlike kp
         # it cannot oscillate against the 10 Hz feedback. Measured by least
@@ -233,11 +234,22 @@ class ThrottleController:
         # Default 0.0: braking stays OFF unless a caller asks for it, so this
         # change cannot alter any node that has not opted in.
         self.brake_gain = brake_gain
+        # Braking authority used ONLY on the run-up to a corner, where the
+        # caller says the profile is already pulling the target speed down.
+        # `brake_gain` has to stay small lap-wide -- 0.3 put the car in reverse
+        # for 52% of a run (176 collisions) and 0.05 is the largest value
+        # measured clean over 36 laps. But the shipping line arrives at Porto's
+        # s ~ 16 corner at 3.97 m/s against a plan of 3.44, and 0.05 cannot
+        # shed that: the throttle is still POSITIVE (+0.142) through the whole
+        # corner. A larger gain confined to the entry brakes where the plan
+        # already wants to brake, and reverts to `brake_gain` everywhere else.
+        # 0.0 disables, so no caller changes behaviour without asking.
+        self.brake_gain_entry = brake_gain_entry
         self.idle = idle
         self.brake_deadband = brake_deadband
 
     def command(self, v_target: float, v_meas: float = None,
-                a_target: float = 0.0) -> float:
+                a_target: float = 0.0, entry: bool = False) -> float:
         """Throttle in [-1, 1]. Negative is braking.
 
         The braking branch used to be gated behind `kp > 0`, and nothing sets
@@ -249,9 +261,11 @@ class ThrottleController:
         also closing the proportional loop (which surges at 10 Hz).
         """
         u = self.ff * v_target + self.idle + self.a_gain * max(a_target, 0.0)
+        gain = (self.brake_gain_entry
+                if entry and self.brake_gain_entry > 0.0 else self.brake_gain)
         if v_meas is not None:
             err = v_target - v_meas
-            if (err < -self.brake_deadband and self.brake_gain > 0.0
+            if (err < -self.brake_deadband and gain > 0.0
                     and v_meas > BRAKE_MIN_SPEED):
                 # Negative throttle in this simulator is REVERSE DRIVE, not a
                 # brake pedal, so an unclamped `brake_gain * err` will happily
@@ -263,7 +277,7 @@ class ThrottleController:
                 # where any negative command is just reverse; and cap the
                 # magnitude, because at 10 Hz the car can cross zero between
                 # samples however good the deadband is.
-                u = max(-BRAKE_MAX, self.brake_gain * err)
+                u = max(-BRAKE_MAX, gain * err)
             elif self.kp > 0.0:
                 u = u + self.kp * err
         return max(-1.0, min(1.0, u))
