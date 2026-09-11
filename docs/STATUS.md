@@ -113,6 +113,19 @@ p50 0.065 m, but 1.17 m longer path per lap (no corner cut); at ay 7.0/7.5
 it collided because its steering cap sat below the line's own feedforward
 (fixed: cap derived from the line with 15% headroom, under test).
 
+Offline identification against the bag (`tools/delay_model_id.py`): the
+shipping prediction (gyro to now, then bicycle through the command history)
+is unbiased at the hairpins (median 3 mm at H 0.18); the car rotates 4% LESS
+than the bicycle, not more; understeer scaling is the worst-biased model.
+So the 0.11 m between the controller's cte and truth is in the pose it
+starts from: on the mesh map the filter output matches truth, leaving the
+controller's `pose_blend` 0.55 first-order lag (under test: 1.0 and 0.8).
+
+mpc2 with `cut_offset_m` 0.14 on the ay 6.5 line, mesh map: **32 laps, 0
+collisions, 80.55 s, median 8.06** (legacy 78.18 but 3 collisions/100).
+mpc2 at ay 7.5 with the line-derived cap: 5 collisions, no headroom there.
+Hairpin-only outside bias on the mesh map: 82.3 s and 1 collision; dropped.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
