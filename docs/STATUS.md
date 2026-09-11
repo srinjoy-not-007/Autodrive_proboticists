@@ -25,6 +25,17 @@ supervised entrypoint, preflight cross-checks) committed with 78 tests;
 they change nothing on a normal lap but the promoted config must be
 re-validated once with them.
 
+100-lap mpc3 on mc0.60 at ay 6.5: 1 collision (lap 35, a late-braking
+hairpin entry, during an interval with 5x sensor jitter from an offline
+search), median 7.263, first ten 73.61. Re-validate on an idle host before
+choosing it over ay 6.0 (0/100).
+ICRA rebuilt race line (0.301 m, kappa max 1.36): 9 collisions in 30 laps
+with mpc3, all at the kappa 1.36 corner and its entry; the centerline
+(kappa max 2.21 but 0.5-0.6 m of room) is 0/30. **MESH_RACE_KAPPA_MAX 1.0:**
+a mesh race line tighter than Porto's (0.83) is rejected and the centerline
+ships. ICRA now ships `icra2026_mesh_safe` (149.4 s with mpc3, 145.7 s with
+the legacy tracker).
+
 ## September 12, night: mpc3 on the wide line, 74.4 s
 
 **Best measured so far: mpc3 (new tracker) on the wide min-curvature line

@@ -296,6 +296,11 @@ MIN_CLEARANCE = 0.30
 # w_veh sweep above produces lines at 0.29-0.35 m that are still faster than
 # anything shipped. Prefer buying clearance with w_veh over spending it.
 MESH_MIN_CLEARANCE = 0.28   # 0.230 collided on ICRA (kappa 1.42), 0.292 clean on Porto
+# A width-using race line is only shipped where the tracker has held one: mpc3
+# ran 100 laps clean on Porto's line (kappa max 0.83, 0.292 m) and took 9
+# collisions in 30 laps on ICRA's (kappa max 1.36, 0.301 m). Tighter than this
+# the centerline, with its 0.5-0.6 m of room, is the faster bet.
+MESH_RACE_KAPPA_MAX = 1.0
 
 # ...but 0.30 is derived entirely from PORTO collisions, and the finals track is
 # released three days before the deadline. On a genuinely narrow circuit every
@@ -416,6 +421,11 @@ def build(track, tag, extra, cfg):
             print(f'  {tag:9s} {label:15s} no solution (corridor exhausted)')
             continue
         bad = drivability(path + '.csv')
+        if kind == 'raceline' and is_mesh(mp):
+            kmax = float(np.abs(np.loadtxt(path + '.csv', delimiter=',')[:, 4]).max())
+            if kmax > MESH_RACE_KAPPA_MAX:
+                bad.append(f'kappa max {kmax:.2f} above the {MESH_RACE_KAPPA_MAX:.1f} '
+                           f'the tracker has held on a width-using line')
         try:
             wc = worst_corner(mp, path + '.csv')
         except Exception as e:
