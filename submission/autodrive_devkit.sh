@@ -10,6 +10,7 @@ cd /home/autodrive_devkit
 # 0.12-0.17 m inside bias the recon map had in the hairpins. A recon map built
 # with PIT_CREW_LIDAR_OFFSET=0 must be run with PIT_CREW_LIDAR_OFFSET=0.
 MAP="${PIT_CREW_MAP:-/home/data/maps/porto_mesh}"
+SLUG="$(basename "$MAP")"
 LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
 # Wide min-curvature line on the mesh map, driven by mpc3 (see STATUS, Sept 12
 # night). PIT_CREW_CONTROLLER=mpc selects the legacy tracker, which needs the
@@ -20,7 +21,11 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
 else
     LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 fi
-CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/track_v2_centerline.csv}"
+# The centerline is derived from the MAP and never from a fixed Porto path.
+# It is not a diagnostic: localization seeds its entire particle cloud at
+# centerline[0] and resamples along it for EVERY collision recovery, so a
+# centerline from another track is a race with no laps in it.
+CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/${SLUG}_centerline.csv}"
 SCALE="${PIT_CREW_SPEED_SCALE:-1.00}"
 MODE="${PIT_CREW_MODE:-raceline}"
 if [[ "$MODE" != raceline && "$MODE" != reactive ]]; then
@@ -31,11 +36,43 @@ if [[ "$CONTROLLER" != mpc && "$CONTROLLER" != mpc3 ]]; then
     exit 2
 fi
 if [[ "$MODE" == raceline ]]; then
-    python3 -m pit_crew.preflight "$MAP" "$LINE" "$CENTER" "$SCALE"
+    if [[ ! -f "$CENTER" ]]; then
+        echo "no centerline for $SLUG: $CENTER" >&2; exit 2
+    fi
+    # Preflight now also cross-checks that the line and the centerline lie on
+    # THIS map and that the map's own lidar_offset matches the one we localize
+    # with -- the two finals mistakes that no per-file check can see.
+    python3 -m pit_crew.preflight "$MAP" "$LINE" "$CENTER" "$SCALE" "$LIDAR_OFFSET"
 fi
 
 BRIDGE=""
 WORKERS=()
+# mpc3 and mpc2 take the corridor map explicitly; the legacy mpc does not
+# declare the parameter and would refuse to start if it were passed. Deriving
+# it from the raceline NAME (the old behaviour) silently disabled the corridor
+# barrier whenever the guess did not resolve.
+CTRL_ARGS=()
+if [[ "$CONTROLLER" == mpc3 || "$CONTROLLER" == mpc2 ]]; then
+    CTRL_ARGS=(-p map_prefix:="$MAP")
+fi
+
+LOC_PID=""; CTRL_PID=""; FTG_PID=""
+start_loc() {
+    setsid ros2 run pit_crew localization --ros-args \
+        -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" \
+        -p lidar_offset:="$LIDAR_OFFSET" &
+    LOC_PID=$!
+}
+start_ctrl() {
+    setsid ros2 run pit_crew "$CONTROLLER" --ros-args \
+        -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" "${CTRL_ARGS[@]}" &
+    CTRL_PID=$!
+}
+start_ftg() {
+    setsid ros2 run pit_crew follow_the_gap --ros-args \
+        --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml &
+    FTG_PID=$!
+}
 stop_group() { kill -TERM -- "-$1" 2>/dev/null || true; }
 shutdown() {
     code=$?
@@ -62,20 +99,58 @@ trap 'exit 143' TERM
 setsid ros2 launch autodrive_roboracer bringup_headless.launch.py &
 BRIDGE=$!
 if [[ "$MODE" == reactive ]]; then
-    setsid ros2 run pit_crew follow_the_gap --ros-args \
-        --params-file /home/autodrive_devkit/src/pit_crew/config/ftg_mapping.yaml &
-    WORKERS+=("$!")
+    start_ftg
+    WORKERS=("$FTG_PID")
 else
-    setsid ros2 run pit_crew localization --ros-args \
-        -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" \
-        -p lidar_offset:="$LIDAR_OFFSET" &
-    WORKERS+=("$!")
-    setsid ros2 run pit_crew "$CONTROLLER" --ros-args \
-        -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" &
-    WORKERS+=("$!")
+    start_loc
+    start_ctrl
+    WORKERS=("$LOC_PID" "$CTRL_PID")
 fi
-# A child exiting, even successfully, is a failed race stack.
-result=0
-wait -n "$BRIDGE" "${WORKERS[@]}" || result=$?
-echo "Required race process exited (status $result); shutting down" >&2
+
+# A child exiting, even successfully, is a failed race stack -- but a dead
+# node must not be a dead RACE. The organisers run all 12 laps in one go, so a
+# single unhandled exception used to cost every remaining lap and the whole
+# score. Restart ONLY the node that died (restarting localization needlessly
+# would throw away a converged particle filter mid-lap), a bounded number of
+# times, then fall back to the reactive stack, which needs no map, no line and
+# no localization at all. A dead ROS bridge is the one thing not recoverable
+# from here.
+#
+# `wait -n` reaps exactly one child, so `kill -0` afterwards identifies it.
+RESTARTS=0
+MAX_RESTARTS=4
+while :; do
+    result=0
+    wait -n "$BRIDGE" "${WORKERS[@]}" || result=$?
+    if ! kill -0 "$BRIDGE" 2>/dev/null; then
+        echo "ROS bridge exited (status $result); shutting down" >&2
+        exit 1
+    fi
+    RESTARTS=$((RESTARTS + 1))
+    sleep 0.5                       # never spin on a node that dies instantly
+    if [[ "$MODE" == reactive ]]; then
+        if (( RESTARTS > MAX_RESTARTS )); then break; fi
+        echo "follow_the_gap exited ($result); restart $RESTARTS" >&2
+        start_ftg
+        WORKERS=("$FTG_PID")
+        continue
+    fi
+    if (( RESTARTS > MAX_RESTARTS )); then
+        echo "race stack failed $MAX_RESTARTS times; falling back to \
+follow_the_gap" >&2
+        for pid in "${WORKERS[@]}"; do stop_group "$pid"; done
+        sleep 0.3
+        MODE=reactive
+        start_ftg
+        WORKERS=("$FTG_PID")
+        RESTARTS=0
+        continue
+    fi
+    kill -0 "$LOC_PID" 2>/dev/null || { echo "localization exited ($result); \
+restart $RESTARTS" >&2; start_loc; }
+    kill -0 "$CTRL_PID" 2>/dev/null || { echo "$CONTROLLER exited ($result); \
+restart $RESTARTS" >&2; start_ctrl; }
+    WORKERS=("$LOC_PID" "$CTRL_PID")
+done
+echo "Reactive fallback exited too; shutting down" >&2
 exit 1

@@ -249,7 +249,16 @@ class Actuator:
     def delta_at(self, t):
         """Actuator angle at ``t``: measured where we have it, modelled after."""
         if not self.fb:
-            return self.fallback
+            # No feedback has EVER arrived -- the steering topic is missing or
+            # late. Returning the last command assumes instantaneous actuation,
+            # i.e. no dead time and no slew at all, and measured offline that
+            # costs the tracker everything: on a closed-loop circle the lateral
+            # p95 goes 0.004 m -> 0.171 m (R 6 m, 3 m/s) and 0.019 -> 0.965 m
+            # (R 3 m, 4 m/s). Replay the command history through the same model
+            # instead. Inert once any feedback exists, which is every
+            # configuration that has ever raced.
+            t0 = max(self.hist[0][0], t - self.dead_time - self.keep_s)
+            return self.advance(self.fallback, t0, t)
         if t <= self.fb[-1][0]:
             return self._measured_at(t)
         return self.advance(self.fb[-1][1], self.fb[-1][0], t)

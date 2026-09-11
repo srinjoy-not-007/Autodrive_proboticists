@@ -84,6 +84,7 @@ class MPC3Tracker(Node):
             ('speed_scale', 1.0),
             ('map_prefix', ''),           # '' = derive from the raceline name
             ('use_barrier', True),
+            ('require_barrier', True),    # refuse to race without a corridor
             # --- solver -----------------------------------------------------
             ('horizon', 20),
             ('step_dt', 0.060),
@@ -168,9 +169,19 @@ class MPC3Tracker(Node):
                     f'corridor from {prefix}: min half-width '
                     f'{min(self.path.w_left.min(), self.path.w_right.min()):.2f} m')
             except Exception as exc:                      # noqa: BLE001
-                self.get_logger().warn(f'no corridor barrier ({exc})')
+                self.get_logger().error(f'no corridor barrier ({exc})')
         elif v['use_barrier']:
-            self.get_logger().warn('no map found for the raceline; barrier off')
+            self.get_logger().error(
+                f"no map found for {v['raceline_csv']}; pass map_prefix")
+        # `w_barrier` is 400 against `w_lat` 24: a silently disabled corridor is
+        # not the configuration anything was validated in, and the only reason
+        # it ever happened was a derived map prefix that did not resolve. Fail
+        # loudly instead -- the entrypoint now passes `map_prefix` explicitly.
+        if v['use_barrier'] and v['require_barrier'] and not self.path.has_corridor:
+            raise RuntimeError(
+                f"corridor barrier required but no map loaded (prefix "
+                f"{prefix!r}); pass -p map_prefix:=<prefix> or "
+                f"-p require_barrier:=false to race without it")
 
         self.mpc = MPC3(
             self.path,
@@ -213,6 +224,10 @@ class MPC3Tracker(Node):
         self._stale_warned = False
         self._solve_ms = 0.0
         self._solves = 0
+        self._pose_drops = 0
+        self._pose_ok = 0
+        self._drop_log_t = 0.0
+        self._solve_fail = 0
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
@@ -264,6 +279,13 @@ class MPC3Tracker(Node):
         filters, reject-with-persistence); a teleport clears it.
         """
         if self.speed_est.consume_jump():
+            # A collision teleport puts the car AT REST at a checkpoint, so
+            # everything the latch implies about the car is stale too. Clearing
+            # it sends `start_speed` back to the walking-pace standing-start
+            # branch; leaving it set planned the whole recovery at the profile
+            # speed (6-7 m/s) with the car stopped, which is the lap-0 failure
+            # this class of fix already removed once.
+            self._enc_seen = False
             return None
         v = self.speed_est.speed
         if v > float(self.P['v_meas_min']):
@@ -297,11 +319,12 @@ class MPC3Tracker(Node):
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         now = self.now()
         if not all(math.isfinite(q) for q in (mx, my, myaw, stamp)):
-            return
+            return self.drop_pose('non-finite', now)
         if stamp <= 0.0 or stamp > now + 0.1 or now - stamp > self.P['stale_pose_s']:
-            return
+            return self.drop_pose(f'stale by {now - stamp:.2f}s', now)
         if self.pose is not None and stamp <= self.pose[3]:
-            return
+            return self.drop_pose('out of order', now)
+        self._pose_ok += 1
         if self.v_plan0 <= 0.0:
             j = self.path.nearest(mx, my, None, yaw=myaw)
             self.v_plan0 = float(self.path.v_prof[j])
@@ -312,6 +335,19 @@ class MPC3Tracker(Node):
         while self._trail and stamp - self._trail[0][0] > self.P['stuck_seconds']:
             self._trail.pop(0)
         self.control_step()
+
+    def drop_pose(self, why, now):
+        """Dropping every pose used to be silent, and a silent stack is a
+        stopped car with an empty log. One line a second, no more."""
+        self._pose_drops += 1
+        if now - self._drop_log_t >= 1.0:
+            self._drop_log_t = now
+            log = self.get_logger()
+            # Never having accepted one is the fatal case (a clock or topic
+            # mismatch: the car simply never moves); the odd duplicate is not.
+            (log.error if self._pose_ok == 0 else log.warn)(
+                f'dropped pose ({why}); {self._pose_drops} dropped, '
+                f'{self._pose_ok} accepted so far')
 
     # ------------------------------------------------------------------
     def is_stuck(self):
@@ -359,6 +395,20 @@ class MPC3Tracker(Node):
 
     # ------------------------------------------------------------------
     def control_step(self):
+        """One control cycle, guarded.
+
+        An exception in an rclpy callback unwinds `spin()` and kills the
+        process, and the submission entrypoint treats a dead node as a dead
+        race. Nothing in here is worth that: hold the steering and coast.
+        """
+        try:
+            self._control_step()
+        except Exception as exc:                          # noqa: BLE001
+            self.get_logger().error(f'control step failed ({exc!r}); '
+                                    'holding steer, zero throttle')
+            self.publish(self.steer, 0.0)
+
+    def _control_step(self):
         t_solve = time.perf_counter()
         now = self.now()
         if self._escape_until is not None:
@@ -390,7 +440,10 @@ class MPC3Tracker(Node):
         e_lat = -math.sin(pyaw) * dx + math.cos(pyaw) * dy
         e_yaw = wrap(yaw - pyaw)
 
-        if self.is_stuck():
+        # The pose trail alone cannot tell a wedged car from a frozen filter,
+        # and the escape below is a REVERSE setpoint at full lock. Require the
+        # wheel encoder -- an independent sensor -- to agree we are stopped.
+        if self.is_stuck() and (v_meas is None or v_meas < 0.5):
             self._escape_until = now + self.P['escape_seconds']
             self._stuck_count += 1
             turn = e_yaw if abs(e_yaw) > 0.1 else e_lat
@@ -417,8 +470,18 @@ class MPC3Tracker(Node):
                   math.atan(vehicle.WHEELBASE * ay_cap
                             / max(v_cap * v_cap, 0.25)))
 
-        cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
-                                   committed=committed)
+        try:
+            cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
+                                       committed=committed)
+        except ValueError as exc:
+            # Non-finite state. Publishing nothing holds the last good command
+            # (this simulator latches), which is the right thing for one frame;
+            # the stale-pose watchdog covers a persistent fault.
+            self._solve_fail += 1
+            self.get_logger().error(
+                f'solver rejected the state ({exc}); holding the last command '
+                f'(#{self._solve_fail})')
+            return
         # Fallback speed if the encoder ever goes quiet: the PROFILE here, not
         # the last measurement, which would be a stale hold.  Also what
         # `is_stuck` compares against.

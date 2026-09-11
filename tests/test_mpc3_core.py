@@ -1,0 +1,560 @@
+"""Pure-python regression tests for the shipping mpc3 tracker's core.
+
+No ROS: ``mpc3_core`` is rclpy-free on purpose (see its docstring), so the
+solver that races can be exercised on the host with
+
+    .venv/bin/python -m pytest tests
+
+These tests are about the failure modes an UNSEEN finals track can produce --
+a standing start, a collision teleport, the line's wraparound, a corridor
+narrower than the barrier margin, a degenerate or reversed line, non-finite
+input -- not about lap time.  Where a test documents a gap rather than a
+guarantee it says so and is marked ``xfail(strict=True)``, so closing the gap
+makes the suite fail until the test is updated deliberately.
+"""
+
+import ast
+import math
+import os
+import sys
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), 'src'))
+
+from pit_crew import vehicle                                    # noqa: E402
+from pit_crew.mpc3_core import MPC3, Actuator, PoseFilter, RefPath, wrap  # noqa: E402
+
+
+# --------------------------------------------------------------------------
+# synthetic reference lines
+# --------------------------------------------------------------------------
+
+def write_line(tmp_path, xy, v=4.0, name='line.csv'):
+    """Write a raceline CSV in the pipeline's column order.
+
+    s, x, y, psi, kappa, vx, ax -- exactly what ``make_track_lines.py`` emits
+    and what ``RefPath`` indexes by column number.
+    """
+    xy = np.asarray(xy, dtype=float)
+    d = np.hypot(*np.diff(xy, axis=0).T)
+    s = np.concatenate([[0.0], np.cumsum(d)])
+    fwd = np.roll(xy, -1, axis=0) - np.roll(xy, 1, axis=0)
+    psi = np.arctan2(fwd[:, 1], fwd[:, 0])
+    dpsi = (np.roll(psi, -1) - np.roll(psi, 1) + np.pi) % (2 * np.pi) - np.pi
+    ds = np.roll(s, -1) - np.roll(s, 1)
+    kappa = dpsi / np.where(np.abs(ds) > 1e-9, ds, 1e-9)
+    vv = np.full(len(xy), float(v)) if np.isscalar(v) else np.asarray(v, float)
+    rows = np.column_stack([s, xy[:, 0], xy[:, 1], psi, kappa, vv,
+                            np.zeros(len(xy))])
+    p = tmp_path / name
+    np.savetxt(p, rows, delimiter=',')
+    return str(p)
+
+
+def circle_path(tmp_path, R=3.0, n=400, v=4.0, name='circle.csv'):
+    t = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    return write_line(tmp_path, np.column_stack([R * np.cos(t), R * np.sin(t)]),
+                      v=v, name=name)
+
+
+def straight_path(tmp_path, length=60.0, n=600, v=4.0, name='straight.csv'):
+    """A long straight closed by a far return leg, so wraparound stays sane."""
+    x = np.linspace(0.0, length, n)
+    return write_line(tmp_path, np.column_stack([x, np.zeros(n)]), v=v,
+                      name=name)
+
+
+def drive_circle(tmp_path, R=6.0, v=3.0, steps=120, feedback=True,
+                 record_seam=False, **cfg):
+    """Closed loop: the real solver against a kinematic plant + Actuator.
+
+    The plant is the measured one the solver models (yaw gain, 0.135 s dead
+    time, 3.2 rad/s slew) at a fixed speed, so this measures the TRACKER, not
+    the speed plan.  ``feedback=False`` never calls ``Actuator.snap``, which is
+    what happens if ``/autodrive/roboracer_1/steering`` does not arrive.
+    """
+    p = RefPath(circle_path(tmp_path, R=R, n=400, v=v,
+                            name=f'drive_{R}_{v}_{feedback}.csv'))
+    m = make_mpc(p, **cfg)
+    act = Actuator(dead_time=0.135)
+    dt = 0.090                                   # the ~11 Hz sensor period
+    t, x, y, yaw, delta = 0.0, R, 0.0, math.pi / 2, 0.0
+    idx, errs, seam = None, [], []
+    for step in range(steps):
+        prev = idx
+        idx = p.nearest(x, y, idx, yaw=yaw)
+        pyaw = float(p.yaw[idx])
+        dx, dy = x - p.xy[idx, 0], y - p.xy[idx, 1]
+        e = -math.sin(pyaw) * dx + math.cos(pyaw) * dy
+        if feedback:
+            act.snap(t, delta)
+        d0 = act.delta_at(t)
+        committed = [act.delta_at(t + (k + 1) * m.dt) for k in range(m.nd)]
+        cmd, _ = m.solve(e, wrap(yaw - pyaw), d0, idx, v, committed=committed)
+        act.record(t, cmd)
+        n = 9
+        h = dt / n
+        for k in range(n):
+            tgt = act._target_at(t + (k + 0.5) * h)
+            delta += max(-vehicle.STEER_RATE * h,
+                         min(vehicle.STEER_RATE * h, tgt - delta))
+            yr = m.cfg['yaw_gain'] * v * math.tan(delta) / vehicle.WHEELBASE
+            x += v * math.cos(yaw + 0.5 * yr * h) * h
+            y += v * math.sin(yaw + 0.5 * yr * h) * h
+            yaw = wrap(yaw + yr * h)
+        t += dt
+        if step > 20:
+            errs.append(abs(e))
+            if record_seam and prev is not None and idx < prev:
+                seam.append(abs(e))
+    out = {'p50': float(np.percentile(errs, 50)),
+           'p95': float(np.percentile(errs, 95)),
+           'max': float(np.max(errs))}
+    if record_seam:
+        out['seam_max'] = float(max(seam)) if seam else 0.0
+        out['seam_crossings'] = len(seam)
+    return out
+
+
+def make_mpc(path, **cfg):
+    base = dict(horizon=20, step_dt=0.060, iters=6, outer=2)
+    base.update(cfg)
+    return MPC3(path, **base)
+
+
+# --------------------------------------------------------------------------
+# 1. the reference path itself
+# --------------------------------------------------------------------------
+
+class TestRefPath:
+    def test_circle_curvature_and_spacing(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400))
+        assert p.n == 400
+        assert p.spacing == pytest.approx(2 * math.pi * 3.0 / 400, rel=1e-3)
+        assert np.abs(p.kappa).mean() == pytest.approx(1 / 3.0, rel=0.05)
+        assert not p.has_corridor
+        assert np.isinf(p.w_left).all()
+
+    def test_rejects_short_nonfinite_and_negative_speed(self, tmp_path):
+        two = tmp_path / 'two.csv'
+        two.write_text('0,0,0,0,0,1,0\n1,1,0,0,0,1,0\n')
+        with pytest.raises(ValueError):
+            RefPath(str(two))
+        bad = tmp_path / 'nan.csv'
+        bad.write_text('0,0,0,0,0,1,0\n1,1,0,0,0,nan,0\n2,2,0,0,0,1,0\n')
+        with pytest.raises(ValueError):
+            RefPath(str(bad))
+        neg = tmp_path / 'neg.csv'
+        neg.write_text('0,0,0,0,0,1,0\n1,1,0,0,0,-1,0\n2,2,0,0,0,1,0\n')
+        with pytest.raises(ValueError):
+            RefPath(str(neg))
+
+    def test_zero_speed_rows_are_accepted_by_refpath(self, tmp_path):
+        """RefPath's gate is `< 0`, so a zero-speed row loads.
+
+        `preflight.validate` rejects `<= 0`, but mpc3 loads the CSV itself and
+        never calls preflight, so a line with a zero in column 5 reaching the
+        node stalls the car there rather than being refused at startup.
+        """
+        z = tmp_path / 'zero.csv'
+        z.write_text('0,0,0,0,0,1,0\n1,1,0,0,0,0,0\n2,2,0,0,0,1,0\n')
+        p = RefPath(str(z))
+        assert p.v_prof.min() == 0.0
+
+    def test_nearest_wraps_and_is_heading_gated(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400))
+        # a point just past the seam, approached from index n-2
+        j = p.nearest(3.0, 0.02, last=p.n - 2, yaw=math.pi / 2)
+        assert j in (0, 1, 2, p.n - 1, p.n - 2)
+        # a jump the window cannot cover falls back to the global search
+        far = p.nearest(-3.0, 0.0, last=0, yaw=-math.pi / 2)
+        assert abs(far - p.n // 2) < 5
+
+
+# --------------------------------------------------------------------------
+# 2. solver on the two shapes whose answer is known in closed form
+# --------------------------------------------------------------------------
+
+class TestSolverGeometry:
+    def test_straight_offset_steers_back_towards_the_line(self, tmp_path):
+        p = RefPath(straight_path(tmp_path))
+        m = make_mpc(p)
+        # e_lat > 0 means the car is LEFT of the path, so the command must be
+        # negative (positive steering_command is left).
+        cmd, info = m.solve(0.30, 0.0, 0.0, 10, 4.0)
+        assert math.isfinite(cmd) and cmd < -1e-3
+        cmd2, _ = m.solve(-0.30, 0.0, 0.0, 10, 4.0)
+        assert cmd2 > 1e-3
+        on, _ = make_mpc(p).solve(0.0, 0.0, 0.0, 10, 4.0)
+        assert abs(on) < 1e-2
+
+    def test_circle_command_matches_the_steady_state_angle(self, tmp_path):
+        """On a constant-radius circle, on the line, the answer is analytic.
+
+        `delta0` is held at the steady-state angle, which is what the actuator
+        feedback reports once the car is settled.
+        """
+        R = 3.0
+        p = RefPath(circle_path(tmp_path, R=R, n=400))
+        m = make_mpc(p)
+        # psi' = g tan(d)/L - kappa = 0  ->  d = atan(kappa L / g)
+        want = math.atan(vehicle.WHEELBASE / (R * m.cfg['yaw_gain']))
+        cmd = 0.0
+        for _ in range(5):
+            cmd, _ = m.solve(0.0, 0.0, want, 50, 4.0,
+                             committed=[want] * m.nd)
+        assert cmd == pytest.approx(want, abs=0.02)
+
+    def test_the_loop_survives_losing_the_steering_feedback(self, tmp_path):
+        """Closed loop on a circle, with and without `/steering`.
+
+        `committed` comes from `Actuator`.  When feedback exists it is anchored
+        on the measured angle; when none has ever arrived it now replays the
+        command history through the same dead time and slew.  It used to return
+        the last command as though it were already applied, and that assumption
+        cost the loop everything: lateral p95 0.0041 m -> 0.171 m here, and
+        0.019 -> 0.965 m on R 3 m at 4 m/s.  This test is the regression guard
+        for that fallback.
+        """
+        good = drive_circle(tmp_path, R=6.0, v=3.0, feedback=True)
+        blind = drive_circle(tmp_path, R=6.0, v=3.0, feedback=False)
+        assert good['p95'] < 0.03, good
+        assert blind['p95'] < 0.03, blind
+        assert blind['p95'] < 3 * good['p95'] + 0.005, (good, blind)
+
+    def test_closed_loop_error_decays_on_a_straight(self, tmp_path):
+        """Drive the real solver against a kinematic plant; the error must fall."""
+        p = RefPath(straight_path(tmp_path, length=120.0, n=1200))
+        m = make_mpc(p)
+        x, y, yaw, delta, v = 0.0, 0.40, 0.0, 0.0, 4.0
+        dt = 0.090
+        idx = None
+        peak = 0.0
+        for _ in range(60):
+            idx = p.nearest(x, y, idx, yaw=yaw)
+            e_lat = y - p.xy[idx, 1]
+            cmd, _ = m.solve(e_lat, wrap(yaw - p.yaw[idx]), delta, idx, v)
+            # actuator: slew towards the command over one frame
+            delta += max(-vehicle.STEER_RATE * dt,
+                         min(vehicle.STEER_RATE * dt, cmd - delta))
+            yr = m.cfg['yaw_gain'] * v * math.tan(delta) / vehicle.WHEELBASE
+            x += v * math.cos(yaw + 0.5 * yr * dt) * dt
+            y += v * math.sin(yaw + 0.5 * yr * dt) * dt
+            yaw = wrap(yaw + yr * dt)
+            peak = max(peak, abs(y))
+        assert abs(y) < 0.10, f'did not converge, |e|={abs(y):.3f}'
+        assert peak < 1.0, 'overshot wildly before converging'
+
+
+# --------------------------------------------------------------------------
+# 3. wraparound, teleports and stale warm starts
+# --------------------------------------------------------------------------
+
+class TestWraparoundAndTeleport:
+    def test_horizon_indices_stay_in_range_across_the_seam(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400, v=5.0))
+        m = make_mpc(p)
+        for i0 in list(range(390, 400)) + list(range(0, 10)):
+            cmd, info = m.solve(0.0, 0.0, 0.11, i0, 5.0, committed=[0.11] * m.nd)
+            assert math.isfinite(cmd)
+            assert info['idx'].min() >= 0 and info['idx'].max() < p.n
+            assert np.isfinite(info['e']).all() and np.isfinite(info['v']).all()
+
+    def test_driving_through_the_seam_is_not_a_disturbance(self, tmp_path):
+        """A closed lap of a circle: index 0 is not a physical event, so the
+        lateral error must not spike there."""
+        r = drive_circle(tmp_path, R=6.0, v=4.0, steps=180, record_seam=True)
+        assert r['seam_crossings'] >= 1, 'the test never reached the seam'
+        assert r['p95'] < 0.05, r
+        assert r['seam_max'] < 3 * r['p95'] + 0.02, r
+
+    def test_teleport_to_a_far_index_stays_finite_and_bounded(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400, v=6.0))
+        m = make_mpc(p)
+        for _ in range(5):                       # build up a warm start at speed
+            m.solve(0.0, 0.0, 0.2, 10, 6.0)
+        # collision reset: new pose half a lap away, car at rest, error large
+        cap = 0.4
+        cmd, info = m.solve(0.45, 0.9, 0.2, 200, 0.5, cap=cap)
+        assert math.isfinite(cmd) and abs(cmd) <= cap + 1e-9
+        assert np.isfinite(info['v']).all()
+        assert info['v'][0] == pytest.approx(0.5, abs=1e-9)
+        assert math.isfinite(info['v_cmd']) and info['v_cmd'] >= 0.0
+
+    def test_speed_plan_starts_from_the_car_not_the_profile(self, tmp_path):
+        """The standing-start guarantee: v[0] is the speed passed in."""
+        p = RefPath(circle_path(tmp_path, R=6.0, n=400, v=7.0))
+        m = make_mpc(p)
+        _, info = m.solve(0.0, 0.0, 0.0, 0, 0.5)
+        assert info['v'][0] == pytest.approx(0.5)
+        # and it accelerates at no more than a_accel over each step
+        v, ds = info['v'], info['ds']
+        for k in range(len(ds)):
+            assert v[k + 1] ** 2 <= v[k] ** 2 + 2 * m.cfg['a_accel'] * ds[k] + 1e-6
+
+    def test_ceiling_never_exceeds_the_offline_profile(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=6.0, n=400, v=5.0))
+        m = make_mpc(p)
+        _, info = m.solve(0.0, 0.0, 0.0, 0, 5.0)
+        assert info['v_ceiling'].max() <= 5.0 + 1e-9
+        assert info['v_cmd'] <= 5.0 + 1e-9
+
+    def test_large_lateral_error_cuts_the_commanded_speed(self, tmp_path):
+        p = RefPath(straight_path(tmp_path, v=6.0))
+        base = make_mpc(p)
+        _, clean = base.solve(0.0, 0.0, 0.0, 10, 6.0)
+        wide = make_mpc(p)
+        for _ in range(3):                       # let e_pred fill with the error
+            _, off = wide.solve(0.9, 0.0, 0.0, 10, 6.0)
+        assert off['v_cmd'] < clean['v_cmd'], 'speed cut did not engage'
+        assert off['v_cmd'] >= base.cfg['v_mod_min'] * 6.0 - 1e-6
+
+
+# --------------------------------------------------------------------------
+# 4. corridor barrier
+# --------------------------------------------------------------------------
+
+class TestBarrier:
+    def _corridor(self, p, half):
+        p.w_left = np.full(p.n, half)
+        p.w_right = np.full(p.n, half)
+        p.has_corridor = True
+
+    def test_barrier_pushes_back_from_the_wall(self, tmp_path):
+        p = RefPath(straight_path(tmp_path))
+        self._corridor(p, 0.80)
+        m = make_mpc(p)
+        _, info = m.solve(0.55, 0.0, 0.0, 10, 4.0)
+        # hi = 0.80 - (0.135 + 0.24) = 0.425; the car is outside it and the
+        # horizon must come back inside.
+        assert info['hi'][0] == pytest.approx(0.425, abs=1e-6)
+        assert info['e'][-1] < 0.55
+
+    def test_corridor_narrower_than_the_margin_is_not_a_crash(self, tmp_path):
+        """hw = 0.135 + barrier_margin = 0.375 m.  A 0.30 m half-width corridor
+        makes lo > hi, i.e. an infeasible box.  An unseen track can easily have
+        a pinch point that tight, so the solver must degrade to the corridor
+        middle rather than produce nonsense."""
+        p = RefPath(straight_path(tmp_path))
+        self._corridor(p, 0.30)
+        m = make_mpc(p)
+        cmd, info = m.solve(0.20, 0.0, 0.0, 10, 4.0)
+        assert math.isfinite(cmd)
+        assert info['lo'][0] > info['hi'][0]     # the box really is empty
+        assert np.isfinite(info['e']).all()
+        assert abs(info['e'][-1]) < abs(0.20) + 0.05
+
+
+# --------------------------------------------------------------------------
+# 5. degenerate lines the pipeline is supposed to reject
+# --------------------------------------------------------------------------
+
+class TestDegenerateLines:
+    def test_three_point_line(self, tmp_path):
+        tiny = tmp_path / 'tiny.csv'
+        tiny.write_text('0,0,0,0,0,2,0\n1,1,0,0,0,2,0\n2,0.5,0.8,0,0,2,0\n')
+        p = RefPath(str(tiny))
+        cmd, info = make_mpc(p).solve(0.05, 0.0, 0.0, 0, 2.0)
+        assert math.isfinite(cmd)
+        assert info['idx'].max() < p.n
+
+    def test_duplicated_points_do_not_divide_by_zero(self, tmp_path):
+        xy = np.repeat(np.column_stack([np.linspace(0, 10, 20),
+                                        np.zeros(20)]), 3, axis=0)
+        p = RefPath(write_line(tmp_path, xy, name='dup.csv'))
+        assert p.spacing >= 0.0
+        cmd, _ = make_mpc(p).solve(0.1, 0.0, 0.0, 5, 3.0)
+        assert math.isfinite(cmd)
+
+    def test_direction_reversal_line_stays_bounded(self, tmp_path):
+        """A line that doubles back is rejected by make_track_lines'
+        `drivability`, but PIT_CREW_LINE can still name one.  It must not make
+        the solver diverge or emit anything outside the steering cap."""
+        fwd = np.column_stack([np.linspace(0, 10, 100), np.zeros(100)])
+        back = np.column_stack([np.linspace(10, 0, 100), np.full(100, 0.05)])
+        p = RefPath(write_line(tmp_path, np.vstack([fwd, back]), name='rev.csv'))
+        m = make_mpc(p)
+        cmd = 0.0
+        for i0 in (10, 50, 95, 99, 100, 105, 150):
+            cmd, info = m.solve(0.1, 0.0, cmd, i0, 4.0)
+            assert math.isfinite(cmd)
+            assert abs(cmd) <= vehicle.MAX_STEER + 1e-9
+            assert np.isfinite(info['e']).all()
+
+
+# --------------------------------------------------------------------------
+# 6. non-finite input
+# --------------------------------------------------------------------------
+
+class TestNonFinite:
+    def test_nonfinite_cap_and_speed_do_not_crash(self, tmp_path):
+        p = RefPath(straight_path(tmp_path))
+        m = make_mpc(p)
+        cmd, _ = m.solve(0.1, 0.0, 0.0, 10, 4.0, cap=float('inf'))
+        assert math.isfinite(cmd) and abs(cmd) <= vehicle.MAX_STEER + 1e-9
+
+    def test_out_of_range_delta0_is_clipped(self, tmp_path):
+        p = RefPath(straight_path(tmp_path))
+        m = make_mpc(p)
+        cmd, info = m.solve(0.0, 0.0, 5.0, 10, 4.0)
+        assert abs(info['delta'][0]) <= vehicle.MAX_STEER + 1e-9
+        assert math.isfinite(cmd)
+
+    @pytest.mark.parametrize('state', [
+        (float('nan'), 0.0, 0.0, 4.0),
+        (0.0, float('nan'), 0.0, 4.0),
+        (0.0, 0.0, float('nan'), 4.0),       # used to publish FULL RIGHT LOCK
+        (0.0, 0.0, 0.0, float('nan')),
+        (float('inf'), 0.0, 0.0, 4.0),
+    ])
+    def test_non_finite_state_is_rejected_not_absorbed(self, tmp_path, state):
+        """`_rollout` clips with min(cap, max(-cap, raw)), and Python's max
+        returns -cap for a NaN, so a NaN steering angle used to come out as
+        -MAX_STEER: full right lock, silently.  The solver now refuses."""
+        p = RefPath(straight_path(tmp_path))
+        e, psi, d, v = state
+        with pytest.raises(ValueError):
+            make_mpc(p).solve(e, psi, d, 10, v)
+
+    def test_non_finite_committed_steering_is_rejected(self, tmp_path):
+        p = RefPath(straight_path(tmp_path))
+        m = make_mpc(p)
+        with pytest.raises(ValueError):
+            m.solve(0.1, 0.0, 0.0, 10, 4.0, committed=[float('nan')] * m.nd)
+
+    def test_a_rejected_state_leaves_the_previous_plan_untouched(self, tmp_path):
+        """The node holds its last good command, so the warm start it will
+        solve from next frame must not have been half-updated."""
+        p = RefPath(straight_path(tmp_path))
+        m = make_mpc(p)
+        cmd, _ = m.solve(0.20, 0.0, 0.0, 10, 4.0)
+        u_before = m.u.copy()
+        with pytest.raises(ValueError):
+            m.solve(float('nan'), 0.0, 0.0, 10, 4.0)
+        assert np.array_equal(m.u, u_before)
+        again, _ = m.solve(0.20, 0.0, 0.0, 10, 4.0)
+        assert math.isfinite(again)
+
+
+# --------------------------------------------------------------------------
+# 7. actuator / pose filter: what a teleport leaves behind
+# --------------------------------------------------------------------------
+
+class TestActuatorAndPose:
+    def test_feedback_overrides_the_command_history(self):
+        a = Actuator(dead_time=0.135)
+        a.record(0.0, 0.30)
+        a.snap(0.10, 0.05)
+        assert a.delta_at(0.10) == pytest.approx(0.05)
+        # after the feedback ends the slew model takes over, towards 0.30
+        assert 0.05 < a.delta_at(0.25) <= 0.30
+
+    def test_out_of_order_feedback_is_ignored(self):
+        a = Actuator()
+        a.snap(1.0, 0.2)
+        a.snap(0.9, -0.2)
+        assert a.delta_at(1.0) == pytest.approx(0.2)
+        a.snap(float('nan'), 0.1)
+        assert a.delta_at(1.0) == pytest.approx(0.2)
+
+    def test_without_feedback_the_command_history_is_modelled(self):
+        """If `/steering` never arrives the actuator is modelled, not assumed.
+
+        It used to return the last command for every time, i.e. no dead time
+        and no slew.  Now the same 0.135 s dead time and 3.2 rad/s slew apply.
+        """
+        a = Actuator(dead_time=0.135)
+        a.record(0.0, 0.40)
+        assert a.delta_at(0.0) == pytest.approx(0.0)      # still in the pipe
+        assert a.delta_at(0.135) == pytest.approx(0.0)
+        mid = a.delta_at(0.20)
+        assert 0.0 < mid < 0.40                            # slewing
+        assert a.delta_at(1.0) == pytest.approx(0.40)      # arrived
+        assert a.delta_at(1.0) <= 0.40 + 1e-9              # never overshoots
+
+    def test_the_modelled_fallback_cannot_loop_forever(self):
+        """`hist` starts at -1e9; the fallback must clamp its start time."""
+        a = Actuator(dead_time=0.135)
+        a.record(0.0, 0.30)
+        assert a.delta_at(1e6) == pytest.approx(0.30)
+
+    def test_pose_filter_takes_a_teleport_whole(self):
+        a = Actuator()
+        f = PoseFilter(a, blend=0.55, gate_m=0.5)
+        f.update(0.0, 0.0, 0.0, 0.0, 4.0)
+        x, y, yaw, _ = f.update(0.1, 5.0, 5.0, 1.0, 4.0)
+        assert (x, y) == pytest.approx((5.0, 5.0))        # gate -> take it whole
+        # a small innovation is still blended
+        g = PoseFilter(Actuator(), blend=0.55, gate_m=0.5)
+        g.update(0.0, 0.0, 0.0, 0.0, 4.0)
+        x2, y2, _, _ = g.update(0.1, 0.05, 0.05, 0.0, 4.0)
+        assert 0.0 < y2 < 0.05
+
+    def test_blend_one_always_takes_the_pose_whole(self):
+        f = PoseFilter(Actuator(), blend=1.0, gate_m=0.5)
+        f.update(0.0, 0.0, 0.0, 0.0, 4.0)
+        x, y, _, _ = f.update(0.1, 0.4, 0.02, 0.0, 4.0)
+        assert (x, y) == pytest.approx((0.4, 0.02))
+
+
+# --------------------------------------------------------------------------
+# 8. derive_map_prefix -- read out of mpc3.py without importing rclpy
+# --------------------------------------------------------------------------
+
+def _load_derive_map_prefix():
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
+        __file__))), 'src', 'pit_crew', 'mpc3.py')
+    tree = ast.parse(open(src).read())
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == 'derive_map_prefix')
+    ns = {'os': os}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), src, 'exec'), ns)
+    return ns['derive_map_prefix']
+
+
+class TestDeriveMapPrefix:
+    def _tree(self, tmp_path, maps):
+        (tmp_path / 'maps').mkdir()
+        (tmp_path / 'racelines').mkdir()
+        for m in maps:
+            for ext in ('.yaml', '.pgm'):
+                (tmp_path / 'maps' / (m + ext)).write_text('x')
+        return tmp_path
+
+    def test_drill_line_names_resolve_to_the_mesh_map(self, tmp_path):
+        derive = _load_derive_map_prefix()
+        root = self._tree(tmp_path, ['finals_mesh'])
+        for name in ('finals_mesh_mc0.60_ay6.0.csv', 'finals_mesh_race.csv',
+                     'finals_mesh_safe.csv', 'finals_mesh_centerline.csv',
+                     'finals_mesh_raceline_anchored_w0.48.csv'):
+            got = derive(str(root / 'racelines' / name))
+            assert got == str(root / 'maps' / 'finals_mesh'), name
+
+    def test_longest_matching_prefix_wins(self, tmp_path):
+        derive = _load_derive_map_prefix()
+        root = self._tree(tmp_path, ['finals', 'finals_mesh'])
+        assert derive(str(root / 'racelines' / 'finals_mesh_race.csv')) == \
+            str(root / 'maps' / 'finals_mesh')
+
+    def test_missing_map_disables_the_barrier_silently(self, tmp_path):
+        derive = _load_derive_map_prefix()
+        root = self._tree(tmp_path, [])
+        assert derive(str(root / 'racelines' / 'finals_mesh_race.csv')) == ''
+
+    def test_half_a_map_is_not_a_map(self, tmp_path):
+        derive = _load_derive_map_prefix()
+        root = self._tree(tmp_path, [])
+        (root / 'maps' / 'finals_mesh.yaml').write_text('x')      # no .pgm
+        assert derive(str(root / 'racelines' / 'finals_mesh_race.csv')) == ''
+
+    def test_line_outside_the_data_layout_finds_nothing(self, tmp_path):
+        """PIT_CREW_LINE pointing anywhere but <root>/racelines/ silently
+        disables the corridor barrier -- there is no error, only a warn."""
+        derive = _load_derive_map_prefix()
+        root = self._tree(tmp_path, ['finals_mesh'])
+        loose = root / 'finals_mesh_race.csv'
+        loose.write_text('')
+        assert derive(str(loose)) == ''

@@ -427,6 +427,19 @@ class MPC3:
         c = self.cfg
         N, nd = self.N, self.nd
         nf = N - nd
+        # A non-finite state is not a control problem, and it must not be
+        # silently absorbed: `_rollout` clips with `min(cap, max(-cap, raw))`,
+        # and Python's max returns `-cap` for a NaN, so a NaN steering angle
+        # would be published as FULL RIGHT LOCK. The caller holds its last good
+        # command instead.
+        if not all(math.isfinite(float(q))
+                   for q in (e_lat, e_yaw, delta0, v0)):
+            raise ValueError(
+                f'non-finite state: e_lat={e_lat} e_yaw={e_yaw} '
+                f'delta0={delta0} v0={v0}')
+        if committed is not None and not np.isfinite(
+                np.asarray(committed, dtype=float)).all():
+            raise ValueError(f'non-finite committed steering: {committed}')
         cap = vehicle.MAX_STEER if cap is None else min(cap, vehicle.MAX_STEER)
         rate = float(c['steer_rate'])
         z0 = (float(e_lat), float(wrap(e_yaw)),
