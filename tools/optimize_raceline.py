@@ -271,6 +271,18 @@ def main():
                     help='look this many metres ahead when applying the ay '
                          'cap, so the car is already slow when a corner '
                          'tightens. 0 disables (default).')
+    ap.add_argument('--alpha-smooth', type=int, default=5, metavar='W',
+                    help='width of the circular boxcar applied to the QP\'s '
+                         'lateral shift before the line is built. 5 (default) '
+                         'is what every shipping line was generated with. '
+                         'Wider trades path optimality for curvature '
+                         'continuity: min-curvature bounds the INTEGRAL of '
+                         'kappa and is free to spend it in one place, and on a '
+                         'pixel-skeleton reference that shows up as isolated '
+                         'd(kappa)/ds spikes at spline junctions -- 4.3 1/m2 '
+                         'on Porto\'s mesh skeleton line against 1.7 on the '
+                         'shipping safe line. Above 5 the smoothed shift is '
+                         'clipped back inside the corridor the QP solved.')
     ap.add_argument('--stepsize', type=float, default=0.10)
     ap.add_argument('--sweep-iters', type=int, default=2,
                     help='corridor shrink / re-optimize passes for body sweep')
@@ -336,11 +348,31 @@ def main():
 
     # Light circular smoothing of the lateral shift: isolated single-point
     # solutions show up as curvature spikes that crater the velocity profile.
-    win = 5
+    win = args.alpha_smooth
     kern = np.ones(win) / win
     alpha_raw = alpha.copy()
     alpha = np.convolve(np.concatenate([alpha[-win:], alpha, alpha[:win]]),
                         kern, mode='same')[win:-win]
+    if win != 5 and not args.centerline_only:
+        # A wider window moves the solution further, so stop trusting the
+        # measured-zero-violations result the default window earns and make
+        # the corridor a hard constraint again.
+        #
+        # A single hard clip is not enough: where the constraint is active
+        # over a stretch -- large --w-veh on a narrow track -- it truncates
+        # the smoothed shift into a flat with corners, and the corners are
+        # curvature spikes far worse than the ones the smoothing was meant to
+        # remove (measured on Porto's mesh map at w_veh 0.60: max d(kappa)/ds
+        # 1.6 -> 6.4 1/m2, and at 0.66 -> 16.9). Alternate projection and a
+        # short re-smooth so the result is both inside the corridor and still
+        # differentiable, then project once more so feasibility is exact.
+        lo, hi = -work[:, 2], work[:, 3]
+        k3 = np.ones(3) / 3.0
+        for _ in range(8):
+            alpha = np.clip(alpha, lo, hi)
+            alpha = np.convolve(np.concatenate([alpha[-3:], alpha, alpha[:3]]),
+                                k3, mode='same')[3:-3]
+        alpha = np.clip(alpha, lo, hi)
 
     # Smoothing a CONSTRAINED solution can push it back outside the constraint,
     # and nothing downstream re-checked that. Measured on Porto at w_veh 0.44:
