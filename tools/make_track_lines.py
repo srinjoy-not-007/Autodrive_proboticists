@@ -295,7 +295,7 @@ MIN_CLEARANCE = 0.30
 # 0.22 is the physics bar -- and on Porto neither is binding, because the
 # w_veh sweep above produces lines at 0.29-0.35 m that are still faster than
 # anything shipped. Prefer buying clearance with w_veh over spending it.
-MESH_MIN_CLEARANCE = 0.22
+MESH_MIN_CLEARANCE = 0.28   # 0.230 collided on ICRA (kappa 1.42), 0.292 clean on Porto
 
 # ...but 0.30 is derived entirely from PORTO collisions, and the finals track is
 # released three days before the deadline. On a genuinely narrow circuit every

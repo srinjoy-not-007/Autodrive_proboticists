@@ -10,6 +10,13 @@ with the wide line (PIT_CREW_CONTROLLER=mpc selects the legacy tracker with
 the centerline). Pending: image raced as shipped, ICRA with mpc3 on the
 mesh lines (running), 32-lap probes of the wide line at ay 6.5.
 
+ICRA-2026 with mpc3 on the mesh lines: centerline (safe) 30 laps, 0
+collisions, 149.4 s; the wide line built at the provisional 0.22 m floor
+(0.230 m clearance, 12.45 s ideal) took 10 collisions in 18 laps at the
+kappa 1.42 corner. **MESH_MIN_CLEARANCE is now 0.28 m** (0.230 collided,
+0.292 clean on Porto); the ICRA race line rebuilt under it has 0.301 m
+clearance and 12.53 s ideal, untested yet.
+
 ## September 12, night: mpc3 on the wide line, 74.4 s
 
 **Best measured so far: mpc3 (new tracker) on the wide min-curvature line
