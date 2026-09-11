@@ -38,10 +38,29 @@ def score_rows(rows, n_scored=10):
                          f'only {len(crossings)} transitions')
     selected = crossings[:n_scored + 1]
     laps = [b[0] - a[0] for a, b in zip(selected, selected[1:])]
+    # The stewards sum the simulator's own lap timer, not our sample clock.
+    # The logger records `lap_time` (the running timer, reset at each
+    # crossing), so the value on the last sample before a transition is that
+    # lap's official time to within one sensor period of *its* end -- but,
+    # unlike sample-timestamp differences, unaffected by logger jitter.
+    sim_laps = None
+    if rows and 'lap_time' in rows[0]:
+        try:
+            before = {}
+            prev_row = rows[0]
+            for row in rows[1:]:
+                if int(row['lap_count']) != int(prev_row['lap_count']):
+                    before[int(row['lap_count'])] = float(prev_row['lap_time'])
+                prev_row = row
+            sim_laps = [before[c[1]] for c in selected[1:]]
+            if any(not math.isfinite(v) or v <= 0 for v in sim_laps):
+                sim_laps = None
+        except (KeyError, ValueError):
+            sim_laps = None
     collisions = selected[-1][2] - selected[0][2]
     elapsed = selected[-1][0] - selected[0][0]
     return dict(laps=laps, collisions=collisions, elapsed=elapsed,
-                race_time=elapsed + 10.0 * collisions,
+                race_time=elapsed + 10.0 * collisions, sim_laps=sim_laps,
                 passed=collisions <= 10, start=selected[0][0], end=selected[-1][0])
 
 
@@ -61,6 +80,11 @@ def main():
     print(f"Elapsed {result['elapsed']:.3f} s; scored collisions "
           f"{result['collisions']}; race {result['race_time']:.3f} s; "
           f"best {min(result['laps']):.3f} s")
+    if result['sim_laps']:
+        sl = result['sim_laps']
+        print(f"Simulator lap timer: {sum(sl):.3f} s + penalties = "
+              f"{sum(sl) + 10.0 * result['collisions']:.3f} s; "
+              f"best {min(sl):.3f} s; laps " + ', '.join(f'{t:.2f}' for t in sl))
     print('PASS' if result['passed'] else 'DISQUALIFIED')
     return 0 if result['passed'] else 1
 

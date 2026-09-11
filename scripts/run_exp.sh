@@ -1,7 +1,7 @@
 #!/bin/bash
 # One measured experiment: start the shipping stack with overrides, run until
 # N laps (default 32) or a collision budget is blown, stop, score, and append a
-# row to data/logs/experiments.tsv so runs from one session are comparable.
+# row to data/experiments.tsv so runs from one session are comparable.
 #
 # Usage:
 #   ./scripts/run_exp.sh <name> [line] [extra ros args...]
@@ -19,6 +19,15 @@ mkdir -p data/logs
 CONTROLLER="${CONTROLLER:-mpc}" LIDAR_OFFSET="${LIDAR_OFFSET:-0.0}" \
     ./scripts/run_stanley.sh "$SCALE" "$MAP" "$LINE" $EXTRA > /tmp/run_exp_start.log 2>&1 \
     || { echo "start failed"; tail -5 /tmp/run_exp_start.log; exit 1; }
+if [ "${BAG:-0}" = "1" ]; then
+    # Record the sensor topics too, so the run can feed build_map_from_bag.py.
+    docker exec -d autodrive_roboracer_api /bin/bash -c "source /opt/ros/humble/setup.bash && \
+        mkdir -p /home/data/bags && ros2 bag record -o /home/data/bags/exp_${NAME}_$(date +%H%M%S) \
+        /autodrive/roboracer_1/lidar /autodrive/roboracer_1/imu \
+        /autodrive/roboracer_1/left_encoder /autodrive/roboracer_1/right_encoder \
+        /autodrive/roboracer_1/throttle /autodrive/roboracer_1/steering \
+        /autodrive/roboracer_1/ips > /tmp/bag.log 2>&1"
+fi
 sleep 3
 LOG=$(ls -t data/logs/race_*.csv | head -1)
 echo "[$NAME] logging to $LOG"
@@ -36,6 +45,9 @@ while true; do
         break
     fi
 done
+if [ "${BAG:-0}" = "1" ]; then
+    docker exec autodrive_roboracer_api /bin/bash -c "pkill -INT -f '[r]os2 bag record'; sleep 4; true"
+fi
 ./scripts/stop_run.sh > /dev/null 2>&1
 
 SUMMARY=$(.venv/bin/python - "$LOG" <<'EOF'
@@ -50,5 +62,5 @@ print(f"laps={lap[-1]-lap[0]} coll={col[-1]-col[0]} median={np.nanmedian(lt):.3f
 EOF
 )
 SCORE=$(.venv/bin/python tools/score_race.py "$LOG" 2>&1 | grep -E 'race|UNVERIFIED' | head -1)
-echo -e "$(date +%F_%T)\t$NAME\t$LINE\t$EXTRA\t$SUMMARY\t$SCORE\t$LOG" >> data/logs/experiments.tsv
+echo -e "$(date +%F_%T)\t$NAME\t$LINE\t$EXTRA\t$SUMMARY\t$SCORE\t$LOG" >> data/experiments.tsv
 echo "[$NAME] $SUMMARY | $SCORE"

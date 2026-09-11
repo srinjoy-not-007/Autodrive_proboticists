@@ -40,3 +40,4 @@ data/maps/track_v2_c_*
 data/racelines/*_ay[0-9]*.csv
 data/racelines/*_ay[0-9]*_qc.png
 data/maps/track_v2_u*
+data/experiments.tsv
