@@ -295,7 +295,7 @@ def main():
     if args.centerline_only:
         alpha = np.zeros(len(reftrack))
         print('centerline-only: no lateral shift')
-        if args.inside_bias > 0.0:
+        if args.inside_bias != 0.0:
             # Curvature of the reference itself (sign gives the corner side).
             # Verified numerically: positive alpha shifts RIGHT of travel and
             # positive kappa is a LEFT turn, so the inside is -sign(kappa).

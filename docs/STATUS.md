@@ -29,6 +29,39 @@ these are lateral, not braking. Lines `data/racelines/track_v2_safe_ay*.csv`
 are regenerable (git-ignored) with `optimize_raceline.py --centerline-only
 --ay X --ax 6.5 --brake 4.0 --jerk-lat 40`.
 
+### Later on Sept 11: the hairpin collisions are an INSIDE cut, not a wide run
+
+`tools/signed_offset.py` (+ = left of travel) against the centerline through
+the right-hand hairpin, s 10-14:
+
+| run | offset s 10-11 | s 12-13 | s 13-14 |
+|---|---:|---:|---:|
+| baseline (no delay comp, ay 4.5) | -0.078 | -0.107 | -0.016 |
+| cmd_delay 0.18, ay 4.5 | -0.151 | -0.148 | -0.209 |
+| cmd_delay 0.18, ay 6.0 | -0.168 | -0.150 | -0.228 |
+| + reference shifted 0.10 m INSIDE | -0.260 | -0.251 | -0.301 (collision every lap) |
+
+Negative is right = inside. The car cuts the hairpin and every s 13.6
+collision is with the inside wall at the exit. The dead-time compensation
+doubles the cut. Everything that "failed" that afternoon is the same
+mechanism: the gyro and understeer delay models predict less rotation so the
+controller turns harder (10 collisions in <= 11 laps each); ay_limit 9.5
+allows more lock (5 collisions); the inside bias moved the line into the
+wall. An OUTSIDE bias (`--inside-bias -0.12`) and a shorter delay are the
+two fixes under test. Also measured: brake 6.0 with the honest drag/servo
+profile is worse (6 collisions), and the servo only accelerates hard when
+the target is well above the current speed, so the straight-line deficit
+needs throttle over-command (`throttle_a_gain`), not a different profile.
+
+Simulator facts from the asset audit (see the commit "Exact maps from the
+simulator mesh"): throttle is a speed servo (target 24.6 x throttle, ~6
+m/s2 authority both ways, zero throttle brakes at ~5.8 m/s2); rigidbody
+drag 0.273/s; physics at 1000 Hz; telemetry every 90 ms regardless of
+graphics or load; LiDAR is a CPU raycaster (the "GPU raytraced" note in
+CLAUDE.md is wrong, though Xvfb still works); sideways tyre peak mu 1.0 at
+slip 0.01, asymptote 0.5 at 0.1; all six circuits' meshes ship in the
+practice image and `tools/map_from_mesh.py` turns them into exact maps.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
