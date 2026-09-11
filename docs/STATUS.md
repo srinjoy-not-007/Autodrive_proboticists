@@ -2293,3 +2293,70 @@ Three fixes, all track-agnostic:
 Note the sim's `lap_count` and `collision_count` are **cumulative across runs**
 and only reset when the simulator container restarts. Two runs here were first
 misread because of that; always difference them against the run's first row.
+
+## September 12: the lateral limit, identified instead of guessed
+
+`tools/lateral_id.py` (new, offline) fits the car's lateral response from the
+Sept 11 race logs, ForzaETH On-Track-SysID style, and writes
+`data/calibration/steer_map.csv` and `data/calibration/ggv.csv`. Nothing in the
+shipping stack reads them yet — `optimize_raceline.py`, `mpc.py` and
+`vehicle.py` are untouched.
+
+Measurement chain: IPS x,y at ~11 Hz, local cubic fit over ±2 samples for
+speed, path curvature and ay; `steering` in the same row is actuator feedback
+from the same telemetry packet, so the 0.135 s command dead time is not in this
+signal. Cross-checked against the IMU gyro in `data/bags/exp_ay50_d180_181558`:
+the IPS-derived path yaw rate is **0.954x** the measured body yaw rate, so
+every number below reads ~5% LOW at the peaks.
+
+Identified (fit on six high-ay Porto runs, ICRA held out):
+
+| quantity | value | how well determined |
+|---|---|---|
+| kinematic gain `g` | 1.000 | bounded; kappa and ay are 0.94 correlated, a free fit returns a 0.17 m wheelbase |
+| understeer gradient `K_us` | 0.0011 rad/(m/s²) | weak; characteristic speed 17 m/s, i.e. nearly neutral |
+| lateral pole `tau` | 0.085 s (bag: 0.045 s) | trades against a 0.050 s dead time at a 0.09 s sample rate; either way it is fast |
+| saturation, hard clip | 5.94 m/s² (ICRA 7.00) | fits |
+| saturation, tanh asymptote | 10.4 m/s² (ICRA 11.4) | **not identified** — 9 to 15 all fit within 3% |
+
+Forward validation (model ay vs measured ay per speed×steer cell, quasi-steady
+only) is within ±0.65 m/s², usually under 10%.
+
+**Does the data support ay 8-9 in the hairpins? No — and it cannot rule it
+out.** Nothing in the corpus holds more than **6.5 m/s²** for 0.27 s at any
+speed (sustained p99 by speed band: 4.67 at 1.75 m/s, 5.44 at 2.25, 6.19 at
+2.75, 6.54 at 3.25). In the hairpins (v 2.5-3.2, |delta| > 0.26) the car asks
+0.901 1/m and gets 0.745, at a median ay of 5.70. The marginal return on lock
+is already down to 50-60% of kinematic by ay 5.4. A kappa 1.0 apex is drivable
+at **2.56 m/s** on the measured envelope, not the 2.9-3.0 m/s that ay 8.7 would
+buy. But the corpus contains **4 quasi-steady samples above 0.33 rad of
+steering** and **4 samples above 4.5 m/s with more than 0.15 rad** — the
+controller never asks, so racing can never answer.
+
+Independent corroboration of the promoted config: the measured sustained
+envelope (6.5) sits exactly where the driven results put the cliff — planner
+ay 6.0 runs 100 laps clean, 6.5 takes 3/100, 7.0 takes 5/32.
+
+Also measured on the way: the combined |a| at p99 is **7.0-7.2 m/s² at every
+lateral level**, i.e. a friction circle of ~7.1 m radius, and the usable
+longitudinal axis shrinks as ay grows (ax p05 goes -5.9 → -0.8 as |ay| goes
+0-1.5 → 5.5+). There is almost no hard-braking-while-cornering data (27
+samples), so the ellipse coupling is assumed, not measured.
+
+`data/calibration/ggv.csv` is in the TUM format `optimize_raceline.py` already
+builds inline (`np.loadtxt(..., comments='#')` then `calc_vel_profile`;
+verified it reproduces sqrt(ay/kappa) exactly). `ay_max` is written **flat** at
+the measured 6.54: the per-speed rise in the envelope is demand, not grip.
+`ax_max = 5.0 - 0.273v` comes from the longitudinal plant `tools/sim_servo.py`
+already identified (ServoThrottle's measured defaults) — note the shipping
+`--ax 6.5` is above what the servo can deliver.
+
+To settle the 8-9 question, `src/pit_crew/sysid_run.py` (new, registered as
+`ros2 run pit_crew sysid_run`) drives a steering staircase on the
+**`-explore`** image: speeds 2.0-5.5 m/s, steering 0.05 rad to lock, 2.0 s
+settle + 1.5 s hold per cell, sign alternating so the car weaves instead of
+spiralling, cells above 14 m/s² of kinematic demand skipped, staircase stopped
+when two steps add less than 0.2 m/s² of ay, LiDAR and 18 m radius guards. It
+logs every telemetry tick to `/home/data/logs/sysid_<ts>.csv`, and
+`tools/lateral_id.py --sysid <csv>` folds those holds into the same fit.
+**Not yet driven.**

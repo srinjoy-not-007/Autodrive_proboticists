@@ -33,7 +33,9 @@ setup(
             'stanley = pit_crew.stanley:main',
             'mpc = pit_crew.mpc:main',
             'mpc2 = pit_crew.mpc2:main',
+            'mpc3 = pit_crew.mpc3:main',
             'skidpad = pit_crew.skidpad:main',
+            'sysid_run = pit_crew.sysid_run:main',
         ],
     },
 )
