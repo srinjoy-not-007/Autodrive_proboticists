@@ -151,6 +151,19 @@ collisions in 32 laps, 5 of them at s 17.6 which never collided before).
 Re-run both once the host is quiet. Rule: never drive a scored run while
 anything else heavy runs on the host; check `uptime` first.
 
+Re-runs on a quiet host: ay 6.25 + pose_blend 1.0 -> 32 laps, 0
+collisions, 79.33 s, median 7.92. ay 6.5 + pose_blend 1.0, 100 laps -> 7
+collisions (s 17.6 x4, 16.2 x2, 27.7), median 7.79; the first third of that
+run overlapped the tail of the offline search (sim at 9.9 Hz), but 4 of the
+7 came after it stopped, so ay 6.5 is not clean for the legacy tracker.
+Offline search (tools/search_config.py; sim matches mpc2 live to 0.1 s, not
+the legacy): mpc2 on the ay 7.0-7.5 lines with cut_offset_m ~0.27, step_dt
+0.035-0.05, horizon 23-29, w_rate ~1.2, apply_ahead_s 0.12 predicts
+7.58-7.63 s/lap at the 0.10 m clearance floor. Live test of a moderated
+version (cut 0.22, ay 7.0) queued. Candidate lines in
+data/racelines/track_v2_cand_*.csv (mc0.42_ay7.0: 7.12 s ideal, 0.206 m
+mesh clearance) are built but not driven.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
