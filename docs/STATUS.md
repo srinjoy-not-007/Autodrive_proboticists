@@ -68,6 +68,14 @@ w_veh 0.66 (0.325 m) -> median 7.28, 5 collisions. The line is worth
 tracker: horizon optimisation with speed as state, servo throttle) is being
 driven on safe_ay6.0, safe_ay7.0 and mc0.60.
 
+**mpc3 live (32 laps each, mesh map):** safe_ay6.0 -> 0 collisions but
+86.7 s (0.50 m/s under plan); safe_ay7.0 -> 5 collisions (4 at s 29.2 on
+lap 0, right after the standing start); **mc0.60_ay6.0 -> 0 collisions,
+78.94 s, median 7.86, best 7.63, e_lat p50/p95 0.072/0.179 m**, still 0.41
+m/s under plan. mpc3 is the tracker for the wide line; the remaining gap is
+longitudinal (under investigation). 100-lap validation of mpc3 on mc0.60
+queued.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
