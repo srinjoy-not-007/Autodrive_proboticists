@@ -140,6 +140,11 @@ lidar_offset 0.1933: 100 laps, 0 collisions, first ten 80.36 s, median
 collision rate over 100 laps. Launch:
 `CONTROLLER=mpc2 MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> safe_ay6.5 -p cut_offset_m:=0.14`
 
+**100-lap validation: legacy mpc, ay 6.0 line, mesh map, cmd_delay 0.18,
+ay_limit 7.8, pose_blend 1.0: 100 laps, 0 collisions, first ten 79.68 s
+(sim timer 79.10), median 7.951.** Best validated config so far. Launch:
+`MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> safe_ay6.0 -p cmd_delay_s:=0.18 -p ay_limit:=7.8 -p pose_blend:=1.0`
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
