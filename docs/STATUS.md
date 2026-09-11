@@ -126,6 +126,14 @@ collisions, 80.55 s, median 8.06** (legacy 78.18 but 3 collisions/100).
 mpc2 at ay 7.5 with the line-derived cap: 5 collisions, no headroom there.
 Hairpin-only outside bias on the mesh map: 82.3 s and 1 collision; dropped.
 
+More mesh-map runs at ay 6.5 (32 laps each): pose_blend 1.0 -> 77.59 s,
+median 7.753, 1 collision (s 17.6), hairpin cut unchanged at -0.165;
+tight-corner cap 5.5 + pose_blend 1.0 -> 78.22 s, 1 collision (s 27.7);
+mpc2 cut 0.18 -> 80.87 s, 1 collision. So the legacy tracker sits at ~1-3
+hairpin collisions per 100 laps at ay 6.5 whatever the cap, bias, blend or
+prediction model, and mpc2 cut 0.14 (80.55 s clean) is the safe candidate.
+100-lap validations of mpc2 cut 0.14 (ay 6.5) and legacy ay 6.0 running.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
