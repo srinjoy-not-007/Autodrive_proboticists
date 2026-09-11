@@ -82,6 +82,14 @@ m/s under plan -- the fix did not move the live speed. Staircase sysid log
 recorded (data/logs/sysid_20260911_212223.csv, 103 rows, likely stopped
 early); being fitted.
 
+mpc3 speed deficit found: the lateral-error speed cut's free band (0.05 m)
+sat below the tracker's own median error, so it braked ~5% everywhere; the
+servo tracks its setpoint to 4 mm/s. Defaults now e_free 0.18, k_e 2.0,
+barrier_margin 0.24, w_lat 24 (offline 7.31 s on mc0.60 at the 0.146 m
+floor). Live so far: thr_lead 0.15 -> 2 collisions, 7.97 (rejected);
+**mc0.60_ay6.5 -> median 7.52, best 7.24, first ten 77.34 s, 1 collision
+(s 11.3 hairpin entry, lap 4)**. Explicit P1 A/B on mc0.60_ay6.0 queued.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 

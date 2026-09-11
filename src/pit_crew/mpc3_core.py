@@ -89,12 +89,20 @@ DEFAULTS = dict(
     k_excess_max=0.15,        # 1/m of CORRECTION curvature the speed cut may see
     a_brake=4.0,              # m/s2 the plan may ask the servo to shed
     a_accel=5.0,              # ...and to add (measured servo authority)
-    e_free=0.05,              # lateral error tolerated before slowing, m
-    k_e=1.2,                  # speed cut per metre of error beyond e_free
+    # `e_free` MUST sit above the tracker's own normal error or the emergency
+    # brake becomes a permanent tax.  At 0.05 it sat BELOW the live median
+    # (0.072 m, p95 0.179), so the cut was active essentially all the time:
+    # measured by replaying the 100-lap live log through this solver, it alone
+    # held the speed ceiling 0.188 m/s under the profile for the whole lap --
+    # every other term contributed 0.000.  0.18 is just above the measured live
+    # p95, so it is silent in normal running, and `k_e` is doubled so that it
+    # still bites hard when the car is genuinely off line.
+    e_free=0.18,              # lateral error tolerated before slowing, m
+    k_e=2.0,                  # speed cut per metre of error beyond e_free
     v_mod_min=0.55,           # never cut the profile speed below this fraction
     thr_lead_s=0.225,         # plan speed at the time the command is in force
     # cost ------------------------------------------------------------------
-    w_lat=16.0,
+    w_lat=24.0,
     w_yaw=3.0,
     w_steer=0.30,
     w_rate=0.60,              # on the applied steering change per step
@@ -102,7 +110,10 @@ DEFAULTS = dict(
     w_lat_T=40.0,
     w_yaw_T=8.0,
     w_barrier=400.0,
-    barrier_margin=0.16,      # corridor the barrier defends, beyond the body
+    barrier_margin=0.24,      # corridor the barrier defends, beyond the body.
+                              # Raised with the speed: a faster car spends more
+                              # of the corridor, and 0.16 put the offline worst
+                              # footprint clearance at 0.100 m on seed 3.
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes

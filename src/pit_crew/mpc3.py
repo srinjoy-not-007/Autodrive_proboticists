@@ -90,7 +90,7 @@ class MPC3Tracker(Node):
             ('min_step_m', 0.10),
             ('iters', 6),
             ('outer', 2),
-            ('w_lat', 16.0),
+            ('w_lat', 24.0),
             ('w_yaw', 3.0),
             ('w_steer', 0.30),
             ('w_rate', 0.60),
@@ -98,7 +98,7 @@ class MPC3Tracker(Node):
             ('w_lat_T', 40.0),
             ('w_yaw_T', 8.0),
             ('w_barrier', 400.0),
-            ('barrier_margin', 0.16),
+            ('barrier_margin', 0.24),
             # --- measured plant ---------------------------------------------
             ('yaw_gain', 0.956),
             ('ay_deliver', 9.5),
@@ -107,8 +107,8 @@ class MPC3Tracker(Node):
             ('ay_budget', 7.5),
             ('a_brake', 4.0),
             ('a_accel', 4.0),
-            ('e_free', 0.05),
-            ('k_e', 1.2),
+            ('e_free', 0.18),
+            ('k_e', 2.0),
             ('v_mod_min', 0.55),
             ('thr_lead_s', 0.225),
             # --- actuator / delay --------------------------------------------
