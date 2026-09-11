@@ -62,6 +62,28 @@ CLAUDE.md is wrong, though Xvfb still works); sideways tyre peak mu 1.0 at
 slip 0.01, asymptote 0.5 at 0.1; all six circuits' meshes ship in the
 practice image and `tools/map_from_mesh.py` turns them into exact maps.
 
+### Later still: the hairpin cut is a LOCALIZATION bias
+
+`race_logger.py` now records `/pit_crew/pose` next to IPS truth. On the
+ay 6.5 run, projecting both onto the centerline (+ = left):
+
+| s | truth lateral | estimate lateral | estimate - truth |
+|---|---:|---:|---:|
+| 0-10 (straight, easy corners) | -0.090 | -0.097 | -0.007 |
+| 10-12 hairpin entry | -0.140 | -0.257 | **-0.117** |
+| 12-14 hairpin exit | -0.165 | -0.331 | **-0.166** |
+| 25-29 second hairpin | -0.129 | -0.257 | **-0.128** |
+
+The filter is unbiased on the straights and 0.12-0.17 m to the inside in
+every tight corner. That is what ignoring the LiDAR's 0.1933 m forward
+offset does in map AND filter: it cancels while the heading is constant and
+shifts the estimate toward the centre of a tight turn. It also explains why
+every controller-side fix failed (Frenet progress: 6 collisions, same cut;
+brake_gain 0: 3 collisions, median 7.81; ay 6.5 Frenet: 3 collisions) and
+why the offline tracker sim never reproduces the cut. Under test:
+localization on the exact mesh map with `lidar_offset` 0.1933
+(`MAP=porto_mesh LIDAR_OFFSET=0.1933`), then mpc2.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /

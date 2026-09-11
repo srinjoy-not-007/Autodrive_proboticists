@@ -79,6 +79,7 @@ class MPCTracker(Node):
             ('pose_blend', 0.55),
             ('cmd_delay_s', 0.18),       # actuator dead time to predict through; 0 = off
             ('delay_model', 'bicycle'),  # 'gyro': measured yaw rate + change in commanded curvature
+            ('frenet_progress', False),  # advance the reference by ds*cos(e_yaw)/(1-kappa*e_lat)
             ('blend_gate_m', 0.0),       # innovation above this takes the measurement whole; 0 = off
             ('rollout_profile_speed', False),  # advance v along the horizon from the profile
             ('kappa_span_m', 0.5),       # half-width of the kappa/yaw reference smoothing
@@ -100,7 +101,7 @@ class MPCTracker(Node):
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.cmd_delay,
-         self.delay_model, self.blend_gate, self.rollout_profile_speed, kappa_span_m,
+         self.delay_model, self.frenet_progress, self.blend_gate, self.rollout_profile_speed, kappa_span_m,
          pose_qos_depth, self.max_predict,
          self.brake_horizon, throttle_gain, brake_gain,
          throttle_kp, throttle_a_gain) = [x.value for x in p]
@@ -432,6 +433,14 @@ class MPCTracker(Node):
                      + self.w_steer * delta ** 2
                      + self.w_rate * (delta - prev) ** 2)
             prev = delta
+            if self.frenet_progress:
+                # Path progress is not car travel: inside a corner the
+                # reference advances faster than the car by 1/(1-kappa*e_lat).
+                # Without this the rollout reads the reference up to 0.27 m
+                # too far back at the hairpin exit (measured on the shipping
+                # line at e_lat -0.2 m), believes the curvature persists, and
+                # keeps steering into an opening corner: the inside cut.
+                s_travelled += ds * math.cos(e_yaw) / denom - ds
             # after the first step, relax towards the feedforward steer
             # Relax towards the curvature feedforward, but no faster than the
             # actuator can actually move. The old fixed 50% step let the rollout

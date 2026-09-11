@@ -15,7 +15,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Int32, Float32
 
@@ -31,10 +31,11 @@ class RaceLogger(Node):
         self.csv = csv.writer(self.f)
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',
-                           'collision_event'])
+                           'collision_event', 'px', 'py', 'pyaw'])
         self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0,
                       'throttle': 0.0, 'lap_count': 0, 'lap_time': 0.0,
-                      'collision_count': 0}
+                      'collision_count': 0, 'px': float('nan'),
+                      'py': float('nan'), 'pyaw': float('nan')}
         self._enc_last = None
         self._col_last = None
 
@@ -51,6 +52,9 @@ class RaceLogger(Node):
         self.create_subscription(Float32, f'{ns}/lap_time',
                                  lambda m: self.state.update(lap_time=m.data), qos)
         self.create_subscription(Int32, f'{ns}/collision_count', self.on_col, qos)
+        # Localization estimate (evaluation only): lets a log show estimate
+        # vs IPS truth, e.g. whether the hairpin inside cut is a pose bias.
+        self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 10)
         self.get_logger().info(f'logging to {out_csv}')
 
     def on_enc(self, msg):
@@ -75,6 +79,14 @@ class RaceLogger(Node):
                 f"COLLISION #{msg.data} at ({self.state['x']}, {self.state['y']}) "
                 f"v={self.state['speed']:.2f} steer={self.state['steering']:.2f}")
 
+    def on_pose(self, msg):
+        import math
+        q = msg.pose.orientation
+        self.state['px'] = round(msg.pose.position.x, 4)
+        self.state['py'] = round(msg.pose.position.y, 4)
+        self.state['pyaw'] = round(math.atan2(2 * (q.w * q.z + q.x * q.y),
+                                              1 - 2 * (q.y * q.y + q.z * q.z)), 4)
+
     def on_ips(self, msg):
         self.state['x'], self.state['y'] = round(msg.x, 4), round(msg.y, 4)
         self.write_row()
@@ -87,7 +99,7 @@ class RaceLogger(Node):
                            f"{s['speed']:.3f}", f"{s['steering']:.3f}",
                            f"{s['throttle']:.3f}", s['lap_count'],
                            f"{s['lap_time']:.2f}", s['collision_count'],
-                           collision_event])
+                           collision_event, s['px'], s['py'], s['pyaw']])
 
     def destroy_node(self):
         self.f.flush()
