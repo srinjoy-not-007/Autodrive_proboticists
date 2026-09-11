@@ -89,7 +89,7 @@ class MPCTracker(Node):
             ('throttle_gain', 0.040),
             ('brake_gain', 0.05),        # real braking; 0 disables (see below)
             ('throttle_kp', 0.0),        # close the speed loop; 0 = open loop
-            ('throttle_a_gain', 0.0),    # throttle per m/s2 of planned accel
+            ('throttle_a_gain', 0.02),   # throttle per m/s2 of planned accel (0.04: 10 coll/100 laps)
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,

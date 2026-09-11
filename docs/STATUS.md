@@ -6,8 +6,9 @@
 6.0 (ax 6.5, brake 4, jerk 40), mpc `cmd_delay_s` 0.18, `ay_limit` 7.8,
 `pose_blend` 1.0, localization on the exact mesh map `data/maps/porto_mesh`
 with `lidar_offset` 0.1933 (submission entrypoint + Dockerfile updated).
-Measured: **100 laps, 0 collisions, first ten 79.68 s (sim timer 79.10),
-median 7.95 s** (`ay60_mesh_100`). Baseline main was 89.6 s.
+Measured: 100 laps, 0 collisions, first ten 79.68 s (sim timer 79.10),
+median 7.95 s (`ay60_mesh_100`); with `throttle_a_gain` 0.02 (now default):
+**100 laps, 0 collisions, 79.09 s (sim timer 78.64), median 7.89 s**. Baseline main was 89.6 s.
 `data/racelines/track_v2_safe.csv` is byte-identical to the validated
 `track_v2_safe_ay6.0.csv`. `icra2026_safe.csv` was regenerated at ay 6.0 and
 is UNDRIVEN — drive it on `2026-icra-compete` before trusting the unseen-track
@@ -35,8 +36,9 @@ acceleration; the servo only pulls hard when the target is above the current
 speed) on the promoted config, 32 laps each: 0.02 -> 78.80 s (median 7.89),
 0.04 -> 78.68 s (median 7.88), both 0 collisions over 32 laps -- but 0.04
 over 100 laps: 8+ collisions (s 13.6 and 17.6): arriving at corners at plan
-speed removes the margin the under-plan car had. NOT promoted. 0.02 100-lap
-run pending. Lesson: 32 laps cannot resolve a 1-3% per-lap collision rate.
+speed removes the margin the under-plan car had. NOT promoted. **0.02 over
+100 laps: 0 collisions, 79.09 s (sim timer 78.64), median 7.89 -> promoted
+as the default.** Lesson: 32 laps cannot resolve a 1-3% per-lap rate.
 
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
