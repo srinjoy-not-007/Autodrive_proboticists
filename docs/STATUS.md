@@ -21,6 +21,15 @@ transfer. Hairpin-only bias lines, tight caps, gyro/understeer delay models,
 Frenet progress, measured-speed dead reckoning, brake_gain 0: all rejected
 with numbers in the sections below.
 
+**ICRA-2026 (compete image), exact mesh map `icra2026_mesh` + lidar_offset
+0.1933, pipeline line at ay 6.0 with the tight-corner cap (ay 4.5 above
+kappa 1.15): 20 laps, 0 collisions, 148.0 s, median 14.77.** Old config:
+165.3 s; Aug 30 drill: 199.5 s with 5 collisions. Without the cap the ay 6.0
+line took 10 collisions in 10 laps at the kappa 1.44-1.71 corner. For an
+unseen track: build the mesh map from the compete image with
+`tools/map_from_mesh.py --tag <tag> "<track name>" data/maps/<slug>_mesh`
+(the track list comes from `--list`), then `make_track_lines.py` as usual.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
