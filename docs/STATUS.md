@@ -1,6 +1,16 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 12, night: mpc3 on the wide line, 74.4 s)
+## NEXT SESSION — START HERE (September 13: mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean)
+
+**Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.0.csv`
+(mesh map, lidar_offset 0.1933). 100 laps, 0 collisions, first ten 73.46 s,
+median 7.35 s, best 7.10 s.** Baseline main 89.6 s; previous promoted
+(legacy mpc, centerline) 79.1 s. The submission entrypoint now starts mpc3
+with the wide line (PIT_CREW_CONTROLLER=mpc selects the legacy tracker with
+the centerline). Pending: image raced as shipped, ICRA with mpc3 on the
+mesh lines (running), 32-lap probes of the wide line at ay 6.5.
+
+## September 12, night: mpc3 on the wide line, 74.4 s
 
 **Best measured so far: mpc3 (new tracker) on the wide min-curvature line
 `porto_mesh_mc0.60_ay6.0` (mesh map, lidar_offset 0.1933), defaults after

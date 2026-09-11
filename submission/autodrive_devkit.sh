@@ -11,15 +11,23 @@ cd /home/autodrive_devkit
 # with PIT_CREW_LIDAR_OFFSET=0 must be run with PIT_CREW_LIDAR_OFFSET=0.
 MAP="${PIT_CREW_MAP:-/home/data/maps/porto_mesh}"
 LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
-LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
+# Wide min-curvature line on the mesh map, driven by mpc3 (see STATUS, Sept 12
+# night). PIT_CREW_CONTROLLER=mpc selects the legacy tracker, which needs the
+# centerline (track_v2_safe.csv); do not pair mpc with the wide line.
+CONTROLLER="${PIT_CREW_CONTROLLER:-mpc3}"
+if [[ "$CONTROLLER" == mpc3 ]]; then
+    LINE="${PIT_CREW_LINE:-/home/data/racelines/porto_mesh_mc0.60_ay6.0.csv}"
+else
+    LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
+fi
 CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/track_v2_centerline.csv}"
 SCALE="${PIT_CREW_SPEED_SCALE:-1.00}"
 MODE="${PIT_CREW_MODE:-raceline}"
 if [[ "$MODE" != raceline && "$MODE" != reactive ]]; then
     echo "Invalid PIT_CREW_MODE: $MODE" >&2; exit 2
 fi
-if [[ "${PIT_CREW_CONTROLLER:-mpc}" != mpc ]]; then
-    echo "Submission supports MPC only; use PIT_CREW_MODE=reactive for FTG" >&2
+if [[ "$CONTROLLER" != mpc && "$CONTROLLER" != mpc3 ]]; then
+    echo "Submission supports mpc or mpc3; use PIT_CREW_MODE=reactive for FTG" >&2
     exit 2
 fi
 if [[ "$MODE" == raceline ]]; then
@@ -62,7 +70,7 @@ else
         -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" \
         -p lidar_offset:="$LIDAR_OFFSET" &
     WORKERS+=("$!")
-    setsid ros2 run pit_crew mpc --ros-args \
+    setsid ros2 run pit_crew "$CONTROLLER" --ros-args \
         -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" &
     WORKERS+=("$!")
 fi

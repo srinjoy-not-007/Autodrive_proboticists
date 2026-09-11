@@ -36,6 +36,7 @@ COPY data/maps/track_v2.pgm data/maps/track_v2.yaml \
      data/maps/icra2026.pgm data/maps/icra2026.yaml /home/data/maps/
 COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
      data/racelines/track_v2_centerline.csv \
+     data/racelines/porto_mesh_mc0.60_ay6.0.csv \
      data/racelines/icra2026_safe.csv data/racelines/icra2026_race.csv \
      data/racelines/icra2026_centerline.csv \
      /home/data/racelines/
