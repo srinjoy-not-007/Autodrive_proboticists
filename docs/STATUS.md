@@ -134,6 +134,12 @@ hairpin collisions per 100 laps at ay 6.5 whatever the cap, bias, blend or
 prediction model, and mpc2 cut 0.14 (80.55 s clean) is the safe candidate.
 100-lap validations of mpc2 cut 0.14 (ay 6.5) and legacy ay 6.0 running.
 
+**100-lap validation: mpc2, cut_offset_m 0.14, ay 6.5 line, mesh map with
+lidar_offset 0.1933: 100 laps, 0 collisions, first ten 80.36 s, median
+8.068 s.** This is the first configuration under 81 s with a measured zero
+collision rate over 100 laps. Launch:
+`CONTROLLER=mpc2 MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> safe_ay6.5 -p cut_offset_m:=0.14`
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
