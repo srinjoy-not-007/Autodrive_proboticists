@@ -59,6 +59,15 @@ normal) against 0/100 on the idle host. Treat as contaminated, but re-validate
 the promoted config on an idle host before submission; its true rate may be
 1-3%/lap rather than 0.
 
+**Wide min-curvature lines on the mesh map (trajectory-anchored reference,
+alpha-smooth 11), legacy tracker, ay 6.0, 32 laps each:** w_veh 0.60
+(0.292 m mesh clearance, hairpin R 1.20 m) -> median **7.14 s, best 6.97 s,
+first ten 71.7 s, 8 collisions** (hairpin exits s 13.3/26.8, s 17.4);
+w_veh 0.66 (0.325 m) -> median 7.28, 5 collisions. The line is worth
+0.75 s/lap; the legacy tracker still cuts 0.125 m inside on it. mpc3 (new
+tracker: horizon optimisation with speed as state, servo throttle) is being
+driven on safe_ay6.0, safe_ay7.0 and mc0.60.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
