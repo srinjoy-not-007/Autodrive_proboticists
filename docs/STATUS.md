@@ -23,7 +23,7 @@ with numbers in the sections below.
 
 **ICRA-2026 (compete image), exact mesh map `icra2026_mesh` + lidar_offset
 0.1933, pipeline line at ay 6.0 with the tight-corner cap (ay 4.5 above
-kappa 1.15): 20 laps, 0 collisions, 148.0 s, median 14.77.** Old config:
+kappa 1.15): 20 laps, 0 collisions, 148.0 s, median 14.77; then 40 more laps, 0 collisions, 148.3 s.** Old config:
 165.3 s; Aug 30 drill: 199.5 s with 5 collisions. Without the cap the ay 6.0
 line took 10 collisions in 10 laps at the kappa 1.44-1.71 corner. For an
 unseen track: build the mesh map from the compete image with
