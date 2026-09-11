@@ -5,7 +5,12 @@ source /opt/ros/humble/setup.bash
 source /home/autodrive_devkit/install/setup.bash
 cd /home/autodrive_devkit
 
-MAP="${PIT_CREW_MAP:-/home/data/maps/track_v2}"
+# Exact map from the simulator mesh (tools/map_from_mesh.py) with the LiDAR's
+# 0.1933 m forward offset applied in the filter: measured, this removes the
+# 0.12-0.17 m inside bias the recon map had in the hairpins. A recon map built
+# with PIT_CREW_LIDAR_OFFSET=0 must be run with PIT_CREW_LIDAR_OFFSET=0.
+MAP="${PIT_CREW_MAP:-/home/data/maps/porto_mesh}"
+LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
 LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 CENTER="${PIT_CREW_CENTERLINE:-/home/data/racelines/track_v2_centerline.csv}"
 SCALE="${PIT_CREW_SPEED_SCALE:-1.00}"
@@ -54,7 +59,8 @@ if [[ "$MODE" == reactive ]]; then
     WORKERS+=("$!")
 else
     setsid ros2 run pit_crew localization --ros-args \
-        -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" &
+        -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" \
+        -p lidar_offset:="$LIDAR_OFFSET" &
     WORKERS+=("$!")
     setsid ros2 run pit_crew mpc --ros-args \
         -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" &

@@ -63,7 +63,7 @@ class MPCTracker(Node):
             ('use_measured_speed', False),   # encoder speed for prediction
             ('rate_limited_rollout', False), # actuator limit inside the horizon
             ('windowed_index', False),   # local path search instead of global
-            ('ay_limit', 4.5),           # m/s2 the tyres deliver; 0 disables
+            ('ay_limit', 7.8),           # 1.3x the planned ay: correction headroom; 0 disables
             ('grip_watchdog', False),    # shed speed when the tyres let go
             ('grip_ratio_min', 0.60),    # achieved/asked curvature below this = sliding
             ('grip_cut', 0.75),          # speed multiplier applied per bad sample
@@ -76,7 +76,7 @@ class MPCTracker(Node):
             ('n_candidates', 9),         # first-step options searched per cycle
             ('control_hz', 50.0),
             ('steer_rate_limit', 3.2),   # rad/s, the actuator's real limit
-            ('pose_blend', 0.55),
+            ('pose_blend', 1.0),         # 0.55 lagged the pose ~0.07 s; measured no benefit
             ('cmd_delay_s', 0.18),       # actuator dead time to predict through; 0 = off
             ('delay_model', 'bicycle'),  # 'gyro': measured yaw rate + change in commanded curvature
             ('frenet_progress', False),  # advance the reference by ds*cos(e_yaw)/(1-kappa*e_lat)

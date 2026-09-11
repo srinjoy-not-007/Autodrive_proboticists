@@ -1,6 +1,30 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 11, late: 89.6 -> 79.5 s, branch optimizations-ankit)
+## NEXT SESSION — START HERE (September 12: promoted config = 79.7 s clean over 100 laps)
+
+**Branch defaults now ARE the best validated config:** planner `PROFILE` ay
+6.0 (ax 6.5, brake 4, jerk 40), mpc `cmd_delay_s` 0.18, `ay_limit` 7.8,
+`pose_blend` 1.0, localization on the exact mesh map `data/maps/porto_mesh`
+with `lidar_offset` 0.1933 (submission entrypoint + Dockerfile updated).
+Measured: **100 laps, 0 collisions, first ten 79.68 s (sim timer 79.10),
+median 7.95 s** (`ay60_mesh_100`). Baseline main was 89.6 s.
+`data/racelines/track_v2_safe.csv` is byte-identical to the validated
+`track_v2_safe_ay6.0.csv`. `icra2026_safe.csv` was regenerated at ay 6.0 and
+is UNDRIVEN — drive it on `2026-icra-compete` before trusting the unseen-track
+pipeline at this profile.
+
+Everything measured and rejected today (all on the mesh map unless noted):
+legacy ay 6.25 2/100, ay 6.5 3/100 and 7/100, ay 7.0 5/32; mpc2 cut 0.14 at
+ay 6.5 0/100 but 80.36 s; mpc2 search-tuned params (cut 0.22, dense horizon)
+4/32 at ay 7.0 and 10/12 at ay 6.5 -- the offline optimum does not
+transfer. Hairpin-only bias lines, tight caps, gyro/understeer delay models,
+Frenet progress, measured-speed dead reckoning, brake_gain 0: all rejected
+with numbers in the sections below.
+
+Qualification deadline is Sept 12 AoE: the qualification image is `main`
+(untouched); only the DockerHub push and the Phase 1 form remain.
+
+## September 11, late: 89.6 -> 79.5 s, branch optimizations-ankit
 
 Branch `optimizations-ankit`, PR #1. Every row: Porto, 32 laps, same host,
 same session, `scripts/run_exp.sh`, scored by `tools/score_race.py` (sample
