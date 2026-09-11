@@ -17,7 +17,7 @@ LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
 # centerline (track_v2_safe.csv); do not pair mpc with the wide line.
 CONTROLLER="${PIT_CREW_CONTROLLER:-mpc3}"
 if [[ "$CONTROLLER" == mpc3 ]]; then
-    LINE="${PIT_CREW_LINE:-/home/data/racelines/porto_mesh_mc0.60_ay6.0.csv}"
+    LINE="${PIT_CREW_LINE:-/home/data/racelines/porto_mesh_mc0.60_ay6.5.csv}"
 else
     LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 fi

@@ -1,6 +1,17 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 13: mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean)
+## NEXT SESSION — START HERE (September 13: 71.6 s / 100 laps clean)
+
+**Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.5.csv`
+(mesh map, lidar_offset 0.1933). 100 laps on an idle host, 0 collisions,
+first ten 71.63 s (simulator timer 71.18 s), median 7.28 s, best 6.98 s.**
+Baseline main 89.6 s. ay 6.0 on the same line: 0/100 at 73.46 s (the
+fallback). The image with the ay 6.0 line raced as shipped at 73.57 s (sim
+timer), 14 laps clean; re-run `scripts/test_submission_image.sh` after the
+ay 6.5 promotion. The mesh pipeline's automatic profile stays ay 6.0 for
+unseen tracks; Porto ships the explicitly validated ay 6.5 file.
+
+## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
 
 **Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.0.csv`
 (mesh map, lidar_offset 0.1933). 100 laps, 0 collisions, first ten 73.46 s,
