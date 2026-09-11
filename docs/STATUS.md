@@ -17,6 +17,14 @@ kappa 1.42 corner. **MESH_MIN_CLEARANCE is now 0.28 m** (0.230 collided,
 0.292 clean on Porto); the ICRA race line rebuilt under it has 0.301 m
 clearance and 12.53 s ideal, untested yet.
 
+mpc3 on the wide line at ay 6.5 (`porto_mesh_mc0.60_ay6.5.csv`): 32 laps,
+0 collisions, **72.92 s, median 7.30, best 7.05**. 100-lap validation
+pending before it replaces the ay 6.0 line in the entrypoint.
+Robustness fixes (teleport restart, stuck gate, callback guards,
+supervised entrypoint, preflight cross-checks) committed with 78 tests;
+they change nothing on a normal lap but the promoted config must be
+re-validated once with them.
+
 ## September 12, night: mpc3 on the wide line, 74.4 s
 
 **Best measured so far: mpc3 (new tracker) on the wide min-curvature line
