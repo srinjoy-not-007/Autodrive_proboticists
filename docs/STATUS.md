@@ -1,6 +1,59 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 11, evening: where the 2.4 s is)
+## NEXT SESSION — START HERE (September 11, late: 89.6 -> 79.5 s, branch optimizations-ankit)
+
+Branch `optimizations-ankit`, PR #1. Every row: Porto, 32 laps, same host,
+same session, `scripts/run_exp.sh`, scored by `tools/score_race.py` (sample
+clock; the simulator's own timer reads ~0.5 s lower over ten laps).
+
+| run | 10-lap race | median | best | collisions/32 | where |
+|---|---:|---:|---:|---:|---|
+| baseline main (ay 4.5, ay_limit 4.5) | 89.61 | 8.99 | 8.87 | 0 | |
+| cmd_delay 0.09 | 88.32 | 8.83 | 8.75 | 0 | |
+| cmd_delay 0.135 | 88.03 | 8.79 | 8.62 | 0 | |
+| **cmd_delay 0.18** (now default) | **87.32** | 8.73 | 8.66 | 0 | |
+| cmd_delay 0.24 | 88.00 | 8.80 | 8.70 | 0 | |
+| d0.18 + ay_limit 5.85 | 87.14 | 8.72 | 8.59 | 0 | |
+| d0.18 + use_measured_speed | 91.54 | 9.12 | 8.99 | 0 | rejected |
+| d0.18, ay 5.0, ay_limit 6.5 | 84.83 | 8.42 | 8.23 | 1 | s 13.6 hairpin exit |
+| d0.18, ay 5.5, ay_limit 7.15 | 82.06+10 | 8.17 | 8.04 | 3 | all s 13.6 |
+| **d0.18, ay 6.0, ay_limit 7.8** | **79.49** | **7.94** | **7.87** | **0** | needs long validation |
+| d0.18, ay 6.5, ay_limit 8.45 | 77.79+10 | 7.72 | 7.60 | 2 | s 13.6, s 27.7 |
+| d0.18, ay 7.0, ay_limit 9.1 | 77.96+30 | 7.58 | 7.38 | 7 | s 12.6/13.6 x5, s 16.2 x2 |
+
+What this says: the dead-time compensation is worth 2.3 s and is in. Above
+ay 5 every collision is at a hairpin exit (kappa 0.65-0.78), where the
+steering angle is large; the S-bend that used to take every hit only
+reappears at ay 7. The car is at or under plan speed at every collision, so
+these are lateral, not braking. Lines `data/racelines/track_v2_safe_ay*.csv`
+are regenerable (git-ignored) with `optimize_raceline.py --centerline-only
+--ay X --ax 6.5 --brake 4.0 --jerk-lat 40`.
+
+Ready to test next, in order:
+1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
+   keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
+   7.7 / 7.5 s.
+2. Long validation (100 laps) of whichever is clean, then ICRA-2026, then
+   promote: `PROFILE` in make_track_lines.py and `ay_limit` default = 1.3x.
+3. Corrected-LiDAR map `data/maps/track_v2_c` is built (from the ay 5.0
+   bag, git-ignored) with `*_c_*` line symlinks; run with
+   `MAP=track_v2_c LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh ...`. Its
+   clearance on the safe line is 0.300 m vs 0.325 on the old map.
+4. Review knobs still untested (all default off): blend_gate_m,
+   rollout_profile_speed, kappa_span_m 0.2, windowed_index, pose_qos_depth
+   1, keep_prior_weights, midpoint_heading, publish_on_reloc false.
+5. Straights: the car sits 0.9-1.2 m/s under plan wherever ax > 3 (a
+   placed team measured the drivetrain at ~3.5 m/s2 at 6-8 m/s). Worth a
+   speed-dependent ax ceiling in the profile and a re-test of
+   throttle_a_gain 0.02 now that corner entry is predicted.
+
+Organisers' procedure (verified from the official repo): Ultra graphics,
+GUI, i9-14900K / RTX 4090, `docker run ... --entrypoint /bin/bash -it`
+then the race starts when they click Connection; they sum the sim's own
+lap timer; +10 s per collision; 12 laps (warm-up, 10, cool-down). Validate
+the final config once with `VISIBLE=1` at Ultra before submitting.
+
+## September 11, evening: where the 2.4 s is
 
 Everything below was measured today on a new host (RTX 5090; the docker images
 had to be pulled and `.venv` rebuilt with uv — `quadprog` needs
