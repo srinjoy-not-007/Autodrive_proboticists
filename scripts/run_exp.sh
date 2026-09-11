@@ -9,6 +9,7 @@
 # Example:
 #   ./scripts/run_exp.sh delay135 safe -p cmd_delay_s:=0.135
 set -u
+LOAD=$(cut -d" " -f1 /proc/loadavg); if awk "BEGIN{exit !($LOAD > 12)}"; then echo "REFUSING: host load $LOAD; a scored run needs a quiet host"; exit 3; fi
 cd "$(dirname "$0")/.."
 NAME="$1"; LINE="${2:-safe}"; shift 2 2>/dev/null || shift $#
 EXTRA="$*"
