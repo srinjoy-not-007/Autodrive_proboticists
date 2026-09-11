@@ -40,6 +40,11 @@ speed removes the margin the under-plan car had. NOT promoted. **0.02 over
 100 laps: 0 collisions, 79.09 s (sim timer 78.64), median 7.89 -> promoted
 as the default.** Lesson: 32 laps cannot resolve a 1-3% per-lap rate.
 
+**Submission image built from this branch, raced as the organisers run it
+(`scripts/test_submission_image.sh`, no mounts, official flags): 14 laps,
+0 collisions, 79.62 s by sample clock, 78.02 s by the simulator lap timer,
+best lap 7.66 s.** Nodes: bridge, localization, mpc only.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
