@@ -36,6 +36,10 @@ a mesh race line tighter than Porto's (0.83) is rejected and the centerline
 ships. ICRA now ships `icra2026_mesh_safe` (149.4 s with mpc3, 145.7 s with
 the legacy tracker).
 
+**Branch image (mpc3 + wide line + all robustness fixes) raced as the
+organisers run it, no mounts: 14 laps, 0 collisions, 74.22 s sample clock,
+73.57 s simulator timer, best 7.15 s. PASS.** (`scripts/test_submission_image.sh`)
+
 ## September 12, night: mpc3 on the wide line, 74.4 s
 
 **Best measured so far: mpc3 (new tracker) on the wide min-curvature line
