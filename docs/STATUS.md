@@ -76,6 +76,12 @@ m/s under plan. mpc3 is the tracker for the wide line; the remaining gap is
 longitudinal (under investigation). 100-lap validation of mpc3 on mc0.60
 queued.
 
+mpc3 with the speed-plan/standing-start fixes, 100 laps on mc0.60_ay6.0:
+1 collision (s 13.4, lap 75), median 7.853, first ten 78.41 s, still 0.38
+m/s under plan -- the fix did not move the live speed. Staircase sysid log
+recorded (data/logs/sysid_20260911_212223.csv, 103 rows, likely stopped
+early); being fitted.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
