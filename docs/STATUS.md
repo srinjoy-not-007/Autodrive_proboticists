@@ -92,6 +92,19 @@ is the controller; the mesh map is the localization base from here on.
 `data/racelines/porto_mesh_*.csv` are symlinks to the track_v2 lines and
 `data/maps/porto_mesh_traj.csv` to the recon trajectory (for the init pose).
 
+Mesh-map ladder (`MAP=porto_mesh LIDAR_OFFSET=0.1933`, cmd_delay 0.18,
+ay_limit = 1.3 x ay, 32 laps each):
+
+| ay | race | median | best | collisions |
+|---:|---:|---:|---:|---:|
+| 6.0 | 80.12 | 8.02 | 7.92 | 0 |
+| **6.5** | **78.18** | **7.83** | **7.73** | **0** |
+| 7.0 | 76.53 (+50 pen.) | 7.65 | 7.52 | 5 (s 27.7 x3, 12.6, 29.2) |
+
+The controller's own cte at its predicted point is -0.04 in the hairpins
+while truth is -0.15: the delay prediction under-rotates at hairpin exits.
+Gyro sign/gain verified correct (corr 0.98, slope 0.96 vs IPS heading rate).
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
