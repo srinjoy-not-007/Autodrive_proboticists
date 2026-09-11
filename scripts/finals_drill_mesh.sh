@@ -97,8 +97,8 @@ cat <<EOM
 
 Drive it (the race line, then the safe line as the fallback):
 
-  CONTROLLER=mpc LIDAR_OFFSET=0.1933 ./scripts/run_stanley.sh 1.0 ${SLUG}_mesh race
-  CONTROLLER=mpc LIDAR_OFFSET=0.1933 ./scripts/run_stanley.sh 1.0 ${SLUG}_mesh safe
+  CONTROLLER=mpc3 LIDAR_OFFSET=0.1933 ./scripts/run_stanley.sh 1.0 ${SLUG}_mesh race
+  CONTROLLER=mpc3 LIDAR_OFFSET=0.1933 ./scripts/run_stanley.sh 1.0 ${SLUG}_mesh safe
 
 Score it:  .venv/bin/python tools/score_race.py <log> data/racelines/${SLUG}_mesh_centerline.csv
 
