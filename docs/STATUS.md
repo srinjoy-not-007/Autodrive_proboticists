@@ -30,6 +30,12 @@ unseen track: build the mesh map from the compete image with
 `tools/map_from_mesh.py --tag <tag> "<track name>" data/maps/<slug>_mesh`
 (the track list comes from `--list`), then `make_track_lines.py` as usual.
 
+Throttle over-command (`throttle_a_gain`, throttle per m/s2 of planned
+acceleration; the servo only pulls hard when the target is above the current
+speed) on the promoted config, 32 laps each: 0.02 -> 78.80 s (median 7.89),
+0.04 -> **78.68 s** (median 7.88), both 0 collisions. 100-lap validation of
+0.04 pending before it becomes the default.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
