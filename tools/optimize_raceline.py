@@ -244,6 +244,9 @@ def main():
                          'default.')
     ap.add_argument('--bias-kappa', type=float, default=0.7,
                     help='|kappa| at which --inside-bias reaches its full value')
+    ap.add_argument('--bias-kappa-start', type=float, default=0.0,
+                    help='|kappa| below which the bias is zero (ramp from here '
+                         'to --bias-kappa). Default 0: ramp from zero curvature.')
     ap.add_argument('--drag', type=float, default=0.0,
                     help='linear velocity damping, 1/s. The Unity rigidbody '
                          'carries drag 0.273 (read from the asset), i.e. '
@@ -301,7 +304,8 @@ def main():
             # positive kappa is a LEFT turn, so the inside is -sign(kappa).
             k_ref = curvature_of(reftrack, normvec, alpha, args.stepsize)
             k_ref = ndimage.uniform_filter1d(k_ref, size=7, mode='wrap')
-            mag = np.clip(np.abs(k_ref) / args.bias_kappa, 0.0, 1.0)
+            k0, k1 = args.bias_kappa_start, args.bias_kappa
+            mag = np.clip((np.abs(k_ref) - k0) / max(k1 - k0, 1e-6), 0.0, 1.0)
             alpha = -np.sign(k_ref) * args.inside_bias * mag
             alpha = ndimage.uniform_filter1d(alpha, size=5, mode='wrap')
             # never leave the corridor the centerline reports (w_right, w_left)
