@@ -78,6 +78,7 @@ class MPCTracker(Node):
             ('steer_rate_limit', 3.2),   # rad/s, the actuator's real limit
             ('pose_blend', 0.55),
             ('cmd_delay_s', 0.18),       # actuator dead time to predict through; 0 = off
+            ('delay_model', 'bicycle'),  # 'gyro': measured yaw rate + change in commanded curvature
             ('blend_gate_m', 0.0),       # innovation above this takes the measurement whole; 0 = off
             ('rollout_profile_speed', False),  # advance v along the horizon from the profile
             ('kappa_span_m', 0.5),       # half-width of the kappa/yaw reference smoothing
@@ -99,7 +100,7 @@ class MPCTracker(Node):
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
          control_hz, self.steer_rate, self.pose_blend, self.cmd_delay,
-         self.blend_gate, self.rollout_profile_speed, kappa_span_m,
+         self.delay_model, self.blend_gate, self.rollout_profile_speed, kappa_span_m,
          pose_qos_depth, self.max_predict,
          self.brake_horizon, throttle_gain, brake_gain,
          throttle_kp, throttle_a_gain) = [x.value for x in p]
@@ -361,12 +362,26 @@ class MPCTracker(Node):
         dt = self.cmd_delay / n
         hist = self._cmd_hist
         j = 0
+        kap0 = None
         for k in range(n):
             t_eff = now + k * dt - self.cmd_delay
             while j + 1 < len(hist) and hist[j + 1][0] <= t_eff:
                 j += 1
             delta = hist[j][1] if hist else self.steer
-            yaw_rate = v * math.tan(delta) / vehicle.WHEELBASE
+            kap = (vehicle.achieved_curvature(delta)
+                   if self.delay_model == 'understeer'
+                   else math.tan(delta) / vehicle.WHEELBASE)
+            if self.delay_model == 'gyro':
+                # The bicycle model over-rotates at large steering angles
+                # (measured: hairpin cross-track p50 0.07 -> 0.15 m when the
+                # pure model was used here). The gyro says what the car is
+                # really doing under the command acting now; add only the
+                # change the in-flight commands will make on top of that.
+                if kap0 is None:
+                    kap0 = kap
+                yaw_rate = self.gyro_z + v * (kap - kap0)
+            else:
+                yaw_rate = v * kap
             yaw_mid = yaw + 0.5 * yaw_rate * dt
             x += v * math.cos(yaw_mid) * dt
             y += v * math.sin(yaw_mid) * dt

@@ -232,6 +232,27 @@ def main():
                     help='cap d(ay)/dt in m/s3. Off by default. The shipping '
                          'ay-3.0 profile peaks at 21 m/s3 and runs clean, so '
                          'that is the level known to be survivable.')
+    ap.add_argument('--inside-bias', type=float, default=0.0,
+                    metavar='M',
+                    help='centerline-only: shift the reference toward the '
+                         'inside of each corner by min(M, M*|kappa|/kappa_ref) '
+                         'metres. Measured with the dead-time-compensated MPC: '
+                         'the car runs 0.15-0.17 m WIDE through the hairpins '
+                         '(kappa > 0.6) at every ay, and every collision above '
+                         'ay 5 is there. Biasing the reference inward puts the '
+                         'driven path back on the corridor centre. Off by '
+                         'default.')
+    ap.add_argument('--bias-kappa', type=float, default=0.7,
+                    help='|kappa| at which --inside-bias reaches its full value')
+    ap.add_argument('--drag', type=float, default=0.0,
+                    help='linear velocity damping, 1/s. The Unity rigidbody '
+                         'carries drag 0.273 (read from the asset), i.e. '
+                         '0.273*v of deceleration at all times: 2.2 m/s2 at '
+                         '8 m/s. Off by default.')
+    ap.add_argument('--ax-servo', type=float, default=None,
+                    help='m/s2 the throttle servo can add before drag. '
+                         'Measured ~6 in both directions. With --drag the '
+                         'drive limit becomes min(--ax, servo - drag*v).')
     ap.add_argument('--ay-tight', type=float, default=None,
                     help='lower ay cap applied where |kappa| exceeds '
                          '--kappa-tight. Every collision at ay 5.5 on Porto '
@@ -274,6 +295,19 @@ def main():
     if args.centerline_only:
         alpha = np.zeros(len(reftrack))
         print('centerline-only: no lateral shift')
+        if args.inside_bias > 0.0:
+            # Curvature of the reference itself (sign gives the corner side).
+            # Verified numerically: positive alpha shifts RIGHT of travel and
+            # positive kappa is a LEFT turn, so the inside is -sign(kappa).
+            k_ref = curvature_of(reftrack, normvec, alpha, args.stepsize)
+            k_ref = ndimage.uniform_filter1d(k_ref, size=7, mode='wrap')
+            mag = np.clip(np.abs(k_ref) / args.bias_kappa, 0.0, 1.0)
+            alpha = -np.sign(k_ref) * args.inside_bias * mag
+            alpha = ndimage.uniform_filter1d(alpha, size=5, mode='wrap')
+            # never leave the corridor the centerline reports (w_right, w_left)
+            alpha = np.clip(alpha, -reftrack[:, 3] + 0.05, reftrack[:, 2] - 0.05)
+            print(f'inside bias up to {args.inside_bias:.2f} m at |kappa| >= '
+                  f'{args.bias_kappa:.2f}: max shift {np.abs(alpha).max():.3f} m')
     else:
         # Iterate: optimize, measure how far the body sweeps at the resulting
         # curvature, shrink the corridor by that, re-optimize. One pass with a
@@ -349,7 +383,13 @@ def main():
     ggv = np.column_stack([v_steps,
                            np.full_like(v_steps, args.ax),
                            np.full_like(v_steps, args.ay)])
-    ax_machines = np.column_stack([v_steps, np.full_like(v_steps, args.ax)])
+    ax_drive = np.full_like(v_steps, args.ax)
+    if args.ax_servo is not None:
+        ax_drive = np.minimum(ax_drive,
+                              np.maximum(args.ax_servo - args.drag * v_steps, 0.3))
+        print(f'drive limit servo {args.ax_servo:.1f} - drag {args.drag:.3f}*v: '
+              f'{ax_drive[-1]:.2f} m/s2 at {v_steps[-1]:.1f} m/s')
+    ax_machines = np.column_stack([v_steps, ax_drive])
     kappa_cap = turn_in_kappa(kappa, el_lengths, args.turn_in)
     if args.turn_in > 0.0:
         n_early = int(np.sum(np.abs(kappa_cap) > np.abs(kappa) + 1e-9))
