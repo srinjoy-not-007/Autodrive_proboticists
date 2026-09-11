@@ -45,6 +45,13 @@ as the default.** Lesson: 32 laps cannot resolve a 1-3% per-lap rate.
 0 collisions, 79.62 s by sample clock, 78.02 s by the simulator lap timer,
 best lap 7.66 s.** Nodes: bridge, localization, mpc only.
 
+Min-curvature lines with the legacy tracker on the mesh map (probes, Sept 12
+night): w_veh 0.42 ay 7.0 -> 10 collisions in 3 laps; 0.36 ay 6.5 -> 11 in
+4; 0.48 ay 7.0 -> 10 in 8. Collisions are wherever the line hugs a wall
+(kappa 0.35 corners as much as the hairpins): tracking p95 0.235 m against
+0.206 m clearance. The wide line needs a tracker with ~0.08 m p95 first
+(mpc3, in development).
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
