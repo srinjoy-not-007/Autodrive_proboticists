@@ -1,6 +1,115 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 10: qualification audit)
+## NEXT SESSION — START HERE (September 11, evening: where the 2.4 s is)
+
+Everything below was measured today on a new host (RTX 5090; the docker images
+had to be pulled and `.venv` rebuilt with uv — `quadprog` needs
+`--no-binary quadprog` or `trajectory_planning_helpers` fails to import).
+Baseline reproduced first, so the numbers are comparable to September 10:
+
+| configuration | laps | collisions | median | best | first ten scored |
+|---|---:|---:|---:|---:|---:|
+| shipping main, `run_stanley.sh 1.0 track_v2 safe`, Xvfb, default graphics | 33 | 0 | 8.993 s | 8.874 s | **89.606 s** |
+
+### The target, verified from the official results pages
+
+Porto qualification best laps: **6.49 s** VAUL and 6.53 s Mamba (65.41 s race)
+at CDC-TF 2025; 6.77 s AGV (67.86 s) at ICRA 2025. Sources:
+[CDC-TF 2025](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-cdc-tf-2025/),
+[ICRA 2025](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-icra-2025/).
+We are at 8.87 best / 8.99 median: **1.37x**.
+
+### Offline: the gap is the grip envelope, spread over every corner
+
+Ideal lap on our own safe centerline (`optimize_raceline.py --centerline-only`,
+ax 6.5 / brake 4 / jerk 40 unless noted):
+
+| ay | ideal lap |
+|---:|---:|
+| 4.5 (ships) | 8.611 s |
+| 6.0 | 7.794 s |
+| 7.5 | 7.215 s |
+| 9.0 | 6.847 s |
+| 9.0, ax 7.1, brake 7 | 6.730 s |
+| 9.0, ax 7.1, brake 7, no jerk limit | 6.552 s |
+
+So the winners' 6.5 s is exactly our own line at ay 9. The 1.88 s between the
+ay 4.5 and ay 9 profiles is spread: 0.15-0.24 s in each of the six corners,
+0.03-0.06 s on each straight. No single corner fix reaches it; only the
+lateral envelope does. Each +1 m/s2 of usable ay is worth roughly 0.4-0.5 s of
+lap at the current level.
+
+### The "4.64 m/s2 sustained limit" is our own cap, not the tyre
+
+`grip_curve.py` on today's baseline log: the achieved/asked curvature ratio is
+0.93-0.97 in EVERY steering bin from 0.05 to 0.40 rad, and achieved ay tops out
+at p99 4.68 m/s2. The tyres deliver what they are asked; they are simply never
+asked for more, because the profile (ay 4.5) and `ay_limit` (4.5) both stop at
+4.5. A race log cannot measure the tyre limit while the controller caps demand
+below it. The only uncapped measurement we have is the `-explore` skidpad:
+~0.9 of asked curvature up to **9.87 m/s2**, then an abrupt collapse. The
+winners' onboard telemetry (8.6-9.5) agrees. Stop quoting 4.64 as a tyre
+property; it is where our collisions start, which is a control question.
+
+### Measured today: 0.135 s of dead time the controller does not know about
+
+`src/tools/latency_probe.py` (new) steps steering at standstill and times the
+`/steering` feedback: sensors at **11.36 Hz** on this host; command to first
+feedback movement **median 0.135 s, range 0.090-0.180 s**; then the 3.2 rad/s
+slew. Cause, from reading the devkit bridge: it is request/response — the sim
+sends a frame, the bridge publishes sensors and returns *whatever command was
+last published*. Our 50 Hz loop is therefore sampled at ~11 Hz, and the applied
+command is up to one frame old before the sim even sees it.
+
+What that costs at the corner that produces every collision (s 14.6-15.7, kappa
+-0.52 -> +0.38 in 1.1 m at 2.7-3.4 m/s): 0.135 s of dead time is 0.36-0.47 m of
+travel, **40% of the ramp**; the full observe-to-act chain (frame age +
+localization + dead time, roughly 0.2 s — estimate) is ~0.7 m, most of it. The
+MPC applies `delta0` at the current pose as though it took effect now, and its
+pose prediction covers only scan-to-now. Cross-track p95 of 0.31 m through
+that entry (Aug 29) is what an unmodelled 0.135 s looks like at 3.4 m/s.
+
+### Pointers, ranked by evidence (owner decides which to pursue)
+
+1. **Dead-time compensation in the MPC.** Keep the last ~0.2 s of published
+   steering commands, propagate the predicted state through them (bicycle +
+   3.2 rad/s slew) to the moment the new command will actually bite, then
+   optimise from there. Standard latency-compensated MPC. Evidence: today's
+   0.135 s measurement, the bridge design, and the fact that all collisions
+   sit at the one kappa ramp shorter than the dead-time travel. Cheap to test:
+   drive the shipping profile, then ay 5.0 / 5.5 / 6.0 with `ay_limit` raised
+   in step, 36 laps each. Success = the ay 5.5 run that took 8 collisions on
+   Aug 29 goes clean.
+2. **Corrected-LiDAR map (0.04 m lateral p95) is validated and unshipped.**
+   Its gate was "beat 9.81 s and pass ICRA" (Aug 23), both since overtaken.
+   Re-run it with the current ay 4.5 / brake 0.05 stack, then as the base for
+   pointer 1. `MIN_CLEARANCE` 0.30 m was set with 0.17 m of localization
+   error; with 0.04 m the min-curvature line's 0.283 m may be enough, which is
+   0.31 s of ideal lap. Test order: corrected map + safe line first.
+3. **Only then raise ay**, one step at a time, profile and `ay_limit` together.
+   Skidpad says the cliff is at ~9.9; the winners sit at 8.6-9.5. Expect the
+   clean ceiling to move with tracking accuracy, not with the tyre.
+4. **Longitudinal loop with the dead time modelled.** `throttle_kp` bang-bang at
+   10 Hz is the textbook signature of a proportional loop with 0.135+ s of
+   delay at 0.09 s sampling. A Smith-predictor style loop (predict speed
+   through the known delay with the measured 0.040 throttle/(m/s) plant, then
+   correct) is the honest version of the closed loop that failed. Lower
+   priority: STATUS shows the speed deficit is currently load-bearing margin at
+   corner entry, so do it after 1.
+5. **Jerk limiter at 40 costs 0.18 s at ay 9** (6.73 vs 6.55) and nothing at
+   4.5. Revisit only once the envelope is above ~7.
+6. **Not worth time** (re-confirmed today): line geometry on Porto, steering
+   resolution, the grip watchdog, the arbiter, and raising ay without 1 or 2.
+
+Public winner code: VAUL's repos hold only a wall-follower entrypoint and a
+2023 TUM optimizer fork with an f1tenth-gym ggv (ay 12 flat) — not tuned for
+AutoDRIVE and not evidence of what they raced.
+
+Docs fixed today: README shipping config (was ay 5.0 / brake_gain 0.3 / 91.4 s),
+AGENTS.md test-suite line, CLAUDE.md Aug 28 shipping paragraph marked
+historical. `upstream/` now also holds the VAUL clones (git-ignored).
+
+## September 10: qualification audit (was START HERE)
 
 Qualification closes September 12 AoE (September 13, 17:30 IST). Use the
 `2026-iros-practice` base, not `compete`. Packaging/run instructions are in

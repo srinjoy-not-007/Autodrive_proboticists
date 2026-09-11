@@ -58,25 +58,32 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-Shipping config = safe centerline + MPC, ay 5.0 / ax 6.5 / brake 4.0, with the
-controller capping its own steering by the lateral grip that exists at the
-current speed and `brake_gain` 0.3 giving it real braking. Measured:
+Shipping config = safe centerline + MPC, **ay 4.5 / ax 6.5 / brake 4.0 /
+lateral jerk 40**, with the controller capping its own steering by the lateral
+grip that exists at the current speed (`ay_limit` 4.5) and `brake_gain` **0.05**
+giving it real braking (0.3 was tuned against a broken encoder and drives the
+car into reverse). The submission image (Sep 10, Ultra graphics, no mounts):
 
 | Track | Result |
 |---|---|
-| Porto (practice) | **40 laps, 0 collisions**, best **9.01 s**, 10-lap race **91.4 s** |
-| ICRA — never tuned on | **29 laps, 0 collisions**, median **16.53 s/lap** |
+| Porto (practice) | **20 laps, 0 collisions**, best **8.907 s**, first ten scored laps **89.547 s** |
+| ICRA — never tuned on | 29 laps, 0 collisions, median 16.53 s/lap (Aug 28, ay 5.0 profile) |
 | Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s — clears qualification |
 
-The published winning lap on this same Porto track is 6.53 s (65.41 s race).
+The published winning laps on this same Porto track are 6.49 s (VAUL) and
+6.53 s (Mamba, 65.41 s race) at CDC-TF 2025 and 6.77 s at ICRA 2025. We are
+~1.37x off. The ideal lap on our own safe line at the winners' grip (ay 9,
+ax 7.1) is 6.6-6.7 s, so the whole gap is the lateral-acceleration envelope the
+stack can hold, not the line — see `docs/STATUS.md`, "NEXT SESSION".
 
 Until 2026-08-28 this section said the remaining gap was a grip cliff, and that
 the ceiling had been "demonstrated four independent ways". That was wrong: all
 four were measured while the controller had **no braking authority** — the
 braking branch was unreachable, so the car shed speed only by coasting while the
 velocity profile assumed 4 m/s² of deceleration. Fixing it took the usable
-lateral-acceleration cap from 3.5 to 5.0 and the race from 97.2 to 91.4 s.
-`docs/reviews/deepak-g.md` has the ladder.
+lateral-acceleration cap from 3.5 to 5.0 (later re-tuned to 4.5 alongside the
+jerk-limiter fix) and the race from 97.2 to 91.4 s. `docs/reviews/deepak-g.md`
+has the ladder.
 
 `run_race_stack.sh` also exists but starts the arbiter, which measurably makes
 things *worse* — see `docs/STATUS.md`.

@@ -166,9 +166,10 @@ lateral p95 to **0.041 m** at the original process noise, or **0.039 m** with
 ICRA or beaten 9.81 s. See the first section of `docs/STATUS.md` for the exact
 TODO and validation gate.
 
-Shipping: safe centerline + MPC, **ay 5.0** / **ax 6.5** / brake 4.0 / jerk 20,
-with the controller's **`ay_limit`** capping steering by the grip that exists
-and **`brake_gain` 0.3** giving it actual braking. Ten-lap race time
+Shipping (historical Aug 28 summary; current values are ay 4.5 / jerk 40 /
+brake_gain 0.05, see above): safe centerline + MPC, ay 5.0 / ax 6.5 / brake 4.0
+/ jerk 20, with the controller's **`ay_limit`** capping steering by the grip
+that exists and `brake_gain` 0.3 giving it actual braking. Ten-lap race time
 115.0 -> 101.2 -> **91.4 s** (Porto) and **165.3 s** on ICRA. Of that, ~4 s came
 from the Xvfb measurement change and ~5.8 s from the brakes.
 

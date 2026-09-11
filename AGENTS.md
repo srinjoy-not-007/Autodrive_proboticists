@@ -22,7 +22,7 @@ Use four-space indentation and PEP 8 for Python. Name modules, functions, nodes,
 
 ## Testing Guidelines
 
-There is no checked-in unit-test suite. Add pytest tests under `src/test/`, named like `test_localization.py`. For driving changes, run offline analysis, the smoke test, then a measured simulator run. Record lap time, collisions, and configuration in `docs/STATUS.md`; label estimates. Never use restricted simulator pose, odometry, collision, lap, or TF topics as controller inputs.
+Tests live in two places: `tests/` holds host-side pytest for the offline tools (`.venv/bin/python -m pytest tests`), and `src/test/` holds pure-Python and ROS-node tests that run inside the devkit container. Add new tests beside the code they cover, named like `test_localization.py`. For driving changes, run offline analysis, the smoke test, then a measured simulator run. Record lap time, collisions, and configuration in `docs/STATUS.md`; label estimates. Never use restricted simulator pose, odometry, collision, lap, or TF topics as controller inputs.
 
 ## Commit & Pull Request Guidelines
 
