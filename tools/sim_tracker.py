@@ -45,6 +45,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 from pit_crew import vehicle                                    # noqa: E402
 from pit_crew.mpc2_core import (Actuator, CurvatureBias, MPC2,   # noqa: E402
                                 PoseFilter, RefPath, wrap)
+from pit_crew.mpc3_core import MPC3                              # noqa: E402
+from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
 
 DT = 0.001                  # physics step, s
 FRAME = 0.090               # sensor / command-pickup period, s
@@ -236,6 +238,132 @@ class MPC2Sim:
 
 
 # ---------------------------------------------------------------------------
+# tracker C: mpc3, driving the real pit_crew.mpc3_core / throttle2 objects
+# ---------------------------------------------------------------------------
+
+class MPC3Sim:
+    """The control law of src/pit_crew/mpc3.py with the ROS plumbing removed.
+
+    Same rule as MPC2Sim: the solver, the actuator model, the reference path and
+    the throttle law are the shipped objects; only the callbacks are
+    re-implemented.  Anything that changes here must change in mpc3.py too.
+    """
+
+    name = 'mpc3'
+    rate = None                      # solves once per sensor frame
+
+    def __init__(self, path, **kw):
+        self.path = path
+        self.P = dict(cmd_dead_time=0.135, use_steer_feedback=True,
+                      steer_fb_age=0.0, pose_blend=1.0, blend_gate_m=0.5,
+                      ay_limit=9.0, cap_ff_headroom=1.15, cap_preview_min_m=1.0,
+                      cap_use_measured=True, max_predict_s=0.35,
+                      v_meas_min=0.2, v_start=0.5, servo_k=18.0, servo_drag=0.273,
+                      servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
+                      servo_head_max=0.5, servo_u_max=0.60, servo_v_floor=1.0,
+                      servo_gain=24.6)
+        solver_keys = ('horizon', 'step_dt', 'min_step_m', 'iters', 'outer',
+                       'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk',
+                       'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
+                       'yaw_gain', 'ay_deliver', 'sat_knee', 'ay_budget',
+                       'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
+                       'thr_lead_s', 'delay_s', 'apply_ahead_s', 'steer_rate')
+        skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
+        for k in ('horizon', 'iters', 'outer'):
+            if k in skw:
+                skw[k] = int(round(skw[k]))
+        self.P.update(kw)
+        self.mpc = MPC3(path, **skw)
+        self.act = Actuator(dead_time=self.P['cmd_dead_time'])
+        self.filt = PoseFilter(self.act, blend=self.P['pose_blend'],
+                               gate_m=self.P['blend_gate_m'])
+        self.thr = ServoThrottle(
+            K=self.P['servo_k'], drag=self.P['servo_drag'],
+            tau=self.P['cmd_dead_time'], a_auth=self.P['servo_a_auth'],
+            a_accel=self.P['servo_a_accel'], k_p=self.P['servo_k_p'],
+            head_max=self.P['servo_head_max'], lead_max=0.0,
+            ay_limit=self.mpc.cfg['ay_budget'], v_floor=self.P['servo_v_floor'],
+            u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'])
+        self.v_plan0 = 0.0
+        self._enc_seen = False
+        self.speed_meas = 0.0
+        self.idx = None
+        self.e_lat = 0.0
+        self.solve_ms = []
+        self.v_cmd = 0.0
+
+    # -- the two "callbacks" ------------------------------------------------
+    def on_frame(self, t, gyro, speed, steer_fb):
+        self.speed_meas = speed
+        if self.P['use_steer_feedback']:
+            self.act.snap(t - self.P['steer_fb_age'], steer_fb)
+
+    def on_pose(self, t_now, t_stamp, x, y, yaw):
+        if self.v_plan0 <= 0.0:
+            self.v_plan0 = float(self.path.v_prof[
+                self.path.nearest(x, y, None, yaw=yaw)])
+        v = self.measured_speed() or self.start_speed()
+        fx, fy, fyaw, _ = self.filt.update(t_stamp, x, y, yaw, max(v, 0.4))
+        self.meas = (t_stamp, fx, fy, fyaw)
+
+    def measured_speed(self):
+        v = self.speed_meas
+        if v > self.P['v_meas_min']:
+            self._enc_seen = True
+            return v
+        return None
+
+    def start_speed(self):
+        return self.v_plan0 if self._enc_seen else self.P['v_start']
+
+    def plan_ay(self, i0, v):
+        P = self.path
+        span = max(self.P['cap_preview_min_m'], v * self.mpc.N * self.mpc.dt)
+        n = max(2, int(span / max(P.spacing, 1e-3)))
+        idx = (i0 + np.arange(n)) % P.n
+        return float((P.v_prof[idx] ** 2 * np.abs(P.kappa[idx])).max())
+
+    # -- one control cycle ---------------------------------------------------
+    def update(self, t):
+        import time
+        t0 = time.perf_counter()
+        ts, x, y, yaw = self.meas
+        v_meas = self.measured_speed()
+        v0 = max(v_meas if v_meas is not None else self.start_speed(), 0.4)
+        g = self.mpc.cfg['yaw_gain']
+        t_now = min(t, ts + self.P['max_predict_s'])
+        x, y, yaw, delta0 = self.act.predict(
+            x, y, yaw, ts, t_now, v0,
+            kappa_of=lambda d: g * math.tan(d) / vehicle.WHEELBASE)
+        i0 = self.path.nearest(x, y, self.idx, yaw=yaw)
+        self.idx = i0
+        pyaw = float(self.path.yaw[i0])
+        dx, dy = x - self.path.xy[i0, 0], y - self.path.xy[i0, 1]
+        e_lat = -math.sin(pyaw) * dx + math.cos(pyaw) * dy
+        e_yaw = wrap(yaw - pyaw)
+        self.e_lat = e_lat
+        dt = self.mpc.dt
+        committed = [self.act.delta_at(t_now + (k + 1) * dt)
+                     for k in range(self.mpc.nd)]
+        v_cap = (max(v0, v_meas) if (self.P['cap_use_measured'] and v_meas)
+                 else v0)
+        ay_cap = max(self.P['ay_limit'],
+                     self.P['cap_ff_headroom'] * self.plan_ay(i0, v0))
+        cap = min(vehicle.MAX_STEER,
+                  math.atan(vehicle.WHEELBASE * ay_cap
+                            / max(v_cap * v_cap, 0.25)))
+        cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
+                                   committed=committed)
+        self.v_plan0 = float(self.path.v_prof[i0])
+        self.v_cmd = float(info['v_cmd'])
+        th = float(self.thr.command(self.v_cmd, v_meas, 0.0, now=t,
+                                    kappa=float(self.path.kappa[i0])))
+        self.act.record(t, cmd)
+        self.solve_ms.append((time.perf_counter() - t0) * 1e3)
+        return cmd, th
+
+
+# ---------------------------------------------------------------------------
 # tracker B: a faithful port of the shipping mpc.py
 # ---------------------------------------------------------------------------
 
@@ -400,7 +528,7 @@ def footprint_clear(dist, meta, x, y, yaw, pts=None):
 
 def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         yaw_noise=0.0, noise_tau=0.5, pose_bias_inside=0.0, ay_max=AY_MAX,
-        pose_latency=POSE_LATENCY, verbose=True):
+        pose_latency=POSE_LATENCY, verbose=True, v_start=None):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -414,8 +542,11 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     err_lat = err_yaw = 0.0
     beta = math.exp(-FRAME / max(noise_tau, 1e-3))
     i0 = 0
+    # v_start=0 is a STANDING START, which is how a race actually begins and
+    # is not the same test as a flying lap: the encoder has said nothing yet.
     plant = Plant(path.xy[i0, 0], path.xy[i0, 1], float(path.yaw[i0]),
-                  v=float(path.v_prof[i0]), ay_max=ay_max)
+                  v=(float(path.v_prof[i0]) if v_start is None else float(v_start)),
+                  ay_max=ay_max)
     steer_cmd, throttle = 0.0, 0.0
     t = 0.0
     next_frame = 0.0
@@ -551,7 +682,8 @@ def main():
     ap.add_argument('--line', default='data/racelines/track_v2_safe_ay6.0.csv')
     ap.add_argument('--map', default='data/maps/track_v2')
     ap.add_argument('--laps', type=int, default=6)
-    ap.add_argument('--tracker', default='both', choices=('both', 'mpc', 'mpc2'))
+    ap.add_argument('--tracker', default='both',
+                    choices=('both', 'all', 'mpc', 'mpc2', 'mpc3'))
     ap.add_argument('--speed-scale', type=float, default=1.0)
     ap.add_argument('--hairpin', default='10,14')
     ap.add_argument('--no-barrier', action='store_true')
@@ -562,6 +694,8 @@ def main():
                     help='scan stamp to pose delivery, s')
     ap.add_argument('--pose-bias-inside', type=float, default=0.0,
                     help='localization bias toward the inside of a bend, m')
+    ap.add_argument('--v-start', type=float, default=None,
+                    help='initial speed; 0 = standing start')
     ap.add_argument('--pose-noise', type=float, default=0.0)
     ap.add_argument('--yaw-noise', type=float, default=0.0)
     ap.add_argument('--noise-tau', type=float, default=0.5,
@@ -570,6 +704,8 @@ def main():
                     help='mpc2 override, key=value')
     ap.add_argument('-q', '--legacy-param', action='append', default=[],
                     help='mpc (legacy) override, key=value')
+    ap.add_argument('-r', '--mpc3-param', action='append', default=[],
+                    help='mpc3 override, key=value')
     ap.add_argument('--plot', default='')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
@@ -587,22 +723,26 @@ def main():
                       else v)
         return out
     kw, lkw = parse(args.param), parse(args.legacy_param)
+    kw3 = parse(args.mpc3_param)
 
     results = {}
-    for which in (('mpc', 'mpc2') if args.tracker == 'both' else (args.tracker,)):
+    order = {'both': ('mpc', 'mpc2'), 'all': ('mpc', 'mpc2', 'mpc3')}.get(
+        args.tracker, (args.tracker,))
+    for which in order:
         path = RefPath(args.line, speed_scale=args.speed_scale,
                        kappa_span_m=args.kappa_span)
         if dist is not None and not args.no_barrier:
             path.load_corridor(dist, meta)
-        tr = (MPC2Sim(path, **kw) if which == 'mpc2'
-              else LegacyMPCSim(path, **lkw))
+        tr = (MPC2Sim(path, **kw) if which == 'mpc2' else
+              MPC3Sim(path, **kw3) if which == 'mpc3' else
+              LegacyMPCSim(path, **lkw))
         out = run(tr, path, laps=args.laps, dist=dist, meta=meta,
                   pose_noise=args.pose_noise, yaw_noise=args.yaw_noise,
                   noise_tau=args.noise_tau, ay_max=args.ay_max,
                   pose_bias_inside=args.pose_bias_inside,
-                  pose_latency=args.pose_latency)
+                  pose_latency=args.pose_latency, v_start=args.v_start)
         report(which, out, path, lo, hi)
-        if which == 'mpc2' and tr.solve_ms:
+        if which in ('mpc2', 'mpc3') and getattr(tr, 'solve_ms', None):
             sm = np.array(tr.solve_ms)
             print(f'  solve time  median {np.median(sm):.2f} ms  '
                   f'p95 {np.percentile(sm,95):.2f} ms  max {sm.max():.2f} ms')

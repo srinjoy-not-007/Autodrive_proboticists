@@ -44,6 +44,12 @@ MAP = os.path.join(ROOT, 'data/maps/porto_mesh')
 COLL_PEN = 5.0
 CLEAR_PEN = 60.0
 CLEAR_FLOOR = 0.10
+# HARD floor, mpc3 onwards.  The September 12 search drove mpc2 to the soft
+# 0.10 floor (cut_offset 0.27, J 7.6 s predicted) and the configuration it found
+# collided live.  A configuration whose worst footprint clearance is under
+# `HARD_CLEAR` is not ranked against the feasible ones at all -- it is out.
+HARD_CLEAR = 0.14
+HARD_PEN = 500.0
 
 _MAP_CACHE = {}
 _PATH_CACHE = {}
@@ -74,16 +80,17 @@ def get_path(line, kappa_span=0.5, map_prefix=MAP):
 
 def drive(line, params, tracker='mpc2', laps=20, seeds=(1, 2), ay_max=ST.AY_MAX,
           pose_bias=0.03, pose_latency=0.045, pose_noise=0.02, yaw_noise=0.0,
-          map_prefix=MAP, warm=1):
+          map_prefix=MAP, warm=1, hard_clear=0.0):
     """Drive ``line`` and return the aggregated metrics."""
     dist, meta = get_map(map_prefix)
     kspan = float(params.get('kappa_span_m', 0.5))
     kw = {k: v for k, v in params.items() if k != 'kappa_span_m'}
-    lap_all, coll, clear, paths = [], 0, [], []
+    lap_all, coll, clear, paths, p95 = [], 0, [], [], []
     for sd in seeds:
         path = get_path(line, kspan, map_prefix)
-        tr = (ST.MPC2Sim(path, **kw) if tracker == 'mpc2'
-              else ST.LegacyMPCSim(path, **kw))
+        tr = (ST.MPC2Sim(path, **kw) if tracker == 'mpc2' else
+              ST.MPC3Sim(path, **kw) if tracker == 'mpc3' else
+              ST.LegacyMPCSim(path, **kw))
         out = ST.run(tr, path, laps=laps, dist=dist, meta=meta, seed=sd,
                      pose_noise=pose_noise, yaw_noise=yaw_noise,
                      pose_bias_inside=pose_bias, ay_max=ay_max,
@@ -97,14 +104,18 @@ def drive(line, params, tracker='mpc2', laps=20, seeds=(1, 2), ay_max=ST.AY_MAX,
         r = out['rec']
         r = r[r[:, 9] >= warm]
         clear.append(float(r[:, 8].min()))
+        p95.append(float(np.percentile(np.abs(r[:, 7]), 95)))
         paths.append(out['path_m'] / max(out['laps'], 1))
     n = len(seeds)
     med = float(np.median(lap_all))
     mc = float(min(clear))
     J = (med + COLL_PEN * coll / n
          + CLEAR_PEN * max(0.0, CLEAR_FLOOR - mc))
+    if hard_clear and mc < hard_clear:
+        J = HARD_PEN + HARD_PEN * (hard_clear - mc) + med
     return dict(ok=True, J=J, median=med, best=float(min(lap_all)),
                 collisions=coll, coll_per_seed=coll / n, clear=mc,
+                p95=float(max(p95)),
                 path_m=float(np.mean(paths)), laps=int(len(lap_all) / n) + warm)
 
 
@@ -128,18 +139,33 @@ SPACE = [
 ]
 BASE = dict(cut_offset_m=0.14)
 
+# mpc3 has far fewer knobs on purpose: no cut geometry, no bias estimator, and
+# the delay/actuator numbers are measured rather than tuned.  What is left is
+# the cost balance and the speed plan's two free parameters.
+SPACE3 = [
+    ('w_lat',           6.0,  40.0, 'f'),
+    ('w_yaw',           0.5,  10.0, 'f'),
+    ('w_rate',          0.05,  2.00, 'f'),
+    ('w_steer',         0.02,  1.20, 'f'),
+    ('barrier_margin',  0.08,  0.26, 'f'),
+    ('ay_budget',       5.5,   9.5, 'f'),
+    ('k_e',             0.0,   3.0, 'f'),
+    ('horizon',        14,    30,   'i'),
+    ('step_dt',         0.040, 0.080, 'f'),
+]
 
-def decode(vec):
+
+def decode(vec, space=None):
     p = {}
-    for (name, lo, hi, kind), z in zip(SPACE, vec):
+    for (name, lo, hi, kind), z in zip(space or SPACE, vec):
         v = lo + (hi - lo) * min(1.0, max(0.0, float(z)))
         p[name] = int(round(v)) if kind == 'i' else round(float(v), 5)
     return p
 
 
-def encode(p):
+def encode(p, space=None):
     out = []
-    for name, lo, hi, kind in SPACE:
+    for name, lo, hi, kind in (space or SPACE):
         out.append((float(p[name]) - lo) / (hi - lo))
     return np.array(out)
 
@@ -152,12 +178,14 @@ def _init(job):
 
 
 def _eval(vec):
-    p = decode(vec)
+    space = SPACE3 if _JOB['tracker'] == 'mpc3' else SPACE
+    p = decode(vec, space)
     try:
         r = drive(_JOB['line'], p, tracker=_JOB['tracker'], laps=_JOB['laps'],
                   seeds=tuple(_JOB['seeds']), ay_max=_JOB['ay_max'],
                   pose_bias=_JOB['pose_bias'], pose_latency=_JOB['pose_latency'],
-                  pose_noise=_JOB['pose_noise'])
+                  pose_noise=_JOB['pose_noise'],
+                  hard_clear=_JOB.get('hard_clear', 0.0))
     except Exception as exc:                              # a bad corner of the
         return 1e3, p, dict(ok=False, err=str(exc))       # space, not a bug
     return r['J'], p, r
@@ -165,27 +193,28 @@ def _eval(vec):
 
 def search(line, n=400, tracker='mpc2', laps=20, seeds=(1, 2), workers=30,
            ay_max=ST.AY_MAX, pose_bias=0.03, pose_latency=0.045,
-           pose_noise=0.02, method='cma', seed=0, out=None):
+           pose_noise=0.02, method='cma', seed=0, out=None, hard_clear=0.0):
+    space = SPACE3 if tracker == 'mpc3' else SPACE
     job = dict(line=line, tracker=tracker, laps=laps, seeds=list(seeds),
                ay_max=ay_max, pose_bias=pose_bias, pose_latency=pose_latency,
-               pose_noise=pose_noise)
+               pose_noise=pose_noise, hard_clear=hard_clear)
     rng = np.random.default_rng(seed)
     results = []
     with Pool(workers, initializer=_init, initargs=(job,)) as pool:
         # Always start from a random sample: CMA from a single point on a
         # 12-dimensional space with a hard collision cliff finds the cliff and
         # stops.
-        n_rand = max(60, n // 4)
-        X = list(rng.random((n_rand, len(SPACE))))
-        X.append(encode({**{k: v for k, v in decode([0.5] * len(SPACE)).items()},
-                         **_defaults_vec()}))
+        n_rand = max(min(60, n // 3), n // 4)
+        X = list(rng.random((n_rand, len(space))))
+        X.append(encode({**decode([0.5] * len(space), space),
+                         **_defaults_vec(space)}, space))
         for j, p, r in pool.imap_unordered(_eval, X, chunksize=1):
             results.append((j, p, r))
         print(f'  random phase: best J {min(r[0] for r in results):.3f}')
         if method == 'cma':
             import cma
             results.sort(key=lambda t: t[0])
-            x0 = np.clip(np.mean([encode(p) for _j, p, _r in results[:5]],
+            x0 = np.clip(np.mean([encode(p, space) for _j, p, _r in results[:5]],
                                  axis=0), 0.02, 0.98)
             es = cma.CMAEvolutionStrategy(
                 list(x0), 0.22,
@@ -207,11 +236,16 @@ def search(line, n=400, tracker='mpc2', laps=20, seeds=(1, 2), workers=30,
     return results
 
 
-def _defaults_vec():
-    from pit_crew import mpc2_core
-    d = dict(mpc2_core.DEFAULTS)
-    d['cut_offset_m'] = 0.14
-    return {k: d[k] for k, _lo, _hi, _t in SPACE if k in d}
+def _defaults_vec(space=None):
+    space = space or SPACE
+    if space is SPACE3:
+        from pit_crew import mpc3_core
+        d = dict(mpc3_core.DEFAULTS)
+    else:
+        from pit_crew import mpc2_core
+        d = dict(mpc2_core.DEFAULTS)
+        d['cut_offset_m'] = 0.14
+    return {k: d[k] for k, _lo, _hi, _t in space if k in d}
 
 
 # ---------------------------------------------------------------------------
@@ -377,11 +411,12 @@ def drive_many(items, workers=10, laps=20, seeds=(1, 2), ay_max=ST.AY_MAX,
     print(f'\n### {title}  (laps {laps} x {len(seeds)} seeds, '
           f'ay_max {ay_max}, pose bias {pose_bias}, noise {pose_noise})')
     print(f'{"tag":26s} {"line":34s} {"trk":5s} {"J":>7s} {"lap":>7s} '
-          f'{"coll":>5s} {"clear":>6s} {"m/lap":>7s}')
+          f'{"coll":>5s} {"p95":>6s} {"clear":>6s} {"m/lap":>7s}')
     for tag, name, trk, r in got:
         print(f'{tag:26s} {name[:34]:34s} {trk:5s} {r.get("J", 1e3):7.3f} '
               f'{r.get("median", float("nan")):7.3f} '
-              f'{r.get("collisions", 99):5d} {r.get("clear", 0.0):6.3f} '
+              f'{r.get("collisions", 99):5d} {r.get("p95", float("nan")):6.3f} '
+              f'{r.get("clear", 0.0):6.3f} '
               f'{r.get("path_m", float("nan")):7.3f}')
     return got
 
@@ -405,6 +440,9 @@ def main():
     ap.add_argument('--pose-latency', type=float, default=0.045)
     ap.add_argument('--pose-noise', type=float, default=0.02)
     ap.add_argument('--method', default='cma', choices=('cma', 'random'))
+    ap.add_argument('--hard-clear', type=float, default=0.0,
+                    help='reject any configuration whose worst footprint '
+                         'clearance is below this (m); 0 = soft floor only')
     ap.add_argument('--out', default='')
     ap.add_argument('--taper', type=float, default=3.0,
                     help='metres over which a hairpin-only shift is blended '
@@ -435,14 +473,15 @@ def main():
             p[k] = float(v)
         r = drive(args.line, p, tracker=args.tracker, laps=args.laps,
                   seeds=seeds, ay_max=args.ay_max, pose_bias=args.pose_bias,
-                  pose_latency=args.pose_latency, pose_noise=args.pose_noise)
+                  pose_latency=args.pose_latency, pose_noise=args.pose_noise,
+                  hard_clear=args.hard_clear)
         print(json.dumps(r, indent=1))
         return
     res = search(args.line, n=args.n, tracker=args.tracker, laps=args.laps,
                  seeds=seeds, workers=args.workers, ay_max=args.ay_max,
                  pose_bias=args.pose_bias, pose_latency=args.pose_latency,
                  pose_noise=args.pose_noise, method=args.method,
-                 out=args.out or None)
+                 out=args.out or None, hard_clear=args.hard_clear)
     print(f'\ntop 10 for {os.path.basename(args.line)}')
     for j, p, r in res[:10]:
         print(f'  J {j:7.3f}  lap {r.get("median", float("nan")):6.3f}  '
