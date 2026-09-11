@@ -259,6 +259,8 @@ class SysIdRun(Node):
         return self.sign * self.steers[self.istep]
 
     def log_row(self):
+        if self.fh.closed:
+            return
         x, y = self.xy if self.xy else (float('nan'), float('nan'))
         v_t = self.speeds[self.iv] if self.iv < len(self.speeds) else 0.0
         self.fh.write(

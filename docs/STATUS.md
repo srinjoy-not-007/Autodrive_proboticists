@@ -11,6 +11,15 @@ queued; then promote (submission entrypoint must switch to mpc3 + the wide
 line) and re-run ICRA with the mesh line pipeline.
 Launch: `CONTROLLER=mpc3 MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> mc0.60_ay6.0`
 
+**Tyre envelope settled (staircase on the -explore floor, 51 held cells,
+4103 rows, `data/logs/sysid_20260911_220017.csv`): sustained lateral
+acceleration p99 over a 0.27 s hold is 6.57 m/s2, at every speed; the
+asymptote is not identifiable (6.2-8.5 fit equally) because nothing holds
+more.** The skidpad's 9.9 was a transient. So ay ~6.5 is the real sustained
+limit for this car, matching the driven cliff, and the winners' 6.5 s comes
+from a shorter, smoother line tracked to a few centimetres, not from grip.
+Calibration in data/calibration/{steer_map,ggv}.csv (tools/lateral_id.py).
+
 ## September 12: promoted config = 79.7 s clean over 100 laps
 
 **Branch defaults now ARE the best validated config:** planner `PROFILE` ay

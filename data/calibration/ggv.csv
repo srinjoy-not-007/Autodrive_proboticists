@@ -6,16 +6,16 @@
 # which is exactly the array optimize_raceline.py builds today from
 # the flat --ay/--ax, so it drops in where those two do.
 #
-# ay_max 6.54 m/s2, flat. MEASURED as the 99th percentile of lateral
+# ay_max 6.57 m/s2, flat. MEASURED as the 99th percentile of lateral
 #   acceleration HELD for 0.27 s, over 1.5-5.5 m/s:
-#     v 1.5-2.0 m/s: 4.67 m/s2 (n=623)
-#     v 2.0-2.5 m/s: 5.44 m/s2 (n=1999)
-#     v 2.5-3.0 m/s: 6.19 m/s2 (n=9304)
-#     v 3.0-3.5 m/s: 6.54 m/s2 (n=6613)
-#     v 3.5-4.0 m/s: 4.93 m/s2 (n=3584)
-#     v 4.0-4.5 m/s: 5.87 m/s2 (n=4043)
-#     v 4.5-5.0 m/s: 5.08 m/s2 (n=2955)
-#     v 5.0-5.5 m/s: 4.54 m/s2 (n=1893)
+#     v 1.5-2.0 m/s: 4.65 m/s2 (n=723)
+#     v 2.0-2.5 m/s: 5.43 m/s2 (n=2118)
+#     v 2.5-3.0 m/s: 6.20 m/s2 (n=9433)
+#     v 3.0-3.5 m/s: 6.56 m/s2 (n=6703)
+#     v 3.5-4.0 m/s: 5.37 m/s2 (n=3667)
+#     v 4.0-4.5 m/s: 6.41 m/s2 (n=4124)
+#     v 4.5-5.0 m/s: 5.72 m/s2 (n=3011)
+#     v 5.0-5.5 m/s: 6.57 m/s2 (n=1940)
 #   The rise with speed in that list is demand, not grip -- see the
 #   docstring. Outside 1.5-5.0 m/s this number is EXTRAPOLATED; the
 #   car has 4 logged samples above 4.5 m/s with more than 0.15 rad of
@@ -30,20 +30,20 @@
 #   4.5 m/s2 and the shipping profile uses 4.0 because braking
 #   overlaps corner entry.
 # v_mps,ax_max_mps2,ay_max_mps2
-0.00,5.000,6.541
-0.50,4.864,6.541
-1.00,4.727,6.541
-1.50,4.590,6.541
-2.00,4.454,6.541
-2.50,4.317,6.541
-3.00,4.181,6.541
-3.50,4.045,6.541
-4.00,3.908,6.541
-4.50,3.771,6.541
-5.00,3.635,6.541
-5.50,3.498,6.541
-6.00,3.362,6.541
-6.50,3.225,6.541
-7.00,3.089,6.541
-7.50,2.952,6.541
-8.00,2.816,6.541
+0.00,5.000,6.569
+0.50,4.864,6.569
+1.00,4.727,6.569
+1.50,4.590,6.569
+2.00,4.454,6.569
+2.50,4.317,6.569
+3.00,4.181,6.569
+3.50,4.045,6.569
+4.00,3.908,6.569
+4.50,3.771,6.569
+5.00,3.635,6.569
+5.50,3.498,6.569
+6.00,3.362,6.569
+6.50,3.225,6.569
+7.00,3.089,6.569
+7.50,2.952,6.569
+8.00,2.816,6.569
