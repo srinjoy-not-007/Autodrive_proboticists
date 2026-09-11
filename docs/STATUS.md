@@ -8,7 +8,9 @@ first ten 71.63 s (simulator timer 71.18 s), median 7.28 s, best 6.98 s.**
 Baseline main 89.6 s. ay 6.0 on the same line: 0/100 at 73.46 s (the
 fallback). The image with the ay 6.0 line raced as shipped at 73.57 s (sim
 timer), 14 laps clean; re-run `scripts/test_submission_image.sh` after the
-ay 6.5 promotion. The mesh pipeline's automatic profile stays ay 6.0 for
+ay 6.5 promotion (first attempt under an offline search load: 14 laps, 0
+collisions, 75.21 s sim timer with three stalled 8 s laps; re-run on a quiet
+host pending). The mesh pipeline's automatic profile stays ay 6.0 for
 unseen tracks; Porto ships the explicitly validated ay 6.5 file.
 
 ## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
