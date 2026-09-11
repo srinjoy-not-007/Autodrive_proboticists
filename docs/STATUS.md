@@ -57,6 +57,28 @@ rejected and removed. No performance experiment is merged into qualification.
 Remaining: DockerHub push/access check and Phase 1 submission form. The final
 track pipeline still needs its own race validation after the September 16 release.
 
+### September 11 race-time isolation tests
+
+Main remained unchanged while three previously proposed performance changes were
+tested or screened independently:
+
+- The gated turn-in profile was rejected offline. It changed 109 of 299 speed
+  samples and increased ideal lap time from 8.637 s to 8.861 s while the current
+  profile is already collision-free, so it had no credible race-time benefit.
+- `throttle_a_gain=0.01` (one quarter of the previously failed acceleration
+  feedforward) produced 4 collisions by lap 8 and was stopped. The car's normal
+  speed deficit is load-bearing corner-entry margin, not free straight-line time.
+- `rate_limited_rollout=true`, isolated from the old five-change MPC bundle,
+  produced 1 collision by lap 6 and was stopped. The more physically faithful
+  future actuator model does not improve the competition objective here.
+
+One startup attempt accidentally left a delayed helper alive and briefly created
+duplicate controller processes. That run was detected from the process table,
+stopped, and excluded from every result above. Both valid experiments used one
+localization, one MPC and one logger with rendered Xvfb LiDAR. All rejected files
+and the temporary experiment branch were removed; qualification `main` remains
+at the verified 89.547 s / zero-collision baseline.
+
 ## Target: what winning actually looks like
 
 Published results, **same Porto practice track we develop on**:
