@@ -415,8 +415,9 @@ def main():
         ay_pt = args.ay + (args.ay_tight - args.ay) * frac
         v_cap = np.sqrt(ay_pt / np.maximum(k, 1e-6))
         n_cut = int(np.sum(v_cap < vx - 1e-6))
-        vx = limit_long_accel(np.minimum(vx, v_cap), el_lengths, args.ax,
-                              args.brake)
+        if n_cut:      # a no-op must stay byte-identical (Porto never binds)
+            vx = limit_long_accel(np.minimum(vx, v_cap), el_lengths, args.ax,
+                                  args.brake)
         print(f'tight-corner cap ay {args.ay_tight:.1f} above kappa '
               f'{k0:.2f}: speed limited at {n_cut} of {len(vx)} points')
 

@@ -1,0 +1,8 @@
+image: icra2026_mesh.pgm
+resolution: 0.025
+origin: [-7.625, -13.100000000000001, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+lidar_offset: 0.1933
+source: mesh

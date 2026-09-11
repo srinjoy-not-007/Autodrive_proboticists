@@ -93,7 +93,8 @@ VENV = '.venv/bin/python'
 # measured sustained cornering limit of 4.64 m/s2. Raising the cap does not
 # work even with the limiter fixed: ay 5.5 buys 0.045 s of median and pays 8
 # collisions for it.
-PROFILE = ['--ay', '6.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '40']
+PROFILE = ['--ay', '6.0', '--ax', '6.5', '--brake', '4.0', '--jerk-lat', '40',
+           '--ay-tight', '4.5', '--kappa-tight', '1.15']
 
 # How much lateral margin the min-curvature QP is told to keep, in metres, on
 # top of the swept body footprint. It used to be left at the 0.16 default, and
