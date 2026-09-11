@@ -63,17 +63,25 @@ class ParticleFilter(Node):
             # Keep it on: a small cost on slow tracks buys stability on fast ones.
             ('throttle_to_mps', 25.0),
             ('lidar_offset', 0.0),        # vehicle.LIDAR_FROM_POSE to enable
+            # Review items (Sep 11), each opt-in so it can be measured alone:
+            ('keep_prior_weights', False),  # w_k = w_{k-1} * p(z|x) between resamples
+            ('publish_on_reloc', True),     # False: skip the pose after a global reinit
+            ('midpoint_heading', False),    # propagate with mean(prev, now) IMU yaw
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
          self.init_spread, self.lost_thresh, self.lost_patience,
-         self.throttle_to_mps, self.lidar_offset) = [x.value for x in p]
+         self.throttle_to_mps, self.lidar_offset, self.keep_prior_w,
+         self.publish_on_reloc, self.midpoint_heading) = [x.value for x in p]
         self.speed_cmd = 0.0
 
         self.load_map(map_prefix)
         self.load_centerline(centerline_csv)
 
         self.imu_yaw = None
+        self.imu_yaw_prev = None
+        self.imu_received = 0.0
+        self._just_relocalized = False
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         self.last_t = None
         self.lost_count = 0
@@ -173,6 +181,7 @@ class ParticleFilter(Node):
         self.w = np.ones(self.n_p) / self.n_p
         self.initialized = True
         self.lost_count = 0
+        self._just_relocalized = True
         self.get_logger().warn('RELOCALIZING (centerline-wide resample)')
 
     # -------------------------------------------------------------- sensors
@@ -196,6 +205,8 @@ class ParticleFilter(Node):
         if not all(math.isfinite(v) for v in (q.x, q.y, q.z, q.w)):
             return
         self.imu_yaw = yaw_from_quat(msg.orientation)
+        if self.imu_yaw_prev is None:
+            self.imu_yaw_prev = self.imu_yaw
         self.imu_received = self.get_clock().now().nanoseconds * 1e-9
 
     def on_scan(self, scan: LaserScan):
@@ -227,10 +238,23 @@ class ParticleFilter(Node):
 
         self.predict(dt)
         self.update(scan)
+        self.imu_yaw_prev = self.imu_yaw
+        if self._just_relocalized and not self.publish_on_reloc:
+            # The centroid of a track-wide cloud is not a pose; let the
+            # controller's stale gate cover one missing update instead.
+            self._just_relocalized = False
+            return
+        self._just_relocalized = False
         self.publish(scan.header.stamp)
 
     def predict(self, dt):
-        head = self.imu_yaw + self.pth
+        yaw = self.imu_yaw
+        if self.midpoint_heading and self.imu_yaw_prev is not None:
+            # The step covers [t_prev, t_now]; using the end-of-interval yaw
+            # biases every step in a corner by half the heading change.
+            d = (self.imu_yaw - self.imu_yaw_prev + math.pi) % (2 * math.pi) - math.pi
+            yaw = self.imu_yaw_prev + 0.5 * d
+        head = yaw + self.pth
         # Cap per-update travel: a bad speed sample must not fling the whole
         # particle set off the map (from which there is no recovery).
         # A checkpoint reset teleports the car, so the motion model has nothing
@@ -287,6 +311,11 @@ class ParticleFilter(Node):
         logw = -0.5 * np.sum((d / self.sigma_hit) ** 2, axis=1) / self.beam_temp
         logw -= logw.max()
         w = np.exp(logw)
+        if self.keep_prior_w:
+            # Proper SIR: between resampling steps the prior weight carries
+            # the evidence of earlier scans; discarding it makes every
+            # non-resampled update a one-scan estimator.
+            w = w * self.w
 
         # Particles inside a wall or off the map are impossible
         pgx = ((self.px - self.ox) / self.res).astype(np.int32)
