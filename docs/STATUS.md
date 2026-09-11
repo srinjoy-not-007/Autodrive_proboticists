@@ -1,6 +1,17 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 12: promoted config = 79.7 s clean over 100 laps)
+## NEXT SESSION — START HERE (September 12, night: mpc3 on the wide line, 74.4 s)
+
+**Best measured so far: mpc3 (new tracker) on the wide min-curvature line
+`porto_mesh_mc0.60_ay6.0` (mesh map, lidar_offset 0.1933), defaults after
+the speed-cut rescale (e_free 0.18, k_e 2.0, barrier_margin 0.24, w_lat 24):
+32 laps, 0 collisions, first ten 74.36 s, median 7.35 s, best 7.12 s.**
+Promoted config (legacy mpc, centerline) is 79.09 s. 100-lap validation
+queued; then promote (submission entrypoint must switch to mpc3 + the wide
+line) and re-run ICRA with the mesh line pipeline.
+Launch: `CONTROLLER=mpc3 MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> mc0.60_ay6.0`
+
+## September 12: promoted config = 79.7 s clean over 100 laps
 
 **Branch defaults now ARE the best validated config:** planner `PROFILE` ay
 6.0 (ax 6.5, brake 4, jerk 40), mpc `cmd_delay_s` 0.18, `ay_limit` 7.8,
