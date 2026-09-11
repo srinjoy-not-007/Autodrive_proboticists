@@ -32,6 +32,7 @@ setup(
             'arbiter = pit_crew.arbiter:main',
             'stanley = pit_crew.stanley:main',
             'mpc = pit_crew.mpc:main',
+            'mpc2 = pit_crew.mpc2:main',
             'skidpad = pit_crew.skidpad:main',
         ],
     },
