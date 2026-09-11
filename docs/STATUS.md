@@ -84,6 +84,14 @@ why the offline tracker sim never reproduces the cut. Under test:
 localization on the exact mesh map with `lidar_offset` 0.1933
 (`MAP=porto_mesh LIDAR_OFFSET=0.1933`), then mpc2.
 
+**Mesh map + lidar_offset 0.1933 (`MAP=porto_mesh LIDAR_OFFSET=0.1933`),
+ay 6.0: 32 laps, 0 collisions, 80.12 s (sim timer 79.62), median 8.02.**
+Estimate-truth lateral difference is now within 0.02 m everywhere,
+hairpins included. The truth still cuts the hairpins by 0.15 m, so that part
+is the controller; the mesh map is the localization base from here on.
+`data/racelines/porto_mesh_*.csv` are symlinks to the track_v2 lines and
+`data/maps/porto_mesh_traj.csv` to the recon trajectory (for the init pose).
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /

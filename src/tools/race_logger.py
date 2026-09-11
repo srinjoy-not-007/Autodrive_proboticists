@@ -31,11 +31,11 @@ class RaceLogger(Node):
         self.csv = csv.writer(self.f)
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',
-                           'collision_event', 'px', 'py', 'pyaw'])
+                           'collision_event', 'px', 'py', 'pyaw', 'cte'])
         self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0,
                       'throttle': 0.0, 'lap_count': 0, 'lap_time': 0.0,
                       'collision_count': 0, 'px': float('nan'),
-                      'py': float('nan'), 'pyaw': float('nan')}
+                      'py': float('nan'), 'pyaw': float('nan'), 'cte': float('nan')}
         self._enc_last = None
         self._col_last = None
 
@@ -55,6 +55,8 @@ class RaceLogger(Node):
         # Localization estimate (evaluation only): lets a log show estimate
         # vs IPS truth, e.g. whether the hairpin inside cut is a pose bias.
         self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 10)
+        self.create_subscription(Float32, '/pit_crew/cte',
+                                 lambda m: self.state.update(cte=round(m.data, 4)), 10)
         self.get_logger().info(f'logging to {out_csv}')
 
     def on_enc(self, msg):
@@ -99,7 +101,7 @@ class RaceLogger(Node):
                            f"{s['speed']:.3f}", f"{s['steering']:.3f}",
                            f"{s['throttle']:.3f}", s['lap_count'],
                            f"{s['lap_time']:.2f}", s['collision_count'],
-                           collision_event, s['px'], s['py'], s['pyaw']])
+                           collision_event, s['px'], s['py'], s['pyaw'], s['cte']])
 
     def destroy_node(self):
         self.f.flush()
