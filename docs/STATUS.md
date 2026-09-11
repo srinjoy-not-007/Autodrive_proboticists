@@ -105,6 +105,14 @@ The controller's own cte at its predicted point is -0.04 in the hairpins
 while truth is -0.15: the delay prediction under-rotates at hairpin exits.
 Gyro sign/gain verified correct (corr 0.98, slope 0.96 vs IPS heading rate).
 
+100-lap validation, mesh map, ay 6.5: **3 collisions / 100 laps** (s 13.6 x2,
+s 27.7 x1), median 7.834, first ten 78.33 s. A 3% per-lap rate is ~3 s of
+expected penalty per race; not shippable without the hairpin fixed.
+mpc2 on the mesh map: ay 6.0 84.84 s / ay 6.5 83.12 s, both clean, tracking
+p50 0.065 m, but 1.17 m longer path per lap (no corner cut); at ay 7.0/7.5
+it collided because its steering cap sat below the line's own feedforward
+(fixed: cap derived from the line with 15% headroom, under test).
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /

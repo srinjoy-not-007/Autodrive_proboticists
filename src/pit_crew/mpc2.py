@@ -97,7 +97,7 @@ class MPC2Tracker(Node):
             ('speed_scale', 1.0),
             ('map_prefix', ''),           # '' = derive from raceline, see above
             ('use_barrier', True),
-            ('barrier_margin', 0.20),     # extra clearance the barrier defends
+            ('barrier_margin', 0.14),     # extra clearance the barrier defends
             ('w_barrier', 400.0),
             ('horizon', 24),
             ('step_dt', 0.055),           # 0.88 s of horizon
@@ -142,6 +142,21 @@ class MPC2Tracker(Node):
             # the grip that exists, not to 1.3x the profile.
             ('ay_limit', 6.0),            # steering cap from the grip that exists
             ('cap_use_measured', True),   # cap at the speed the car HAS
+            # ...but never below what the LINE itself asks for.
+            #
+            # `ay_limit` is a constant; the demand is not.  Measured live on
+            # the mesh map: on the ay 7.0 line the steering the reference
+            # curvature needs at s 12-14 is 0.219 rad and the ay-6.0 cap at
+            # plan speed is 0.216 -- the cap sat BELOW the feedforward, so the
+            # tracker had negative correction authority and simply understeered
+            # into the outside wall (5 collisions at s 11.3, 6 of 10 at s 27.7
+            # on the ay 7.5 line; 5.2% of samples at the cap at ay 6.0 rising
+            # to 23.0% at ay 7.5).  Floor the cap at the line's own
+            # feedforward over the horizon, times this headroom, so the cap
+            # scales with the profile and with an unseen track instead of
+            # having to be re-passed by hand.
+            ('cap_ff_headroom', 1.15),
+            ('cap_preview_min_m', 1.0),
             ('kappa_span_m', 0.5),
             ('track_window', 90),
             ('track_back', 3),
@@ -323,6 +338,24 @@ class MPC2Tracker(Node):
         if self._escape_until is not None and now < self._escape_until:
             self.publish(self._escape_steer, -0.25)
 
+    def plan_ay(self, i0, v):
+        """Largest lateral acceleration the LINE itself plans, just ahead.
+
+        In the ay domain, not the steering-angle domain.  An angle floor is
+        wrong on a straight: the preview reaches into the next hairpin, and
+        1.25x that hairpin's steering angle applied at 7 m/s is a demand for
+        30-odd m/s2.  Measured offline, exactly that -- 3 collisions on the
+        straights of the ay 7.5 line and a 7.1 m excursion.  Lifting the ay
+        budget instead is speed-consistent: the same budget is a large angle at
+        hairpin speed and a small one at straight speed.
+        """
+        P = self.path
+        span = max(float(self.P['cap_preview_min_m']),
+                   v * self.mpc.N * self.mpc.dt)
+        n = max(2, int(span / max(P.spacing, 1e-3)))
+        idx = (i0 + np.arange(n)) % P.n
+        return float((P.v_prof[idx] ** 2 * np.abs(P.kappa[idx])).max())
+
     # ------------------------------------------------------------------
     def control_step(self):
         t_solve = time.perf_counter()
@@ -378,6 +411,11 @@ class MPC2Tracker(Node):
         if self.P['ay_limit'] > 0.0:
             cap = min(cap, math.atan(vehicle.WHEELBASE * self.P['ay_limit']
                                      / max(v_cap * v_cap, 0.25)))
+        ay_cap = max(float(self.P['ay_limit']),
+                     float(self.P['cap_ff_headroom']) * self.plan_ay(i0, v))
+        cap = min(vehicle.MAX_STEER,
+                  math.atan(vehicle.WHEELBASE * ay_cap
+                            / max(v_cap * v_cap, 0.25)))
 
         cmd, _info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v, cap=cap,
                                     bias=self.bias.value)

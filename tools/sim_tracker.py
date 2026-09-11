@@ -65,12 +65,14 @@ GRIP_RATIO = 0.95           # of asked curvature, well inside the envelope
 # ay-6.0 profile, which is why it missed the failure that the first live mpc2
 # run then produced (slid wide at both hairpins, achieved/asked curvature 0.74).
 #
-# 5.5 is CALIBRATED, not derived: it is the value at which the ported mpc.py
-# reproduces its own live behaviour on this line -- about one collision per
-# eight laps at ay 6.0 with a 0.15 m inside pose bias, against 3 in 32 live.
-# The asymptote argument alone gives 4.9, at which the port crashes nine times
-# in eight laps and the live car does not.  --ay-max re-opens it.
-AY_MAX = 5.5
+# CALIBRATED against the ported mpc.py, not derived.  On the corrected mesh map
+# (no pose bias) the live mpc runs ay 6.5 clean and takes 5 collisions in 32
+# laps at ay 7.0; the port matches that at AY_MAX 6.5.  On the OLD map, with a
+# 0.15 m inside pose bias injected, the matching value was 5.5 -- use
+# `--ay-max 5.5 --pose-bias-inside 0.15` to reproduce that configuration.  The
+# tyre asymptote argument alone gives 4.9, at which the port crashes nine times
+# in eight laps and the live car does not.
+AY_MAX = 6.5
 AY_KNEE = 0.85              # fraction of AY_MAX where saturation starts
 
 
@@ -139,7 +141,8 @@ class MPC2Sim:
     def __init__(self, path, **kw):
         self.path = path
         self.P = dict(cmd_dead_time=0.135, extra_latency_s=0.045,
-                      ay_limit=6.0, cap_use_measured=1,
+                      ay_limit=6.0, cap_use_measured=1, cap_ff_headroom=1.15,
+                      cap_preview_min_m=1.0,
                       brake_horizon_s=0.35, throttle_gain=0.040,
                       brake_gain=0.05, use_steer_feedback=True,
                       use_measured_speed=False, apply_ahead_s=0.09,
@@ -166,6 +169,13 @@ class MPC2Sim:
         self.idx = None
         self.e_lat = 0.0
         self.solve_ms = []
+
+    def plan_ay(self, i0, v):
+        P = self.path
+        span = max(self.P['cap_preview_min_m'], v * self.mpc.N * self.mpc.dt)
+        n = max(2, int(span / max(P.spacing, 1e-3)))
+        idx = (i0 + np.arange(n)) % P.n
+        return float((P.v_prof[idx] ** 2 * np.abs(P.kappa[idx])).max())
 
     def on_frame(self, t, gyro, speed, steer_fb):
         """Everything the bridge publishes at the frame, immediately."""
@@ -207,6 +217,11 @@ class MPC2Sim:
         if self.P['ay_limit'] > 0:
             cap = min(cap, math.atan(vehicle.WHEELBASE * self.P['ay_limit']
                                      / max(v_cap * v_cap, 0.25)))
+        ay_cap = max(self.P['ay_limit'],
+                     self.P['cap_ff_headroom'] * self.plan_ay(i0, v))
+        cap = min(vehicle.MAX_STEER,
+                  math.atan(vehicle.WHEELBASE * ay_cap
+                            / max(v_cap * v_cap, 0.25)))
         cmd, _ = self.mpc.solve(e_lat, e_yaw, delta0, i0, v, cap=cap,
                                 bias=self.bias.value)
         n_ahead = max(2, int(max(0.2, self.speed * self.P['brake_horizon_s'])
