@@ -172,23 +172,34 @@ def load_sysid(path, half=2):
     """A staircase log from `ros2 run pit_crew sysid_run` (see that module).
 
     Same fields as a race log, plus the commanded cell and the IMU. Curvature
-    comes from the gyro here rather than from differentiating the pose: the
-    explore world has no walls to hit, the manoeuvre is deliberately steady,
-    and a directly measured yaw rate is better than a twice-differentiated
-    position. Only the measured `hold` phase is kept.
+    comes from the GYRO here, not from differentiating the pose: the explore
+    world has no walls, the manoeuvre is deliberately steady, and a directly
+    measured yaw rate beats a twice-differentiated position. Speed comes from
+    the IPS trace, smoothed, with the wheel encoder as the fallback -- the
+    logger writes a row per IMU message and the IPS arrives slightly less
+    often, so consecutive rows sometimes repeat a pose and a naive derivative
+    reads zero. Only the measured `hold` phase is kept.
     """
     a = np.genfromtxt(path, delimiter=',', names=True,
                       dtype=None, encoding='utf-8')
     phase = np.array([str(x) for x in a['phase']])
     t = a['t'].astype(float)
     x, y = a['x'].astype(float), a['y'].astype(float)
-    dx, dy, ok = local_derivs(t, x, y, half=half)
-    v_ips = np.hypot(dx[:, 1], dy[:, 1])
     wz = a['wz'].astype(float)
-    v = np.where(np.isfinite(v_ips) & (v_ips > 0.2), v_ips,
-                 a['v_enc'].astype(float))
+    v_enc = a['v_enc'].astype(float)
+
+    # Speed over a +-half window of DISTINCT poses, so a repeated row does not
+    # read as a stop.
+    v_ips = np.full(len(t), np.nan)
+    for i in range(len(t)):
+        a0, b0 = max(0, i - half), min(len(t), i + half + 1)
+        dt = t[b0 - 1] - t[a0]
+        if dt > 1e-3:
+            v_ips[i] = math.hypot(x[b0 - 1] - x[a0], y[b0 - 1] - y[a0]) / dt
+    v = np.where(np.isfinite(v_ips) & (v_ips > 0.2), v_ips, v_enc)
     kappa = wz / np.maximum(v, 0.2)
-    ok &= (phase == 'hold') & (v > MIN_SPEED) & np.isfinite(kappa)
+    ok = ((phase == 'hold') & (v > MIN_SPEED)
+          & np.isfinite(kappa) & np.isfinite(v))
     return dict(t=t, delta=a['delta_act'].astype(float), v=v, kappa=kappa,
                 ay=v * wz, ax=np.gradient(v, t), thr=a['throttle'].astype(float),
                 ok=ok, path=path)
@@ -758,8 +769,13 @@ def main():
     segs = segments(args.logs)
     if args.sysid:
         extra = segments(args.sysid, min_len=8, sysid=True)
+        n_extra = sum(len(s['t']) for s in extra)
         print(f'staircase logs: {len(args.sysid)} files, {len(extra)} holds, '
-              f'{sum(len(s["t"]) for s in extra)} measured samples')
+              f'{n_extra} measured samples')
+        if n_extra < 100:
+            print('  WARNING: that is almost nothing. A staircase log with no '
+                  '`hold` rows\n  means the run stopped before it measured '
+                  'anything -- check the guards.')
         segs += extra
     hold = segments(args.holdout) if args.holdout else []
     print(f'fit set: {len(args.logs)} logs, {len(segs)} segments, '

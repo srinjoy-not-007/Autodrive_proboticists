@@ -2398,3 +2398,51 @@ when two steps add less than 0.2 m/s² of ay, LiDAR and 18 m radius guards. It
 logs every telemetry tick to `/home/data/logs/sysid_<ts>.csv`, and
 `tools/lateral_id.py --sysid <csv>` folds those holds into the same fit.
 **Not yet driven.**
+
+### Later on September 12: the first staircase run, and why it stopped
+
+`data/logs/sysid_20260911_212223.csv`, 103 rows, 10 s. It measured **one
+cell** — 2.0 m/s at 0.05 rad, 15 hold samples — and then tripped the 18 m
+radius guard. That cell is a clean validation point and nothing more: achieved
+curvature 0.154 against a kinematic 0.1535 (**ratio 1.003**), and the
+identified model predicts it to within **1.8%**. At ay 0.60 it says nothing
+about the limit, so `tools/lateral_id.py --sysid` on it changes no fitted
+number; the calibration files stay the race-log fit.
+
+Why it stopped: **geometry, not grip.** The spin-up held zero steering, so the
+car drove 9.4 m straight before the staircase began, and the first two steering
+steps are shallow arcs that keep going outwards — 18.2 m from the spawn 10 s
+in. The LiDAR guard was never involved: all 103 rows read `lidar_min = inf`, so
+in the explore world (no geometry within the 10 m LiDAR range) that guard
+cannot fire at all.
+
+Fixes in `src/pit_crew/sysid_run.py`, each simulated end to end against the
+identified model before being written:
+
+- **Circular spin-up**, radius `max(2.0, v²/4.5)`, so speed is gained inside a
+  bounded disc. A closed circle, not a figure of eight — the eight ends up
+  pointing outwards and simulates worse (22.0 m vs 18.6 m).
+- **Drive home between cells** past 8 m: steer at the spawn point (bearing
+  minus the course angle from the IPS trace — no yaw topic, no gyro
+  integration) at 3 m/s until inside 4 m, then resume the pending cell.
+  **At most one drive home per cell**: a 2 s settle at 5.5 m/s covers 11 m,
+  more than the gap between the two radii, so without the limit the car goes
+  home, settles, is outside again, and ping-pongs forever — that hung the
+  simulation outright.
+- **Radius guard becomes a backstop at 40 m**; the LiDAR guard defaults off
+  (`lidar_stop_m: 0.0`), to be raised only for a world that has walls.
+- **`max_demand` 14 → 20 m/s²**: at 5.5 m/s a 0.15 rad step already asks 14, so
+  the old cap would have stopped the staircase one step before the answer if
+  the skidpad's 9.9 m/s² is the truth. The knee rule (two steps adding less
+  than 0.2 m/s² of ay) is the real terminator.
+- `tools/lateral_id.py --sysid` no longer differentiates the pose for these
+  logs — the logger writes a row per IMU message and the IPS repeats between
+  them, which dropped 3 of 15 hold rows and then split the rest below the
+  minimum segment length, so the loader reported zero. Speed now comes from
+  distinct poses with the encoder as fallback, curvature from the gyro, and it
+  warns when a staircase log contributes almost nothing.
+
+Simulated on the identified model: **61 cells, ~420 s, 32 drives home, never
+more than 17.7 m from the spawn**; on the pessimistic hard-clip grip model,
+434 s and 16.2 m. The aborted run reached 18.2 m with no LiDAR return in any
+direction, so that much floor is known clear. Still not driven at full length.

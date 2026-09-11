@@ -27,28 +27,36 @@ This node is an INSTRUMENT, not a racing node. It reads IPS (a runtime-
 restricted topic) for the space guard and for ground truth, which is fine here
 and would not be fine in a race.
 
-What it drives, and why those numbers:
+**What the first run taught (2026-09-11, `data/logs/sysid_20260911_212223.csv`,
+103 rows).** It measured exactly ONE cell -- 2.0 m/s at 0.05 rad, 15 samples,
+ratio 1.003 against the kinematic model -- and then tripped the radius guard
+18.2 m from the spawn, 10 s in. The cause was geometry, not grip: the spin-up
+held zero steering, so the car drove 9.4 m in a straight line before the
+staircase even began, and the first two steering steps are shallow arcs that
+carry on outwards. The LiDAR never saw anything at all: every one of the 103
+rows reads `inf`, so in the explore world that guard cannot fire and is now off
+by default. Three changes came out of it:
 
-  speeds  2.0 ... 5.5 m/s in 0.5 steps -- 2.0-3.5 overlaps the race data (so
-          the two measurements can be checked against each other) and 4.0-5.5
-          is the blank region. Above 5.5 the arc radius at any interesting
-          lateral acceleration exceeds the space guard.
-  steers  0.05 ... lock. The race data is dense below 0.25 and empty above
-          0.32; the knee is expected between 0.25 and 0.40 if the hard-clip
-          estimate is right, and not at all if the tanh estimate is right.
-          Either outcome is an answer.
-  hold    1.5 s after a 2.0 s settle. The identified lateral pole is 0.05-0.09
-          s and the speed servo settles in ~0.3 s, so 2.0 s is ~20 time
-          constants; 1.5 s of hold is ~16 samples at the 11 Hz telemetry rate,
-          enough for a median that is not one sample's noise.
-  sign    alternates every step, so the car weaves instead of spiralling away
-          and the run stays inside the space guard.
-  skip    cells whose kinematic demand v^2*tan(delta)/L exceeds `max_demand`
-          (default 14 m/s2, half again the tyre asset's 9.81 peak) are
-          skipped: past that the car is only measuring how it spins.
-  stop    the staircase for a speed ends when two consecutive steps fail to
-          gain `knee_gain` of lateral acceleration -- that IS the limit, and
-          there is nothing above it worth the space.
+  * **spin up on a circle**, radius max(`spin_radius_m`, v^2/`spin_ay`), so the
+    car gains speed inside a bounded disc instead of walking away from the only
+    ground known to be clear. A closed circle, not a figure of eight -- the
+    eight ends up pointing outwards and simulates worse (22 m against 18.6 m).
+  * **drive home between cells** when the spawn is more than `recentre_r_m`
+    away: steer at the spawn point (bearing minus the course angle taken from
+    the IPS trace, no yaw topic and no gyro integration) at `home_speed` until
+    inside `home_r_m`, then resume the cell that was about to start. At most
+    ONE drive home per cell -- a 2 s settle at 5.5 m/s covers 11 m, more than
+    the gap between the two radii, so without that limit the car arrives home,
+    settles, is outside again, and ping-pongs forever. Simulated, that hangs.
+  * **the radius guard becomes a backstop**, at 40 m rather than 18, because
+    the recentre is what keeps the run local now. If it ever fires, something
+    is wrong that stopping is the right answer to.
+
+Simulated against the identified model end to end (policy, not code): 61 cells,
+~420 s, 32 drives home, never further than 17.7 m from the spawn. Under the
+pessimistic hard-clip grip model instead: 434 s and 16.2 m. The previous run
+reached 18.2 m with no LiDAR return in any direction, so that much floor is
+known to be clear.
 
 Output: one row per telemetry tick to `<out_dir>/sysid_<timestamp>.csv`, with
 the commanded cell, the actuator feedback, IPS ground truth and the IMU. Fit it
@@ -84,15 +92,22 @@ class SysIdRun(Node):
             ('hold_s', 1.5),           # per step, measured
             ('straighten_s', 0.8),     # steering back to zero between steps
             ('spin_up_s', 5.0),        # per speed, before the first step
-            ('max_demand', 14.0),      # m/s2; skip cells asking for more
+            ('max_demand', 20.0),      # m/s2; skip cells asking for more
             ('knee_gain', 0.20),       # m/s2 of ay a step must add to continue
-            ('lidar_stop_m', 2.0),     # abort if anything is this close
-            ('max_radius_m', 18.0),    # abort if we wander this far from start
+            ('spin_radius_m', 2.0),    # spin up on a circle of at least this
+            ('spin_ay', 4.5),          # ...and never asking more than this
+            ('recentre_r_m', 8.0),     # go home when a cell ends beyond this
+            ('home_r_m', 4.0),         # ...and resume once back inside this
+            ('home_speed', 3.0),       # m/s held while driving home
+            ('lidar_stop_m', 0.0),     # 0 disables; see the module docstring
+            ('max_radius_m', 40.0),    # hard abort, recentre should prevent it
             ('out_dir', '/home/data/logs'),
         ])
         (self.speeds, self.steers, self.settle_s, self.hold_s,
          self.straighten_s, self.spin_up_s, self.max_demand, self.knee_gain,
-         self.lidar_stop_m, self.max_radius_m, out_dir) = [x.value for x in p]
+         self.spin_radius_m, self.spin_ay, self.recentre_r_m, self.home_r_m,
+         self.home_speed, self.lidar_stop_m, self.max_radius_m,
+         out_dir) = [x.value for x in p]
 
         self.throttle = ServoThrottle()
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
@@ -102,6 +117,9 @@ class SysIdRun(Node):
         self.thr_act = 0.0
         self.xy = None
         self.xy0 = None
+        self.track = []             # recent (t, x, y) for a heading estimate
+        self.resume = 'settle'      # phase to enter once we are home again
+        self.recentred = False      # at most one drive home per cell
         self.lidar_min = float('inf')
 
         self.iv = 0                 # index into speeds
@@ -160,6 +178,9 @@ class SysIdRun(Node):
         self.xy = (float(msg.x), float(msg.y))
         if self.xy0 is None:
             self.xy0 = self.xy
+        self.track.append((self.now(), self.xy[0], self.xy[1]))
+        if len(self.track) > 12:
+            self.track.pop(0)
 
     def on_scan(self, msg: LaserScan):
         good = [r for r in msg.ranges
@@ -181,8 +202,59 @@ class SysIdRun(Node):
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
+    def dist_home(self):
+        if not (self.xy and self.xy0):
+            return 0.0
+        return math.hypot(self.xy[0] - self.xy0[0], self.xy[1] - self.xy0[1])
+
+    def heading(self):
+        """Course angle from the IPS trace. No yaw topic is needed and the
+        gyro would have to be integrated, which drifts; two poses ~0.3 s apart
+        give the direction of travel directly. None while barely moving."""
+        if len(self.track) < 4:
+            return None
+        t1, x1, y1 = self.track[-1]
+        for t0, x0, y0 in reversed(self.track[:-1]):
+            if t1 - t0 >= 0.25 and math.hypot(x1 - x0, y1 - y0) > 0.15:
+                return math.atan2(y1 - y0, x1 - x0)
+        return None
+
+    def spin_steer(self):
+        """Steering held during spin-up.
+
+        The first run of this node drove 9.4 m in a straight line during
+        spin-up, then a 6.5 m-radius arc outwards, and tripped the radius
+        guard 18 m from the spawn before it had measured a second cell. A
+        straight spin-up is a walk away from the only place we know is clear.
+        Spin up on a circle instead: the radius is the larger of
+        `spin_radius_m` and whatever keeps the lateral demand at or under
+        `spin_ay`, so the car gains speed inside a bounded disc and never
+        asks the tyres for anything interesting while doing it.
+        """
+        v = max(self.speeds[self.iv], 0.5)
+        r = max(self.spin_radius_m, v * v / max(self.spin_ay, 0.5))
+        # A closed circle, not a figure of eight: the eight ends up pointing
+        # away from home and, simulated against the identified model, reached
+        # 22 m where the plain circle reaches 18.6 m. A circle of radius r
+        # bounds the excursion at 2r, and r is only large where the speed
+        # makes it so.
+        return self.sign * math.atan(vehicle.WHEELBASE / r)
+
+    def home_steer(self):
+        """Proportional steering towards the spawn point."""
+        h = self.heading()
+        if h is None or not (self.xy and self.xy0):
+            return 0.0
+        bearing = math.atan2(self.xy0[1] - self.xy[1], self.xy0[0] - self.xy[0])
+        err = (bearing - h + math.pi) % (2.0 * math.pi) - math.pi
+        return max(-0.35, min(0.35, 0.8 * err))
+
     def target_steer(self):
-        if self.phase in ('spinup', 'straighten'):
+        if self.phase == 'spinup':
+            return self.spin_steer()
+        if self.phase == 'recentre':
+            return self.home_steer()
+        if self.phase == 'straighten':
             return 0.0
         return self.sign * self.steers[self.istep]
 
@@ -196,12 +268,15 @@ class SysIdRun(Node):
             f'{self.imu_ax:.3f},{self.imu_ay:.3f},{self.lidar_min:.3f}\n')
 
     def guard(self):
-        if self.lidar_min < self.lidar_stop_m:
+        # The LiDAR guard is OFF by default: in the explore world every ray
+        # returns inf (measured -- 103 rows, not one finite range), so it can
+        # never fire there and would only mask a real problem. Raise it if this
+        # node is ever pointed at a world that has walls.
+        if self.lidar_stop_m > 0.0 and self.lidar_min < self.lidar_stop_m:
             return f'obstacle at {self.lidar_min:.2f} m'
-        if self.xy and self.xy0:
-            r = math.hypot(self.xy[0] - self.xy0[0], self.xy[1] - self.xy0[1])
-            if r > self.max_radius_m:
-                return f'wandered {r:.1f} m from the start point'
+        if self.dist_home() > self.max_radius_m:
+            return (f'wandered {self.dist_home():.1f} m from the start point '
+                    f'even with recentring')
         return None
 
     # -- the staircase -----------------------------------------------------
@@ -221,6 +296,8 @@ class SysIdRun(Node):
             return
 
         v_t = self.speeds[self.iv]
+        if self.phase == 'recentre':
+            v_t = min(v_t, self.home_speed)
         self.pub_steer.publish(
             Float32(data=vehicle.steer_to_cmd(self.target_steer())))
         self.pub_throttle.publish(Float32(data=float(
@@ -228,11 +305,21 @@ class SysIdRun(Node):
 
         if self.phase == 'spinup':
             if elapsed > self.spin_up_s:
-                self.enter('settle', t)
+                self.enter_or_recentre('settle', t)
         elif self.phase == 'settle':
             if elapsed > self.settle_s:
-                self.samples = []
-                self.enter('hold', t)
+                # One drive home per cell, and only before the hold starts.
+                # Without the limit this ping-pongs forever: a 2 s settle at
+                # 5.5 m/s covers 11 m, which is more than the 4 m gap between
+                # `recentre_r_m` and `home_r_m`, so the car arrives home,
+                # settles, is outside again, and goes home again. Simulated,
+                # that hangs the whole staircase. A cell measured 10 m from
+                # the spawn is a perfectly good cell.
+                if self.dist_home() > self.recentre_r_m and not self.recentred:
+                    self.enter_or_recentre('settle', t)
+                else:
+                    self.samples = []
+                    self.enter('hold', t)
         elif self.phase == 'hold':
             self.samples.append((self.speed_est.speed, abs(self.gyro),
                                  abs(self.steer_act)))
@@ -242,13 +329,53 @@ class SysIdRun(Node):
         elif self.phase == 'straighten':
             if elapsed > self.straighten_s:
                 self.advance(t)
+        elif self.phase == 'recentre':
+            if self.dist_home() < self.home_r_m:
+                self.get_logger().info(
+                    f'  back within {self.dist_home():.1f} m of the spawn; '
+                    f'resuming at {self.resume}')
+                self.enter(self.resume, t)
+            elif elapsed > self.recentre_timeout():
+                # Giving up on the drive home is not a reason to throw away
+                # the rest of the staircase: the hard radius guard is still
+                # there, and a cell measured 10 m from the spawn is just as
+                # valid as one measured on top of it.
+                self.get_logger().warning(
+                    f'  recentre gave up at {self.dist_home():.1f} m after '
+                    f'{elapsed:.0f} s; carrying on from here')
+                self.enter(self.resume, t)
 
     def enter(self, phase, t):
         self.phase = phase
         self.t_phase = t
 
+    def recentre_timeout(self):
+        """Generous: a circle back from the far edge at the home speed."""
+        return 4.0 * self.max_radius_m / max(self.home_speed, 1.0)
+
+    def enter_or_recentre(self, phase, t):
+        """Start the next cell, or drive home first if we have drifted.
+
+        Only ever called between cells, never inside a settle or a hold: an
+        interrupted hold is a measurement thrown away, and the point of the
+        recentre is that it never has to interrupt one. A whole cell is at
+        most (settle + hold) x speed of travel, and every cell but the
+        shallowest is an arc tight enough to come back on itself, so the drift
+        accumulates between cells, which is exactly where this fires.
+        """
+        if self.dist_home() > self.recentre_r_m and not self.recentred:
+            self.recentred = True
+            self.resume = phase
+            self.get_logger().info(
+                f'  {self.dist_home():.1f} m from the spawn: driving home '
+                f'before the next cell')
+            self.enter('recentre', t)
+        else:
+            self.enter(phase, t)
+
     def advance(self, t):
         """Next cell: up the staircase, or on to the next speed."""
+        self.recentred = False
         self.sign = -self.sign
         self.istep += 1
         while (self.istep < len(self.steers)
@@ -271,9 +398,9 @@ class SysIdRun(Node):
             if self.iv >= len(self.speeds):
                 self.finish()
                 return
-            self.enter('spinup', t)
+            self.enter_or_recentre('spinup', t)
         else:
-            self.enter('settle', t)
+            self.enter_or_recentre('settle', t)
 
     def record(self):
         if len(self.samples) < 8:
