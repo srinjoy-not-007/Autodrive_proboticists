@@ -43,8 +43,23 @@ docker run --name autodrive_roboracer_api --rm \
 
 Start the official Porto simulator separately, use autonomous mode and Ultra
 graphics, then press Connection. The bridge, localization and MPC start
-automatically and wait for sensor data. Do not override the image command with
-an interactive shell. Opening an additional shell is safe:
+automatically and wait for sensor data.
+
+The organisers' documented procedure
+([official repo, "Competition Execution"](https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Sim-Racing#competition-execution))
+runs the team image with `--entrypoint /bin/bash -it`, which lands in a shell
+and starts nothing. If run that way, start the stack from that shell exactly
+as the rules require, from the entrypoint script and nothing else:
+
+```bash
+docker run --name autodrive_roboracer_api --rm -it --entrypoint /bin/bash \
+  --network=host --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY \
+  --privileged --gpus all YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
+# inside the container:
+/home/autodrive_devkit.sh
+```
+
+Both paths run the same script. Opening an additional shell is safe:
 
 ```bash
 docker exec -it autodrive_roboracer_api bash
