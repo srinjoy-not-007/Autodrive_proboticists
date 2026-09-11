@@ -232,6 +232,16 @@ def main():
                     help='cap d(ay)/dt in m/s3. Off by default. The shipping '
                          'ay-3.0 profile peaks at 21 m/s3 and runs clean, so '
                          'that is the level known to be survivable.')
+    ap.add_argument('--ay-tight', type=float, default=None,
+                    help='lower ay cap applied where |kappa| exceeds '
+                         '--kappa-tight. Every collision at ay 5.5 on Porto '
+                         'was at the hairpin exit (kappa 0.7-1.0), where the '
+                         'steering angle is large and the front tyres deliver '
+                         'less curvature than the bicycle model promises; the '
+                         'faster corners ran clean. Off by default.')
+    ap.add_argument('--kappa-tight', type=float, default=0.6,
+                    help='1/m; the ay cap ramps from --ay at this curvature '
+                         'to --ay-tight at 1.5x it')
     ap.add_argument('--turn-in', type=float, default=0.0,
                     metavar='M',
                     help='look this many metres ahead when applying the ay '
@@ -353,6 +363,18 @@ def main():
     vx_cl = np.append(vx, vx[0])
     ax_prof = tph.calc_ax_profile.calc_ax_profile(
         vx_profile=vx_cl, el_lengths=el_lengths, eq_length_output=False)
+
+    if args.ay_tight is not None and args.ay_tight < args.ay:
+        k = np.abs(kappa_cap)
+        k0, k1 = args.kappa_tight, 1.5 * args.kappa_tight
+        frac = np.clip((k - k0) / max(k1 - k0, 1e-6), 0.0, 1.0)
+        ay_pt = args.ay + (args.ay_tight - args.ay) * frac
+        v_cap = np.sqrt(ay_pt / np.maximum(k, 1e-6))
+        n_cut = int(np.sum(v_cap < vx - 1e-6))
+        vx = limit_long_accel(np.minimum(vx, v_cap), el_lengths, args.ax,
+                              args.brake)
+        print(f'tight-corner cap ay {args.ay_tight:.1f} above kappa '
+              f'{k0:.2f}: speed limited at {n_cut} of {len(vx)} points')
 
     if args.map_prefix:
         cap, clear = clearance_speed_cap(raceline, kappa, args.map_prefix,
