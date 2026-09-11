@@ -145,6 +145,12 @@ ay_limit 7.8, pose_blend 1.0: 100 laps, 0 collisions, first ten 79.68 s
 (sim timer 79.10), median 7.951.** Best validated config so far. Launch:
 `MAP=porto_mesh LIDAR_OFFSET=0.1933 ./scripts/run_exp.sh <name> safe_ay6.0 -p cmd_delay_s:=0.18 -p ay_limit:=7.8 -p pose_blend:=1.0`
 
+INVALID runs (host load average 49/32 cores from an offline search running
+concurrently): ay625_pb1 (1 collision, 78.26 s) and ay65_pb1_100 (10
+collisions in 32 laps, 5 of them at s 17.6 which never collided before).
+Re-run both once the host is quiet. Rule: never drive a scored run while
+anything else heavy runs on the host; check `uptime` first.
+
 Ready to test next, in order:
 1. `--ay-tight 5.0` lines (`track_v2_safe_ay6.0t/6.5t/7.0t.csv` exist):
    keep the hairpins at ay 5 and let the rest run at 6-7. Ideal laps 7.9 /
