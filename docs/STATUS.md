@@ -52,6 +52,13 @@ night): w_veh 0.42 ay 7.0 -> 10 collisions in 3 laps; 0.36 ay 6.5 -> 11 in
 0.206 m clearance. The wide line needs a tracker with ~0.08 m p95 first
 (mpc3, in development).
 
+CAUTION: a 150-lap re-run of the promoted config while three build agents
+were computing (niced, single-threaded, but with bag exports inside the
+devkit container) took **9 collisions** (s 14.8/17.6/12.6, IMU jitter 4x
+normal) against 0/100 on the idle host. Treat as contaminated, but re-validate
+the promoted config on an idle host before submission; its true rate may be
+1-3%/lap rather than 0.
+
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
 
