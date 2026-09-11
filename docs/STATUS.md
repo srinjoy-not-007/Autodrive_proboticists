@@ -33,8 +33,10 @@ unseen track: build the mesh map from the compete image with
 Throttle over-command (`throttle_a_gain`, throttle per m/s2 of planned
 acceleration; the servo only pulls hard when the target is above the current
 speed) on the promoted config, 32 laps each: 0.02 -> 78.80 s (median 7.89),
-0.04 -> **78.68 s** (median 7.88), both 0 collisions. 100-lap validation of
-0.04 pending before it becomes the default.
+0.04 -> 78.68 s (median 7.88), both 0 collisions over 32 laps -- but 0.04
+over 100 laps: 8+ collisions (s 13.6 and 17.6): arriving at corners at plan
+speed removes the margin the under-plan car had. NOT promoted. 0.02 100-lap
+run pending. Lesson: 32 laps cannot resolve a 1-3% per-lap collision rate.
 
 Qualification deadline is Sept 12 AoE: the qualification image is `main`
 (untouched); only the DockerHub push and the Phase 1 form remain.
