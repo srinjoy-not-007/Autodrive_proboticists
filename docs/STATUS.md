@@ -116,13 +116,26 @@ median 7.10**: it converged within two laps (bin mean |e| 0.119 -> 0.053 m).
 Both together with the prior (ilc_store:=/home/data/ilc/run_prior) at a
 0.090 s instance -> 32 laps, **1 collision** (lap 16, at s ~1.2 just after
 the start line, cte 0.04 -> 0.28 m in six samples; cause under offline
-analysis), median 7.17, OFFICIAL 71.48 s. **100 laps of the same: 7 collisions,
-ALL at s 0.0-1.6 m, just past the start line** (laps 50, 85 x3, 90, 98,
-100; laps 1-49 clean; the period drifted 0.092 -> 0.110 s after lap 50
-because an offline search loaded the host). Not the hairpin: the ILC
-table's behaviour at the lap wrap / per-lap update is the suspect, under
-offline analysis. ILC is NOT promotable until this is explained. ILC alone
-(0/32) remains the cleanest short fast-rate run; n is small.
+analysis), median 7.17, OFFICIAL 71.48 s. **100 laps of the same: 7 collisions**,
+spread around the lap (s 0.7, 4.4, 5.1, 7.9, 14.5, 18.1, 18.3; an
+earlier "all at s 0-1.6" reading was wrong: the logger writes one
+already-teleported row BEFORE collision_count increments, so the
+pre-impact sample is row c-2). The clustering is temporal: laps 0-79 at
+0.092-0.096 s took 2, laps 80-100 at 0.108 s (host loaded by an offline
+search) took 5 with |e| p95 0.18 -> 0.27: **a table learned at one period
+goes stale when the period moves**. Offline diagnosis of the 32-lap
+collision: localization innocent (lateral est-truth |p95| 0.034 m), no
+steering saturation (peak 0.37 rad); the ILC table at s 23-25.5 had
+ratcheted to the +0.071 1/m clamp (a sign reversal against the prior's
+-0.071), removing 10-21% of turn-in and pushing the car +0.27 m wide by
+the start line (DC gain measured 1.8 m per 1/m). The run_prior file had
+270 laps across three periods baked in. ILC removes only 30-37% of the
+hairpin offset (only ~30% of the offset variance is lap-repeatable; the
+binding clamp is 2*shift_max/shift_len^2 = 0.071, and lifting it costs
+0.08-0.13 s/lap). **Decision: ILC stays opt-in, not shipped** -- the
+organisers' period is unknown and may drift (OBS recording), and the
+cr_dk0.8 + rate_adaptive config is clean without it. If ever re-tested:
+always start from a fresh copy of the pristine prior.
 
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the

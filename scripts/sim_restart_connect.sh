@@ -104,6 +104,16 @@ else
     HAMB_X=$((OX + 51)); HAMB_Y=$((OY + 64))
     CONN_X=$((OX + 51)); CONN_Y=$((OY + 302))
 fi
+# MANUAL_CONNECT=1: a human clicks Connection (and sets graphics quality),
+# exactly as the organisers do. Wait for data instead of clicking.
+if [ "${MANUAL_CONNECT:-0}" = "1" ]; then
+    echo "MANUAL_CONNECT=1: waiting up to ${MANUAL_WAIT_S:-300} s for a human to click Connection on ${DISP}..."
+    for i in $(seq 1 $(( ${MANUAL_WAIT_S:-300} / 5 ))); do
+        if connected; then echo "CONNECTED (IPS data flowing)"; exit 0; fi
+        sleep 2
+    done
+    echo "ERROR: nobody connected within ${MANUAL_WAIT_S:-300} s."; exit 1
+fi
 echo "Clicking Connection on ${DISP} (window $WID)..."
 for attempt in 1 2 3; do
     # The sidebar may be open or collapsed and there is no way to ask which.
