@@ -204,6 +204,11 @@ the label crop): period still 0.058 s** -- graphics quality does not set
 the rate on this host, the GPU/display does; 9 laps / 10 collisions,
 same hairpin. Four display runs of the shipping config have now failed
 identically; no further display runs until the plant mapping exists.
+Direct measurement at 0.058 s: steering staircase on the -explore floor
+run on the real display (data/logs/sysid_20260912_064145.csv, 2889 rows
+with /steering feedback and IMU yaw rate): 2.0 m/s peak ay 4.61 at 0.40
+rad, 3.0 m/s 6.63 at 0.25, 4.0 m/s 9.35 at 0.20 (tyre peaks as before);
+being fitted for dead time / slew per tick vs per second.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
