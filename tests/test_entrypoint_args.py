@@ -168,6 +168,38 @@ class TestTheBuiltInArgArraysComeBeforeTheEnvironment:
         assert '"${%s[@]}"' % built_in in body, (func, built_in)
         assert body.index('${%s[@]}' % built_in) < body.index('${%s[@]}' % extra)
 
+    def test_the_controller_override_wins_over_the_built_in(self):
+        """`CTRL_ARGS` carries the parameters the finals ship decision turns on
+        (`rate_adaptive`, the smoothing pair, and the prepared
+        `barrier_margin`).  A last-minute `-e PIT_CREW_CONTROLLER_ARGS=...` on
+        the organisers' box has to be able to change any of them, and ROS takes
+        the LAST `-p name:=value` for a repeated name -- so the environment's
+        copy must be emitted after the built-in one."""
+        src = source()
+        script = '\n'.join([
+            'setsid() { "$@"; }',
+            'ros2() { for a in "$@"; do printf "%s\\n" "$a"; done; }',
+            'LINE=/l.csv; SCALE=1.00; CONTROLLER=mpc3',
+            'CTRL_ARGS=(-p map_prefix:=/m -p rate_adaptive:=true'
+            ' -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p barrier_margin:=0.34)',
+        ] + re.findall(
+            r'^if \[\[ -n "\$\{PIT_CREW_CONTROLLER_ARGS.*?^fi$',
+            src, re.M | re.S) + [lift('start_ctrl', src), 'start_ctrl', 'wait'])
+        out = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True, check=True,
+            env={**os.environ,
+                 'PIT_CREW_CONTROLLER_ARGS':
+                     '-p barrier_margin:=0.30 -p steer_tau:=0.04'})
+        argv = out.stdout.split('\n')[:-1]
+        assert argv[-4:] == ['-p', 'barrier_margin:=0.30',
+                             '-p', 'steer_tau:=0.04']
+        # both copies are present, the environment's last
+        assert argv.index('barrier_margin:=0.34') \
+            < argv.index('barrier_margin:=0.30')
+        # ...and the built-ins that are NOT overridden survive untouched
+        for kept in ('rate_adaptive:=true', 'w_dcmd:=50.0', 'cmd_tau:=0.10'):
+            assert kept in argv, kept
+
     def test_the_localization_override_wins_over_the_built_in(self):
         """Both arrays populated: the environment's copy is last, and ROS takes
         the last `-p name:=value` for a repeated name."""
@@ -187,6 +219,41 @@ class TestTheBuiltInArgArraysComeBeforeTheEnvironment:
         argv = out.stdout.split('\n')[:-1]
         assert argv[-4:] == ['-p', 'max_step_mps:=9.0',
                              '-p', 'max_step_mps:=7.0']
+
+
+class TestThePreparedFinalsLines:
+    """The prepared-but-commented finals knobs must stay reachable.
+
+    Each is one uncommented line away from shipping, and the runbook's
+    checklist points at it by name.  This asserts the line is still THERE and
+    still spells the parameter correctly -- it deliberately does NOT assert it
+    is commented out, because enabling it is the expected outcome of Gate D.
+    """
+
+    @pytest.mark.parametrize('param,value', [
+        ('barrier_margin', '0.34'),
+        ('max_step_mps', '9.0'),
+        ('gap_dt', '0.15'),
+        ('teleport_scan_jump', '0.35'),
+    ])
+    def test_the_prepared_line_is_present(self, param, value):
+        src = source()
+        assert '%s:=%s' % (param, value) in src, param
+
+    @pytest.mark.parametrize('param', ['barrier_margin', 'w_dcmd', 'cmd_tau',
+                                       'rate_adaptive', 'steer_tau',
+                                       'gap_predict_s', 'max_step_mps',
+                                       'publish_on_reloc', 'gap_noise_mult',
+                                       'teleport_scan_jump'])
+    def test_every_parameter_named_in_the_script_exists_in_the_node(self, param):
+        """A prepared line that names a parameter the node does not declare is
+        a container that exits on launch, found on the finals day."""
+        node = ('localization' if param in (
+            'max_step_mps', 'publish_on_reloc', 'gap_dt', 'gap_noise_mult',
+            'teleport_scan_jump') else 'mpc3')
+        path = os.path.join(REPO, 'src', 'pit_crew', node + '.py')
+        with open(path) as fh:
+            assert "'%s'" % param in fh.read(), (param, node)
 
 
 class TestTheLineDefaultFollowsTheMap:

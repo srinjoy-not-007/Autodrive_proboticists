@@ -138,8 +138,8 @@ all. Nothing else is read.
 | `PIT_CREW_CONTROLLER` | `mpc3` | `mpc3` or `mpc` only; anything else exits 2 (use `PIT_CREW_MODE=reactive` for Follow-the-Gap). `mpc3`/`mpc2` are passed `-p map_prefix:=` for the corridor barrier; the legacy `mpc` does not declare it. `mpc` defaults to the centerline — **never pair `mpc` with the wide min-curvature line.** |
 | `PIT_CREW_SPEED_SCALE` | `1.00` | Multiplier on the line's speed profile; preflight requires finite and in (0, 1.5]. |
 | `PIT_CREW_MODE` | `raceline` | `raceline` = localization + controller. `reactive` = map-free Follow-the-Gap only (no map, line, centerline or preflight). Any other value exits 2. |
-| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--the-two-prepared-fixes-and-the-knobs-that-stay-off) for what is already on (`rate_adaptive`), what is prepared but not enabled, and what stays off (ILC). Appended **after** the script's own `CTRL_ARGS`, so an override here wins. |
-| `PIT_CREW_LOCALIZATION_ARGS` | *(empty)* | Same, for the localization node. Appended **after** the script's own `LOC_ARGS`, so an override here wins (ROS takes the last `-p name:=value` for a repeated name). |
+| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--what-ships-what-is-opt-in-and-what-stays-off) for what is already on (`rate_adaptive`, `w_dcmd`, `cmd_tau`), what is prepared but not enabled (`barrier_margin`), what is opt-in (`steer_tau`, `gap_predict_s`, the teleport and telemetry-gap sets) and what stays off (ILC, `nd_mode`, the spatial lead, `apply_floor_steps`). Appended **after** the script's own `CTRL_ARGS`, so an override here wins. |
+| `PIT_CREW_LOCALIZATION_ARGS` | *(empty)* | Same, for the localization node. Appended **after** the script's own `LOC_ARGS` (which ships `max_step_mps:=9.0 publish_on_reloc:=false`), so an override here wins (ROS takes the last `-p name:=value` for a repeated name). |
 | `PIT_CREW_FTG_PARAMS` | `…/src/pit_crew/config/ftg_mapping.yaml` | Parameter file for the reactive stack (`PIT_CREW_MODE=reactive`, and the supervisor's last-resort fallback). The default is the **mapping** profile, `v_max` 1.0 m/s: deliberately slow, and the only profile carrying the stuck/escape keys that unwedge an unattended car. `…/config/ftg.yaml` is the faster racing profile (`v_max` 1.5) with no escape behaviour. Which is right depends on how tight the finals circuit is — Follow-the-Gap took 24 collisions in 194 s on SRL 2025 ICRA, which is a DQ. |
 
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` are pinned to 1
@@ -217,6 +217,11 @@ The script runs `xhost local:root` first, sets Ultra, and checks that a second
   [5A](../docs/FINALS_RUNBOOK.md#5a--the-logger-period-gate-mandatory-on-every-scored-run)
   gate. The controller's behaviour depends on the sensor rate, so a run at the
   wrong rate proves nothing either way.
+- `test_submission_image.sh` races the image on **Xvfb** (~0.09-0.11 s). The
+  organisers run a real display, which on this host is ~0.058 s and is where
+  four earlier configurations collided. A clean image test is not a substitute
+  for the runbook's real-display gate (`VISIBLE=1 ... ./scripts/run_exp.sh`);
+  run both.
 - Test stale sensor inputs, child-process failure (kill a worker, confirm only
   it restarts) and orderly shutdown (`docker stop --time 10`, actuators zeroed).
 - Preserve the validated image digest before any performance experiments, and

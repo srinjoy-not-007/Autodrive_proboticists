@@ -61,6 +61,17 @@ COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
 #
 # (each continued with a trailing backslash, like the lines below)
 #
+# NAMES MATTER MORE THAN CONTENT HERE. The entrypoint derives
+# `<slug>_race.csv` (mpc3) and `<slug>_safe.csv` (legacy mpc) from
+# PIT_CREW_MAP, so a line generated with `make_track_lines.py --out-name` --
+# anything shaped like `<slug>_fast_race.csv`, `<slug>_mesh_fast_uni.csv` or
+# `<slug>_mesh_fast2_*.csv` -- is a file the image cannot find by default, even
+# once it is COPYed. Generate the SHIPPING line with the drill's DEFAULT naming
+# (no `--out-name`, so it lands on `<slug>_race.csv`), or copy the validated
+# candidate onto the derived name before the build. `_raceline.csv`, `_raceline_REJECTED.csv`, the
+# per-`w_veh` candidates and the `_skeleton`/`_anchored` intermediates the
+# drill leaves behind are never shipped.
+#
 # The centerline is NOT optional and NOT a diagnostic: localization seeds its
 # whole particle cloud at centerline[0] and resamples along it on every
 # collision recovery. `tests/test_submission_assets.py` fails on the host, in

@@ -18,29 +18,36 @@ timer**, add **+10 s per collision**, and **more than 10 collisions is a DQ**.
 
 1. **The sensor period, not the lap time.** The whole stack sees the world at
    whatever period the bridge delivers, and `mpc3` is rate-sensitive. Measured
-   on this host: Xvfb 0.088-0.106 s (a per-start lottery), Xvfb at Ultra
-   0.102-0.105 s, and **a real display at Ultra 0.058 s** — where the shipping
-   tracker took **10 collisions in 23 laps**. The organisers measured ~0.097 s
-   on an RTX 4090. **Every Xvfb lap time we have was measured at a period the
-   organisers may not have.** The stack has to be clean from ~0.055 to ~0.11 s,
-   and every run is evidence only together with its `dt_p50` (step 5A).
-2. **The localization speed cap on a long straight.** The motion model's
-   `max_step_m` 0.6 m per update is a 5.77 m/s cap. A circuit with a stretch
-   longer than ~12 m above that makes the estimate fall metres behind: SRL 2025
-   ICRA gave **4 laps, 14 collisions — a DQ**, with cross-track reading 0.03 m
-   at the moment of impact. **Measure the finals track's longest fast stretch
-   in step 3a before anything else.**
+   on this host: **Xvfb 0.088-0.106 s** (a per-start lottery; Ultra on Xvfb
+   0.102-0.105) and **a real display at Ultra 0.058 s** — graphics quality does
+   not move the display number, the GPU/display does. The organisers measured
+   ~0.097 s on an RTX 4090, **and we do not know what their box will actually
+   deliver.** Four real-display runs of earlier shipping configs failed
+   identically (10-11 collisions, always the same hairpin entry). As of Sept 12
+   the stack is validated clean at **both** ends of the band — 0.058 s on the
+   display and 0.09-0.10 s on Xvfb — **only with `barrier_margin 0.34`**
+   (Xvfb regression on all four tracks running at the time of writing). Every
+   run is evidence only together with its `dt_p50` (step 5A), and a run at one
+   period says nothing about the other.
+2. **The line, on a circuit tighter than Porto.** The drill's absolute kappa
+   gate (`MESH_RACE_KAPPA_MAX` 1.0) rejects every width-using candidate on a
+   track whose own centerline is tighter than 1.0 1/m — both 2025 circuits —
+   and silently ships the centerline. The relative gate (`--kappa-gate safe`)
+   plus the curvature-rate and half-width flags is what produces a fast line
+   there, and the fast line is worth 0.7-1.2 s/lap. It also spends clearance,
+   which is what `barrier_margin 0.34` needs. Step 3a has the rule.
 3. **Assets that never made it into the image.** Three files must describe one
    circuit and all three must be `COPY`ed. `tests/test_submission_assets.py`
    checks this on the host, in under a second, from the entrypoint's own shell.
 
-Both of the first two have an opt-in fix already committed and **prepared but
-not enabled** in `submission/autodrive_devkit.sh` — each is a single commented
-line, at the place the comment marks. See step 5D. Enabling either is a
-deliberate act with its own validation run behind it.
+Everything that ships is in `submission/autodrive_devkit.sh` as a default; a few
+validated-but-unshipped options are listed in step 5D and are turned on for one
+run with `PIT_CREW_CONTROLLER_ARGS` / `PIT_CREW_LOCALIZATION_ARGS`, which are
+appended **after** the script's own arrays and therefore win (ROS takes the last
+`-p name:=value`; `tests/test_entrypoint_args.py` asserts that for both nodes).
 
-Total wall clock for a clean pass: **~4-6 h**, dominated by the 100-lap
-validation runs. Budget one full day.
+Total wall clock for a clean pass: **~5-7 h**, dominated by the 100-lap Xvfb
+validation and the display runs. Budget one full day.
 
 ---
 
@@ -49,68 +56,129 @@ validation runs. Budget one full day.
 Work top to bottom. Each line is either a command or a gate; do not pass a gate
 on a run whose `dt_p50` you have not read.
 
-### Sep 16 — track release (~1 h)
+### What is already in the image (change nothing to get these)
+
+| Where | Parameters | Why |
+|---|---|---|
+| `CTRL_ARGS`, mpc3 branch | `map_prefix`, `rate_adaptive:=true` | Scales `apply_ahead_s` with the measured period. 100 Xvfb laps clean at 0.091-0.098 s; 7 collisions/32 → 2 at a 0.090 s instance. |
+| `CTRL_ARGS`, mpc3 branch | `w_dcmd:=50.0 cmd_tau:=0.10` | Damps the solver's steering limit cycle. Display 0.058 s: flips 5.5 → 2.4/s, command step p90 0.14 → 0.041 rad. Costs ~0.9 s of Xvfb race time and ~0.5 s/lap on a tight circuit — robustness at an unknown period outranks both. |
+| `LOC_ARGS` | `max_step_mps:=9.0 publish_on_reloc:=false` | The motion model's 0.6 m/update was a 5.77 m/s cap: SRL 2025 ICRA went 4 laps / 14 collisions (a DQ) with cross-track reading 0.03 m. With the fix, 32 laps / 0 collisions / 148.8 s; Porto and ICRA-2026 unchanged. |
+| Everywhere | `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1` | mpc3's numpy otherwise runs at 1030 % CPU and starves the simulator, which changes the period. Do not remove. |
+
+**Expected to ship, decided on Sep 16-17:** `barrier_margin:=0.34` (step 5D).
+It is the only configuration that has ever produced a clean real-display run
+(32 laps, 0 collisions, OFFICIAL **69.44 s** at 0.059 s). It is prepared as a
+commented line in `CTRL_ARGS` and must be enabled deliberately, after its Xvfb
+four-track regression is read.
+
+### Sep 16 — track release (~1.5 h)
 
 ```bash
 cd /home/ankit/code/data/simracing
 git status && git checkout -b finals        # never on the promoted commit
-uptime                                       # quiet host; no other container
-TAG=<announced tag>                          # pattern: 2026-<venue>-compete
+git add -A tools/ && git commit -m "..."    # the tight-circuit line flags are
+                                            # UNCOMMITTED as of Sept 12; commit
+                                            # them (and run check_pipeline.sh)
+                                            # before the drill, or step 3a's
+                                            # flags do not exist
+./scripts/check_pipeline.sh                 # required for any tools/ change
+uptime                                      # quiet host; no other container
+TAG=<announced tag>                         # pattern: 2026-<venue>-compete
 docker pull autodriveecosystem/autodrive_roboracer_sim:$TAG
 docker pull autodriveecosystem/autodrive_roboracer_api:$TAG
 .venv/bin/python tools/map_from_mesh.py --tag $TAG --list
 ./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
 ```
 
-**Gate A — the drill's own output** (step 3a explains each):
-free fraction 15-70 %, `source: mesh`, `lidar_offset 0.1933`, a `race` and a
-`safe` line both reported by `footprint_analysis.py`. If every raceline
-candidate is `REJECTED` on kappa, the circuit is tight: re-run with the
-tight-circuit flags before settling for the centerline —
+**Gate A — the drill's own output** (step 3a explains each): free fraction
+15-70 %, `source: mesh`, `lidar_offset 0.1933`, and a `race` and a `safe` line
+both reported by `footprint_analysis.py`.
 
-```bash
-LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate safe' \
-  ./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
-```
+**The line-choice rule.** Read the `3/4` block first:
 
-**Gate B — the long-straight check (decides whether fix 2 ships):**
+* If at least one `raceline` candidate passed, `race.csv` is that line. Keep it.
+* If **every** `raceline` candidate is `REJECTED: kappa max K above the 1.0`,
+  the circuit is tighter than Porto and the absolute gate is the wrong bar.
+  Re-run the drill with the relative gate — a raceline may not ask for more
+  curvature than the steering lock (1.78 1/m) or than the fallback line already
+  demands, whichever is larger:
+
+  ```bash
+  LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
+             --kappa-gate safe --min-halfwidth 0.48' \
+    ./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
+  ```
+
+  All five flags are off by default and the drill's output without `LINE_ARGS`
+  is byte-identical to what it has always produced. The drill does not pass
+  `--out-name`, so the outputs keep the slug and **`finals_mesh_race.csv` is
+  then the fast line** — exactly the name the entrypoint derives. Never generate the shipping
+  line with `--out-name`: a `finals_fast_race.csv` is not a name the image can
+  find.
+* `--min-halfwidth 0.48` is the one to think about. The fast lines' failure mode
+  is a single pinch (measured 0.427 m at cdctf2025 s 40.8, 0.432 m at icra2025
+  s 42.5), and `barrier_margin 0.34` needs 0.135 + 0.34 = **0.475 m** of
+  half-width or the barrier is infeasible and just biases the car to the
+  centre. So: shipping the barrier and the fast line together requires the
+  floor. The flag is new and **has no live run behind it** — if the drill
+  reports it cost clearance or made the line jagged, drop it and ship `safe`
+  with the barrier rather than a fast line the barrier cannot use.
+* Offline ranking measured on the three non-Porto circuits (432 harness laps per
+  config): **ICRA 2026 → `safe`** (race == safe there), **ICRA 2025 → fast**
+  (-0.7..-1.2 s/lap, 0/288), **CDC-TF → fast is a close call** (-1.1 s/lap but
+  2/288 at its 0.40 m pinch). Driven once on CDC-TF: 32 laps, 1 collision,
+  OFFICIAL 101.9 s against `safe`'s 111.1 s — expected value favours the fast
+  line, but a single collision is +10 s and eleven are a DQ. **The drill still
+  picks `safe` automatically; racing the fast line is a decision, taken on
+  Gate C and Gate D, not on the ideal lap time.**
+
+**Gate B — does the finals track outrun the localization speed cap?** The
+shipped cap is `max_step_mps` 9.0 (it was 5.77, and that was a DQ). Check the
+profile the drill just wrote:
 
 ```bash
 .venv/bin/python - <<'PY'
 import numpy as np
 a = np.loadtxt('data/racelines/finals_mesh_safe.csv', delimiter=',')
 s, v = a[:, 0], a[:, 5]
-fast = v > 5.8                      # the motion model's 5.77 m/s cap
-runs, n = [], len(s)
-i = 0
-while i < n:
-    if fast[i]:
-        j = i
-        while j < n and fast[j]:
-            j += 1
-        runs.append(s[min(j, n - 1)] - s[i]); i = j
-    else:
-        i += 1
-print('longest stretch above 5.8 m/s: %.1f m' % (max(runs) if runs else 0.0))
-print('(this snippet, on the shipped safe lines: Porto 4.7, ICRA-2026 10.0,'
-      ' CDC-TF 11.6 -- all driven clean; SRL 2025 ICRA 13.8 -- 14 collisions'
-      ' in 4 laps, a DQ, without the fix)')
+print('profile v_max %.2f m/s' % v.max())
+for cap in (5.8, 8.5):
+    fast, runs, n, i = v > cap, [], len(s), 0
+    while i < n:
+        if fast[i]:
+            j = i
+            while j < n and fast[j]:
+                j += 1
+            runs.append(s[min(j, n - 1)] - s[i]); i = j
+        else:
+            i += 1
+    print('longest stretch above %.1f m/s: %.1f m' % (cap, max(runs) if runs else 0.0))
+print('(above 5.8 m/s, the OLD cap, on the shipped safe lines: Porto 4.7,')
+print(' ICRA-2026 10.0, CDC-TF 11.6 -- clean; SRL 2025 ICRA 13.8 -- 14')
+print(' collisions in 4 laps, a DQ, before max_step_mps 9.0 shipped.)')
 PY
 ```
 
-Anything above ~12 m means **enable `LOC_ARGS` fix 2** (step 5D) and validate
-with it on.
+Anything above ~12 m over **8.5** m/s means raise the cap for this track:
+`-e PIT_CREW_LOCALIZATION_ARGS="-p max_step_mps:=12.0"`, and validate with it
+on. Under that, the shipped default covers it and there is nothing to do — and
+in practice it will, because `optimize_raceline.py`'s `--vmax` is 8.0 m/s and
+the drill never overrides it, so no generated profile asks for more than 8. The
+check is here for the case where someone raises `--vmax`, or where a very fast
+circuit makes the planner sit at the ceiling for a long stretch.
 
-### Sep 17 — validation runs (~4 h, quiet host, nothing else running)
+### Sep 17 — validation runs (~4-5 h, quiet host, nothing else running)
+
+Probes first, on Xvfb, to find out which line is even a candidate:
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_race_probe race            # skip if kappa-gated
+  ./scripts/run_exp.sh finals_race_probe race
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_safe_probe safe
 ```
 
-Read every probe with its period before reading its collisions:
+Read every probe with its period **before** reading its collisions:
 
 ```bash
 .venv/bin/python tools/lap_report.py data/logs/race_<ts>.csv \
@@ -118,48 +186,84 @@ Read every probe with its period before reading its collisions:
 .venv/bin/python tools/score_race.py data/logs/race_<ts>.csv
 ```
 
-Then the runs that actually decide it:
+Then the runs that decide it. **Both periods, in this order** — a config is not
+shipped until it is clean at both:
 
 ```bash
-# 100 laps at the ORGANISERS' period, not at whatever the lottery gave you
+# --- Gate C: 100 laps on Xvfb at the ORGANISERS' period, not at whatever the
+#     per-start lottery gave you.
 ./scripts/sim_rate_calibrate.sh 0.097
 SIM_CPUSET=<chosen> RATE_MIN_DT=0.094 RATE_MAX_DT=0.100 SIM_QUALITY=ultra \
   CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
-  ./scripts/run_exp.sh finals_100 <race|safe>
-# the rate-proven fallback, run it too
+  ./scripts/run_exp.sh finals_100 <race|safe> -p barrier_margin:=0.34
+
+# --- Gate D: the real display, self-clicked, ~0.058 s. VISIBLE=1 puts the
+#     simulator on this host's own display and steals the pointer; the click
+#     geometry is located from a screenshot (tools/find_sim_ui.py), so no human
+#     is needed. Do not touch the machine while it runs.
+VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh \
+  LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh finals_display <race|safe> -p barrier_margin:=0.34
+
+# --- the rate-proven fallback, run it too
 SIM_QUALITY=ultra CONTROLLER=mpc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_legacy_probe safe
 ```
 
-**Gate C — pass = 0 collisions over 100 laps with `dt_p50` in band.** 32 laps
-is a probe, not a pass: it cannot resolve a 1-3 %/lap collision rate.
+**Gate C — pass = 0 collisions over 100 laps with `dt_p50` in 0.094-0.100 s.**
+32 laps is a probe, not a pass: it cannot resolve a 1-3 %/lap collision rate.
 
-**Gate D — the real display.** At least one run with the simulator windowed on
-the real display at Ultra and a human clicking Connection, because that is the
-organisers' setup and it is the only way to see a ~0.058 s period. If it is not
-clean there, the rate fix (5D, fix 1) is what has to make it clean — and the
-fix needs its own clean run before it ships.
+**Gate D — pass = 0 collisions over 32 laps with `dt_p50` ~0.058 s.** This is
+the organisers' own setup and it is the gate that four earlier configurations
+failed. If Gate D fails and Gate C passes, the problem is the corner the car
+drifts inside of: read `tools/crosstrack.py` and `tools/signed_offset.py` on the
+worst corner (step 4) and try `barrier_margin` before anything else — it is the
+one lever that moved that offset outward at both rates. Do not spend Sep 17
+inventing a new one.
+
+**Gate E (optional, ~30 min) — the stall test.** The organisers record the
+window with OBS on the same box. A three-frame telemetry gap puts the car on the
+coast watchdog, and in the harness a repeated 1.0 s gap is 35-40 collisions in
+36 laps. Inject the real thing into a live run from the host — nothing is killed
+or restarted, and the resume is in an EXIT trap:
+
+```bash
+# in a second terminal, while a Gate C style run is going:
+./scripts/stall_inject.sh --mode sim --dur 0.6 --every 15 --count 4 \
+    --log data/logs/stall_$(date +%H%M%S).csv
+```
+
+Run it once with the shipped defaults. If the car collides in the stall windows,
+the opt-in ride-out exists (step 5D) and can be turned on for one A/B without
+rebuilding anything. This gate is optional because nothing has driven it live
+yet; skip it rather than let it eat Gate C/D time.
 
 ### Sep 18 — bake, build, race the image (~2 h)
 
 ```bash
-# 1. edit the two places the drill printed (Dockerfile COPY list + MAP default)
-# 2. prove it on the host, in one second, BEFORE a 5-minute build:
+# 1. edit the two places the drill printed: the Dockerfile COPY list (the
+#    centerline AND the one line you validated) and the entrypoint MAP default.
+#    If the validated line is `safe`, either copy it to the derived name or set
+#    PIT_CREW_LINE -- see step 6.
+# 2. enable barrier_margin (and anything else Gate C/D needed) by uncommenting
+#    the ONE prepared line in CTRL_ARGS -- see step 5D.
+# 3. prove it on the host, in one second, BEFORE a 5-minute build:
 .venv/bin/python -m pytest -q tests
-# 3. build FROM the finals api image
+# 4. build FROM the finals api image
 docker build --platform linux/amd64 --build-arg TAG=$TAG \
   -f submission/Dockerfile -t YOUR_DOCKERHUB_USER/roboracer:iros2026-finals .
-# 4. race the image as shipped, both documented run paths
+# 5. race the image as shipped, both documented run paths
 ./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-finals 12 $TAG
 ENTRY_MODE=cmd ./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-finals 12 $TAG
 .venv/bin/python tools/lap_report.py data/logs/submission_<ts>.csv \
     data/racelines/finals_mesh_<line>.csv data/maps/finals_mesh
 ```
 
-**Gate E — 12 laps, 0 collisions, OFFICIAL race time at or below Gate C's, and
-`dt_p50` in band, on both entry modes.** The one image regression we have ever
-seen showed up as `dt_p50` 0.088 s against 0.104 s and nothing else. A 14-lap
-sample scatters ~1.5 s, so a small time difference is not a regression; a rate
+**Gate F — 12 laps, 0 collisions, OFFICIAL race time at or below Gate C's, and
+`dt_p50` in band, on both entry modes.** (`test_submission_image.sh` races on
+Xvfb, so its band is Xvfb's.) The one image regression we have ever seen showed
+up as `dt_p50` 0.088 s against 0.104 s and nothing else. A 14-lap sample
+scatters ~1.5 s, so a small time difference is not a regression; a rate
 difference is.
 
 ### Sep 19 — publish and submit (deadline AoE)
@@ -185,7 +289,6 @@ docker image inspect YOUR_DOCKERHUB_USER/roboracer:iros2026-finals \
 **Slipping the schedule:** if Sep 17 is not clean, spend Sep 18 on the decision
 table (5C) rather than on new tuning, and keep Sep 19 for publication only.
 Something imperfect that finishes 12 laps beats a DQ and beats no submission.
-
 ---
 
 ## Step 0 — Preconditions (5 min)
@@ -261,17 +364,40 @@ writing a `.pgm`. Go to the fallback in step 3b.
 
 Writes `data/maps/finals_mesh.{pgm,yaml}`, `data/maps/finals_mesh_checkpoints.csv`,
 and `data/racelines/finals_mesh_{centerline,safe,raceline,race}.csv`. Only the
-map pair, `_centerline.csv` and the one line you validate go into the image;
-the checkpoints CSV is a build artefact and nothing at runtime reads it.
+map pair, `_centerline.csv` and the one line you validate are needed at runtime.
+The checkpoints CSV is a host-side artefact and is **not** in the image (the map
+glob takes `.pgm` and `.yaml` only), which is why the prepared teleport line in
+5D sets `teleport_reseed:=false` — reseeding is the one branch that would need
+it, and it measured no better than holding.
 
 It then prints a footprint report for **both** `race` and `safe`, and the exact
 two edits (Dockerfile `COPY` list, entrypoint `MAP` default) for this slug.
 
-`LINE_ARGS` passes extra flags to `make_track_lines.py`; the tight-circuit set
-is `--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate safe`.
-All four are off by default, so without `LINE_ARGS` the output is byte-identical
+`LINE_ARGS` passes extra flags to `make_track_lines.py`; the tight-circuit set is
+
+```
+--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate safe
+--min-halfwidth 0.48
+```
+
+All five are off by default, so without `LINE_ARGS` the output is byte-identical
 to what the drill has always produced. Reach for them only when the 3/4 output
-shows every `raceline` candidate `REJECTED` on kappa.
+shows every `raceline` candidate `REJECTED` on kappa — and read the line-choice
+rule in the Sep 16 checklist before you do. Two things that matter more than
+they look:
+
+* **`--kappa-gate safe` is the relative gate**: max(steering lock 1.78 1/m, the
+  safe line's own curvature peak). The absolute 1.0 bar rejects width-using
+  candidates on any circuit whose centerline is itself tighter — cdctf2025
+  peaks at 2.10, icra2025 at 1.63 — i.e. it rejects the *easier* line while
+  shipping the harder one.
+* **`--min-halfwidth 0.48`** floors the distance from the line to either wall at
+  every stage of the QP. The fast lines' one weakness is a single pinch
+  (0.427 m and 0.432 m measured), and `barrier_margin 0.34` needs 0.475 m. The
+  flag is new and unproven live; if it costs clearance elsewhere, ship `safe`.
+* **Never pass `--out-name` for the shipping line.** The entrypoint derives
+  `<slug>_race.csv` from `PIT_CREW_MAP`; a line generated as
+  `finals_fast_race.csv` is a line the image cannot find by default.
 
 ### What each printed gate means
 
@@ -282,7 +408,7 @@ shows every `raceline` candidate `REJECTED` on kappa.
 | 2/4 `lidar_offset` | must print **0.1933** | This is what the entrypoint and the preflight will be checked against. |
 | 3/4 `clearance X.XXX m ideal lap Y.YY s` per candidate | per-candidate report | Informational unless followed by `REJECTED:`. |
 | 3/4 `REJECTED: clearance ... < 0.28 m budget` | `MESH_MIN_CLEARANCE` = 0.28 (0.230 collided on ICRA, 0.292 clean on Porto) | That candidate is too close to a wall for our lateral error. Normal — the sweep rejects several. |
-| 3/4 `REJECTED: kappa max K above the 1.0` | `MESH_RACE_KAPPA_MAX` = 1.0 | The width-using race line is tighter than anything mpc3 has held (Porto 0.83 clean over 100 laps; ICRA 1.36 → 9 collisions in 30 laps). **When this fires, the centerline ships** — that is the intended outcome, not a failure. |
+| 3/4 `REJECTED: kappa max K above the 1.0` | `MESH_RACE_KAPPA_MAX` = 1.0 | The width-using race line is tighter than anything mpc3 has held on Porto (0.83 clean over 100 laps; ICRA 1.36 → 9 collisions in 30 laps). If this fires on **every** candidate, the circuit is tighter than Porto and the absolute bar is wrong for it: re-run with `--kappa-gate safe` (above). If it still fires, the centerline ships — that is an outcome, not a failure. |
 | 3/4 `no solution (corridor exhausted)` | the QP ran out of corridor at that `w_veh` | A fact about the track, not an error. |
 | 3/4 `safe line is not drivable; shipping the opened-corner line instead` | graceful degrade | Accept it, but drive it before trusting it. |
 | 4/4 `footprint_analysis.py` on `finals_mesh_race.csv` | worst-corner body clearance | This is the number that decides step 5's first run. |
@@ -354,13 +480,15 @@ collisions. Any run taken under load is contaminated evidence; re-run it.
 **Every command in this step carries `SIM_QUALITY=ultra`.** It is a hook in
 `run_stanley.sh`: after the sim is connected it calls
 `scripts/sim_set_quality.sh ultra`, which clicks the simulator's quality button
-(the cycle Low -> High -> Ultra is verified). Omitting it validates at Low —
-about 11 Hz — which is the rate mpc3 collides at.
+(the cycle Low -> High -> Ultra is verified; on a real-display run `VISIBLE=1`
+points it at `$DISPLAY` instead of `:99`). The organisers run Ultra, and quality
+changes the Xvfb period by ~4 %. Omitting it validates at the wrong setting.
 
-Order of combos:
+Order of combos (the checklist's Gates C-F are these runs with their pass
+conditions attached):
 
-**5.1 — mpc3 on the race line, only if the pipeline produced one that passed
-the kappa 1.0 gate** (~15 min for 32 laps):
+**5.1 — mpc3 on the race line, only if step 3a promoted one** (~15 min for 32
+laps):
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
@@ -381,18 +509,33 @@ SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
   ./scripts/run_exp.sh finals_100 <race|safe>
 ```
 
-**5.4 — the rate-proven fallback, run it too** (~15 min). The legacy tracker on
-the centerline is slower but has been clean at both rates, so it is the thing
-you ship if mpc3 cannot be made clean at Ultra:
+**5.4 — the real display** (~15 min for 32 laps), which is where every
+configuration before Sept 12 failed. `VISIBLE=1` puts the simulator on this
+host's own display; the Connection click is located from a screenshot
+(`tools/find_sim_ui.py`) so no human is needed, but it steals the pointer —
+leave the machine alone. `MANUAL_CONNECT=1` is the fallback if the self-click
+ever misses (it waits `MANUAL_WAIT_S`, default 300 s, for a human).
+
+```bash
+VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh \
+  LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh finals_display <race|safe> -p barrier_margin:=0.34
+```
+
+**5.5 — the rate-proven fallback, run it too** (~15 min). The legacy tracker on
+the safe line is slower but has been clean at both Xvfb rates, so it is what you
+ship if mpc3 cannot be made clean:
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_legacy_probe safe
 ```
 
-**Pass = 0 collisions over 100 laps on a quiet host.** 32 laps is a probe, not
-a pass: it cannot resolve a 1-3 %/lap collision rate (measured — 0.04
-`throttle_a_gain` was 0/32 and 8+/100).
+**Pass = 0 collisions over 100 Xvfb laps at ~0.097 s (Gate C) AND 0 collisions
+over 32 real-display laps at ~0.058 s (Gate D), on a quiet host.** 32 laps is a
+probe on Xvfb, not a pass: it cannot resolve a 1-3 %/lap collision rate
+(measured — 0.04 `throttle_a_gain` was 0/32 and 8+/100). On the display, where
+the failures ran at 30-100 % of laps, 32 laps is a real test.
 
 ### 5A — The logger-period gate (mandatory on every scored run)
 
@@ -411,10 +554,10 @@ is a run something else started competing for the GPU part-way through.
 
 | `dt_p50` | Verdict |
 |---|---|
-| ~0.058 s | The organisers' own setup: simulator windowed on a REAL display at Ultra. Measured once here — 23 laps, **10 collisions**, all but one at the same corner. Below the 0.069 s floor where `apply_floor_steps` discards the rate adaptation. This is the rate fix 1 (5D) exists for; without it the run is a failure, not a data point. |
-| 0.102-0.106 s | The rate every clean mpc3 century was measured at. Valid evidence. |
-| ~0.097 s | The organisers' measured rate. The most valuable number to have, and the one nothing is yet proven at. |
-| 0.088-0.091 s | mpc3 collides here (3/10 laps, 11 collisions in 20 in the image run). **Discard the run as evidence about the finals** — but not as evidence about rate sensitivity. |
+| ~0.058 s | **The organisers' own setup** (simulator windowed on a REAL display at Ultra) and the hardest case. Four configurations failed here with 10-11 collisions; the only clean run is the shipping smoothing plus `barrier_margin 0.34` — 32 laps, 0 collisions, 69.44 s. This is Gate D and it is not optional. |
+| 0.088-0.106 s | Xvfb on this host, a per-start lottery; Ultra on Xvfb sits at 0.102-0.105. Valid evidence, and the band every 100-lap century was measured in — but evidence about **this** end of the range only. |
+| ~0.097 s | The organisers' measured rate on an RTX 4090. Aim Gate C here with `sim_rate_calibrate.sh` + `RATE_MIN_DT`/`RATE_MAX_DT`. |
+| < 0.052 s or > 0.156 s | Outside `rate_lo`/`rate_hi`: the rate adaptation is clamped and the 0.104 s tune applies unscaled. The clamp is logged. Nothing is validated there. |
 | Varies by more than ~0.005 s across the laps of one run | Something else ran on the host. Contaminated; re-run. |
 
 If a run lands off Ultra's expected 0.102-0.105 s, the first suspects are
@@ -503,90 +646,124 @@ Take the **first** row whose condition holds, from the top:
 
 | # | Ship | Condition to be allowed to ship it |
 |---|---|---|
-| 1 | **mpc3 on the race line** (`finals_mesh_race.csv`) | The pipeline produced a race line that passed the `MESH_RACE_KAPPA_MAX` 1.0 gate in step 3a, **and** a 100-lap run at `SIM_QUALITY=ultra` on a quiet host was **0 collisions** with `dt_p50` in band. Both, not either. |
-| 2 | **mpc3 on the safe line** (`finals_mesh_safe.csv`, never `_centerline.csv`) | The kappa gate rejected the race line, or the race line collided, and mpc3 on the safe line passed the same 100-lap Ultra gate. This is what ICRA-2026 ships (0/30 where the width-using line took 9 collisions in 30). |
-| 3 | **Legacy `mpc` on the centerline** (`PIT_CREW_CONTROLLER=mpc`) | Neither mpc3 configuration is clean at Ultra. Slower — 78.2-78.4 s on Porto against mpc3's ~73 s — but it is the **rate-proven** option: clean at 11 Hz (32 laps, 0 collisions) *and* at Ultra (32 laps, 0 collisions), where mpc3 at Ultra took 2 collisions in 100 laps. The entrypoint pairs `mpc` with the centerline automatically; **never pair `mpc` with the wide min-curvature line.** |
+| 1 | **mpc3 on the race line** (`finals_mesh_race.csv`) | Step 3a produced a race line that passed its kappa gate — the absolute 1.0 one, or the relative `--kappa-gate safe` one on a tight circuit — **and** Gate C (100 Xvfb laps at ~0.097 s, 0 collisions) **and** Gate D (32 real-display laps at ~0.058 s, 0 collisions) both passed with the config you intend to ship. All three, not any of them. |
+| 2 | **mpc3 on the safe line** (`finals_mesh_safe.csv`, never `_centerline.csv`) | The kappa gate rejected the race line, or the race line failed Gate C or D, and mpc3 on the safe line passes both gates. This is what ICRA-2026 ships (0/30 where the width-using line took 9 collisions in 30), and it is also the line `barrier_margin 0.34` is geometrically feasible on. |
+| 3 | **Legacy `mpc` on the safe line** (`PIT_CREW_CONTROLLER=mpc`) | Neither mpc3 configuration is clean. Slower — 78.2-78.4 s on Porto against mpc3's ~70-73 s — but it is the **rate-proven** option: clean at 11 Hz (32 laps, 0 collisions) *and* at Ultra on Xvfb (32 laps, 0 collisions). **It has never been driven on the real display**, so row 3 is a fallback with a known lap time and an unknown Gate D. The entrypoint pairs `mpc` with the safe line automatically; **never pair `mpc` with the wide min-curvature line.** |
 
-A 2 %/lap mpc3 still beats a clean legacy on expected race time (~75 s against
-78.4 s), so row 3 is for "mpc3 is visibly unreliable at Ultra", not for "mpc3
-took one collision in 100". Decide on the Ultra numbers, with the collision
-rate and the +10 s penalty in front of you — and remember >10 collisions is a DQ.
+Decide on the official numbers at **both** periods, with the collision rate and
+the +10 s penalty in front of you, and remember >10 collisions is a DQ: one
+collision per ten laps is +10 s on a ~70 s race, which no line choice can pay
+for. A configuration that is clean on Xvfb and collides on the display is not a
+candidate — the organisers race on a display.
 
-### 5D — The two prepared fixes, and the knobs that stay off
+### 5D — What ships, what is opt-in, and what stays off
 
-`submission/autodrive_devkit.sh` now has exactly two places where a finals fix
-gets enabled, each one commented-out line at a marked comment block. Nothing
-else in the script needs editing to turn either on, and `PIT_CREW_CONTROLLER_ARGS`
-/ `PIT_CREW_LOCALIZATION_ARGS` still override both at run time.
+`submission/autodrive_devkit.sh` holds two arrays: `CTRL_ARGS` (the controller)
+and `LOC_ARGS` (localization). Both are appended at **every** launch site —
+initial and supervisor restart — and both come **before**
+`PIT_CREW_CONTROLLER_ARGS` / `PIT_CREW_LOCALIZATION_ARGS`, so a finals-day
+`-e PIT_CREW_CONTROLLER_ARGS="-p barrier_margin:=0.30"` overrides the built-in
+value (ROS takes the last `-p name:=value` for a repeated name).
+`tests/test_entrypoint_args.py` asserts both the ordering and the restart path.
 
-**Already shipping:** `rate_adaptive:=true` is in `CTRL_ARGS` for `mpc3`. It
-scales `apply_ahead_s` — a constant 0.090 s, i.e. 0.87 of the 0.104 s period
-mpc3 was tuned at — with the measured period. Live: 100 laps clean at
-0.091-0.098 s with the `cr_dk0.8` line; at a rate-selected 0.090 s instance it
-cut 7 collisions in 32 laps to 2. Identity at 0.104 s.
-
-**Fix 1 — the fast-display rate fix (`CTRL_ARGS`, mpc3 branch).**
+**Shipping by default (mpc3):**
 
 ```
--p apply_floor_steps:=0.0 -p rate_terms:=apply,thr,delay,predict,enc,pose
+-p map_prefix:=$MAP -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10
 ```
 
-`MPC3.solve` floors the command lead at one `step_dt` (0.060 s), so below a
-0.069 s period the rate-adapted `apply_ahead_s` is discarded, the publish index
-becomes an exact plan knot, and successive commands step 3.31 rad/s against the
-rack's 3.2. That is the 0.058 s real-display failure (10 collisions in 23 laps),
-and 12-28 % of commands through the problem corner exceeded the rack rate at
-0.058 s against 0 % at 0.094 s. Offline: min clearance 0.035 → 0.071 m at
-0.058 s, command saturation 0.23 → 0.00, and the 0.065/0.075 s lap times back to
-the 0.104 s value — with the defaults byte-identical. Note the rate clamp is
-[0.052, 0.156] s (`rate_lo`/`rate_hi`): a host faster than 0.052 s silently
-reverts to the 0.104 tune.
-**Enable when:** the live display A/B (`display_ratefix`) is clean, or Gate D
-fails without it. **Then re-run Gate C** — it changes behaviour at every period
-below 0.069 s and must not be a blind ship.
+* `rate_adaptive` scales `apply_ahead_s` — a constant 0.090 s, i.e. 0.87 of the
+  0.104 s period mpc3 was tuned at — with the measured period. 100 Xvfb laps
+  clean at 0.091-0.098 s; at a rate-selected 0.090 s instance it cut 7
+  collisions in 32 laps to 2. Identity at 0.104 s. The clamp is
+  [0.052, 0.156] s (`rate_lo` / `rate_hi`, both parameters, and the clamp is
+  logged) — below 0.052 s it silently reverts to the 0.104 tune.
+* `w_dcmd` + `cmd_tau` damp the solver's steering limit cycle: the first free
+  plan step after the committed steps has no jerk cost, so a one-step flick at
+  the rack's slew limit is the cheapest answer to any small error and it is
+  never executed before the next solve flicks back. Display (0.058 s): feedback
+  sign flips 5.5 → 2.4/s, command step p90 0.14 → 0.041 rad. Xvfb Porto 71.17 s
+  against 70.31 s without — the price of robustness at an unknown period. The
+  cost is larger on a tight circuit (CDC-TF 116.7 s vs 111.1 s, +0.5 s/lap) and
+  it is entirely `cmd_tau`: `w_dcmd` alone is the fastest variant anywhere
+  (Xvfb Porto 69.39 s) **and takes 10 collisions in 12 display laps**. The
+  filter is what survives 0.058 s; do not drop it to buy the lap back.
 
-**Fix 2 — the long-straight speed cap (`LOC_ARGS`).**
+**Shipping by default (localization):**
 
 ```
 -p max_step_mps:=9.0 -p publish_on_reloc:=false
 ```
 
-`max_step_m` 0.6 m per update is a 5.77 m/s cap on the motion model at
+`max_step_m` 0.6 m per update was a 5.77 m/s cap on the motion model at
 `rate_nominal` 0.104. On a circuit with a long fast stretch the estimate falls
 metres behind and the car drives into a wall reading cross-track 0.03 m: SRL
-2025 ICRA, 4 laps and 14 collisions. The harness reproduces it exactly and is
-clean at cap ≥ 6.4, at zero lap cost.
-**Enable when:** Gate B says the finals track has a stretch above ~12 m over
-5.8 m/s, or the live A/B (`icra2025_step9`) plus the Porto and ICRA-2026
-regressions are back clean. This one is cheap and the failure it prevents is a
-DQ.
+2025 ICRA, 4 laps and 14 collisions, a DQ. With the fix: 32 laps, 0 collisions,
+148.8 s, and Porto (70.31 s) and ICRA-2026 (148.9 s) unchanged.
+`publish_on_reloc:=false` suppresses the one pose published after a global
+reinit — the centroid of a track-wide particle cloud is not a pose, and it was
+measured 13 m from the car twice.
 
-**Stays off: ILC** (`ilc_enable` and the `ilc_*` family). Steering feedforward
-over 0.25 m bins; it converges within two laps live and ran 32 laps clean at a
-0.092 s instance, but a table learned at one period goes stale when the period
-moves — 100 laps with the prior took 7 collisions, 5 of them in the 20 laps
-after the host period drifted from 0.092 to 0.108 s. The organisers' period is
-unknown and may drift (OBS recording). It removes only 30-37 % of the hairpin
-offset and the shipping config is clean without it. If it is ever re-tested,
-always start from a fresh copy of the pristine prior — the node overwrites the
-table each lap.
+**The decision of the weekend — `barrier_margin:=0.34` (prepared, commented).**
 
-Test any of them without editing the script:
+```
+CTRL_ARGS+=(-p barrier_margin:=0.34)
+```
+
+Default is 0.24. This is the only configuration that has produced a clean real
+display run: **32 laps, 0 collisions, OFFICIAL 69.44 s at 0.059 s**, the best
+official race time measured. It works by moving the hairpin offset outward at
+both rates (+0.056 m at 0.058 s) for about +0.07 s/lap. Margin is thin — worst
+lap -0.313 m against a wall at ~-0.35 m — and it is **geometrically feasible
+only where the line leaves 0.135 + 0.34 = 0.475 m of half-width**: measured
+feasible on every `safe` line (worst available 0.520 m at the CDC-TF S-kink,
+lap sum -0.02 s, 1 collision in 432 harness laps) and **infeasible on the fast
+lines and on Porto's own line** (0.40-0.42 m), where it degenerates into a bias
+toward the centre. See the `--min-halfwidth` rule in step 3a.
+**Enable when:** its four-track Xvfb regression is clean and Gate D is clean
+with it. Uncomment the one prepared line — nothing else in the script changes.
+
+**Opt-in, committed, not shipped.** Each is one `-e PIT_CREW_*_ARGS` away; none
+has a live run behind it, so each needs its own A/B before it goes in the image:
+
+| Knob | Flags | What it is for | Evidence |
+|---|---|---|---|
+| Tight-track lap cost | `-p steer_tau:=0.04` | Models the rack's first-order lag in the rollout, buying back the tracking `cmd_tau` costs | CDC-TF 112.0 s with the smoothing against 116.7 s without it (4.7 of the 5.5 s back), 32 laps 0 collisions. **Alone** on the display it is no better than the smoothing alone (10 collisions / 30 laps); its display test *with* the barrier is the open question. Must stay at 0.04 — 0.06+ is a mismatch that collides on a pure-slew plant. |
+| Telemetry gaps (controller) | `-p gap_predict_s:=0.6` | Keeps solving on the dead-reckoned pose with a decel ramp instead of dropping to the coast watchdog | Harness with a stall every 5 s, 72 laps per cell: 3-frame gaps 6 → 1 / 19 → 8 collisions; 5-frame 18 → 3 / 46 → 18. One dropped frame is fine either way; no-gap reports byte-identical. Not driven live — see Gate E. |
+| Telemetry gaps (filter) | `-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5` | Two 0.5 s constants coincide by default, so above a 0.5 s gap the filter dead-reckons at the stale pre-gap speed: 0.9 m of phantom travel for a stalled car, 2.25 m error and 9 relocalizations for a 1 s gap | Replayed on the real collision bag, 25 injected stalls x 6 seeds: worst post-gap error 0.46 m. Widening the cloud works; capping the step throws away real motion. |
+| Teleport detector | `-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0 -p teleport_hold_n:=7 -p teleport_reseed:=false` | A collision reset moves the car ~0.88 m and the filter never notices; the scan branch does | On the real collision bag: **9/9 resets detected within one frame, 0 false positives** for any threshold 0.20-0.525 (clean max 0.194). The IMU branch is unusable (1/9, one frame early once) — keep `teleport_imu_g` 0. Reseed helped on 0/9 and costs 0.06 m; hold-only is better, and the image carries no `checkpoints_csv` anyway. Peak post-reset error 0.65 → 0.30-0.38 m. |
+| Long straight beyond 9 m/s | `-p max_step_mps:=12.0` | Only if Gate B says the finals profile asks for more than the shipped cap | Zero lap cost at any cap ≥ 6.4 in the harness. Pair with the caveat that a higher cap also lets the cloud dead-reckon further after a reset (up to 0.89 m). |
+
+**Rejected — do not re-test on the day.**
+
+| Knob | Why not |
+|---|---|
+| `apply_floor_steps:=0.0` + `rate_terms:=...` (the old "fix 1") | It did exactly what the harness said at 0.058 s (command slew saturation 0.078 → 0.003) and changed **nothing** at the hairpin: 15 laps, 11 collisions. The slew was a symptom. With the shipping smoothing the staircase it targeted is gone (0.0 % over-slew commands) and the fix now *costs*. |
+| `nd_mode:=period` | +0.5..+2.2 s/lap on the tight circuits and 61/432 harness collisions on ICRA 2025 with the identified actuator, at four different corners. Porto's +0.05 m does not generalise. |
+| `lead_mode:=spatial` (spatial publish lead) | Display: 11 collisions in 10 laps. ForzaETH's L1 numbers are a pure-pursuit lookahead, not a plan knot — 198/210 collisions as a publish lead. |
+| `w_dcmd` alone (no `cmd_tau`) | Fastest everywhere and worst clearance; 10 collisions in 12 display laps. |
+| `rate_slew` | Added while auditing the period range; the data does not support widening the clamp. |
+| `control_mode:=timer` | A fixed 20 Hz solve is 0.25 s/lap slower and collides at every period (4-6 in 33 laps vs 0). Per-pose solving is information-optimal on this bridge. |
+| ILC (`ilc_enable` and the `ilc_*` family) | Converges within two laps and ran 32 laps clean at 0.092 s, but a table learned at one period goes stale when the period moves — 100 laps with the prior took 7 collisions, 5 of them in the 20 laps after the host drifted 0.092 → 0.108 s. The organisers' period is unknown and OBS may drift it. It removes only 30-37 % of the hairpin offset and the shipping config is clean without it. If ever re-tested, always start from a fresh copy of the pristine prior — the node overwrites the table each lap. |
+| `grip_watchdog` | Costs more race time than it saves in every configuration, and at the shipping cap it fires on a clean run. |
+
+**Testing any of them without editing anything.** `run_exp.sh` passes its
+positional extras to the controller and `LOC_ARGS` to localization:
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_ratefix race \
-  -p apply_floor_steps:=0.0 -p rate_terms:=apply,thr,delay,predict,enc,pose
-LOC_ARGS='-p max_step_mps:=9.0' SIM_QUALITY=ultra CONTROLLER=mpc3 \
-  MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 ./scripts/run_exp.sh finals_step9 race
+  ./scripts/run_exp.sh finals_bm34_tau race -p barrier_margin:=0.34 -p steer_tau:=0.04
+LOC_ARGS='-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 \
+          -p scan_dt_max:=1.2 -p enc_gap_max:=1.5' \
+  SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh finals_gaploc race -p gap_predict_s:=0.6
 ```
 
-and in the image with `-e PIT_CREW_CONTROLLER_ARGS="..."` /
-`-e PIT_CREW_LOCALIZATION_ARGS="..."`. Both are word-split and appended at
-**every** launch site — initial and supervisor restart — so a node that comes
-back mid-race comes back with the same flags; `tests/test_entrypoint_args.py`
-asserts that, and that the script's own `CTRL_ARGS`/`LOC_ARGS` come first so an
-environment override still wins.
+and in the built image with `-e PIT_CREW_CONTROLLER_ARGS="..."` /
+`-e PIT_CREW_LOCALIZATION_ARGS="..."`, which is how you change the shipped
+config on the organisers' box without a rebuild — if they will let you set an
+environment variable at all. They run the script with no environment, so
+**anything that must ship, ships as an uncommented line in the script.**
 
 If the race line collides, rebuild at a floor with evidence behind it
 (`--min-clearance 0.30`) and re-probe; if it still collides, race `safe`.
@@ -637,8 +814,22 @@ MAP="${PIT_CREW_MAP:-/home/data/maps/finals_mesh}"
 `<slug>_centerline.csv` for localization. That is exactly why the drill's output
 names matter and why the centerline must be copied under that name. (`porto_mesh`
 keeps an explicit exception for its validated `cr_dk0.8` line; every other slug
-is derived.) If the validated finals line is `safe` rather than `race`, either
-set `PIT_CREW_LINE` or change the `mpc3` branch to `${SLUG}_safe.csv`.
+is derived.)
+
+**If the validated finals line is `safe` rather than `race`** — which is the
+likely outcome on a tight circuit, and is what ICRA-2026 ships — do **not**
+leave the `mpc3` default pointing at a `race.csv` nobody drove. Pick one:
+
+```bash
+# preferred: make the derived name BE the validated line, one file, one COPY
+cp data/racelines/finals_mesh_safe.csv data/racelines/finals_mesh_race.csv
+# or ship both files and pin it in the script (a prepared comment marks the spot):
+#   LINE="/home/data/racelines/${SLUG}_safe.csv"
+```
+
+The copy is the safer of the two: `tests/test_submission_assets.py` then checks
+the exact file the entrypoint will load, and there is no second line in the
+image for a typo to reach.
 
 The line default used to be two fixed Porto paths, so changing `MAP` alone left
 the legacy branch on `track_v2_safe.csv` — Porto's line on the finals map.
@@ -687,7 +878,7 @@ The script **sets Ultra by default** (`SIM_QUALITY` defaults to `ultra`; it runs
 scoring quality without being asked. Do not override it.
 
 **Pass = 12 laps, 0 collisions**, with an OFFICIAL race time at or below what
-step 5.3 measured, **and** `dt_p50` in the 0.102-0.106 s band — run step 5A's
+step 5.3 measured, **and** `dt_p50` in the Xvfb band you validated at (0.088-0.106 s; `test_submission_image.sh` races on Xvfb, not on the display) — run step 5A's
 `lap_report.py` on the evaluation log this script leaves behind, not only
 `score_race.py`. A 14-lap sample scatters ~1.5 s, so do not read a small time
 difference as a regression; a rate difference, on the other hand, is real. The
@@ -776,7 +967,7 @@ must both be complete before **September 19, AoE**.
 | `... is not a closed loop: X m between its last point and its first` | Open line; the trackers treat it as cyclic | Regenerate the line; do not hand-edit CSVs. |
 | `raceline requires positive speeds and increasing arc length` | Corrupt/intermediate candidate | Ship only a drill output that passed the gates. |
 | `REFUSING: host load N; a scored run needs a quiet host` | Something else is computing | Stop it and re-run. `LOAD_OK=1` exists but any run under load is contaminated. |
-| `lap_report.py` shows `dt_p50` ~0.088-0.091 s | Validated at Low quality, or something else is using the GPU | Re-run with `SIM_QUALITY=ultra` on an idle host. mpc3 collides at this rate; the run is not evidence about the finals. |
+| `lap_report.py` shows `dt_p50` ~0.088-0.091 s | Validated at Low quality, something else is using the GPU, or simply the per-start lottery | Valid evidence (`rate_adaptive` closed the old fast-instance failure), but it is not the ~0.097 s Gate C band. Re-run with `SIM_QUALITY=ultra`, `SIM_CPUSET` and `RATE_MIN_DT`/`RATE_MAX_DT` on an idle host. |
 | `dt_p50` drifts across the laps of one run | A process started mid-run | Contaminated. Re-run on a quiet host; do not average it out. |
 | `WARN: could not set Ultra` | The quality click missed (same Unity press/release quirk as Connection) | Check the label crop in `/tmp/sim_quality/quality_after_label.png`; re-run `scripts/sim_set_quality.sh next --verify` until it reads Ultra. Never during a scored run — Reset and Quit are the next rows down. |
 | `OFFICIAL race time unavailable ...` from `score_race.py` | Log written by a logger with no `last_lap_time` column | Re-run with the current logger. Do not decide the finals config on the sample clock. |
@@ -805,7 +996,7 @@ no submission at all.
    the width-using line took 9 collisions.
 2. **Legacy tracker at ay 4.5** — the rate-proven option, clean at both 11 Hz
    and Ultra. `PIT_CREW_CONTROLLER=mpc` with the centerline
-   (the entrypoint pairs `mpc` with a centerline automatically; **never pair
+   (the entrypoint pairs `mpc` with `<slug>_safe.csv` automatically; **never pair
    `mpc` with a wide min-curvature line**). If the line itself is the problem,
    rebuild it at the conservative profile:
    `.venv/bin/python tools/make_track_lines.py finals_mesh --ay 4.5 --min-clearance 0.30`

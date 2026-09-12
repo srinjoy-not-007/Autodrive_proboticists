@@ -40,6 +40,18 @@ elif [[ "$CONTROLLER" == mpc3 ]]; then
 else
     LINE="/home/data/racelines/${SLUG}_safe.csv"
 fi
+# PREPARED, NOT ENABLED: on a circuit tighter than Porto the validated mpc3
+# line is usually `safe`, not `race` (ICRA 2026 ships `safe`; both 2025
+# circuits only produce a fast line under the drill's relative kappa gate).
+# Do NOT leave the default pointing at a `race.csv` nobody drove.
+#
+# Preferred fix, and no edit here at all: make the derived name BE the
+# validated line before the build --
+#     cp data/racelines/<slug>_mesh_safe.csv data/racelines/<slug>_mesh_race.csv
+# One file, one COPY, and tests/test_submission_assets.py then checks the exact
+# file the entrypoint will load. The alternative is to change the mpc3 branch
+# ABOVE (line with `${SLUG}_race.csv`) to `${SLUG}_safe.csv` -- inside the
+# branch, so that an explicit PIT_CREW_LINE still wins over it.
 # The centerline is derived from the MAP and never from a fixed Porto path.
 # It is not a diagnostic: localization seeds its entire particle cloud at
 # centerline[0] and resamples along it for EVERY collision recovery, so a
@@ -92,20 +104,46 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # Display (0.058 s): 11 collisions/15 laps -> 10/27 with the first ten
     # scored laps taking one; Xvfb (0.095 s): 32 laps clean, 71.17 s vs
     # 70.31 s without (the price of robustness at an unknown period).
+    # On a TIGHT circuit cmd_tau costs more (+0.5 s/lap: CDC-TF 116.7 s vs
+    # 111.1 s); `-p steer_tau:=0.04` recovers 4.7 s of that (112.0 s) and is
+    # opt-in via PIT_CREW_CONTROLLER_ARGS, pending its display run.
     CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10)
-    # --- PREPARED, NOT ENABLED: the fast-display rate fix (Sept 12) ----------
+    # --- PREPARED, NOT ENABLED: the real-display corridor margin (Sept 12) ---
     # The organisers run the simulator WINDOWED ON A REAL DISPLAY at Ultra.
     # Measured on this host that is a 0.058 s telemetry period against the
-    # 0.088-0.106 s Xvfb gives, and at 0.058 s the shipping tracker took 10
-    # collisions in 23 laps. Cause: `MPC3.solve` floors the command lead at one
-    # `step_dt` (0.060 s), so below a 0.069 s period the rate-adapted
-    # `apply_ahead_s` is discarded, the publish index lands on an exact plan
-    # knot, and successive commands step 3.31 rad/s against the rack's 3.2.
-    # Uncomment the next line -- ONE line, here, nowhere else -- once the live
-    # display A/B (`display_ratefix`) comes back clean. It is byte-identical at
-    # the rates we already validated at; `rate_adaptive` above stays on.
-    # CTRL_ARGS+=(-p apply_floor_steps:=0.0
-    #             -p rate_terms:=apply,thr,delay,predict,enc,pose)
+    # 0.088-0.106 s Xvfb gives, and at 0.058 s four successive configurations
+    # of this tracker took 10-11 collisions, always at the same hairpin entry,
+    # drifting 0.34-0.37 m inside their own line.
+    #
+    # `barrier_margin` (default 0.24) is the corridor half-width the MPC's
+    # barrier keeps between the BODY CORNERS and the wall. Raising it to 0.34
+    # moves that hairpin offset outward at every rate (+0.056 m at 0.058 s) for
+    # about +0.07 s/lap, and it is the ONLY configuration that has ever driven
+    # the real display clean: 32 laps, 0 collisions, OFFICIAL 69.44 s at
+    # 0.059 s -- the best official race time measured to date. Margin is thin
+    # (worst lap -0.313 m against a wall at ~-0.35 m).
+    #
+    # FEASIBILITY, before enabling: it needs 0.135 + 0.34 = 0.475 m of
+    # half-width. Measured available on every `safe` line (worst 0.520 m at the
+    # CDC-TF S-kink; lap sum -0.02 s, 1 collision in 432 harness laps), and NOT
+    # available on the fast width-using lines or on Porto's own line
+    # (0.40-0.42 m), where the barrier is infeasible and merely biases the car
+    # toward the centre -- which is what Porto has been running all along.
+    # Generate a tight-circuit line with `--min-halfwidth 0.48` if both are to
+    # ship together (tools/make_track_lines.py; see docs/FINALS_RUNBOOK.md 3a).
+    #
+    # Uncomment the next line -- ONE line, here, nowhere else -- once its
+    # four-track Xvfb regression and the finals track's Gate D are clean.
+    # CTRL_ARGS+=(-p barrier_margin:=0.34)
+    #
+    # REJECTED, do not resurrect: `-p apply_floor_steps:=0.0 -p rate_terms:=...`
+    # (the old "fix 1"). It removed the command-slew saturation at 0.058 s
+    # exactly as the harness predicted (0.078 -> 0.003) and changed NOTHING at
+    # the hairpin: 15 laps, 11 collisions, same corner, same cross-track. With
+    # the `w_dcmd`/`cmd_tau` smoothing above, the staircase it targeted is gone
+    # (0.0% over-slew commands) and the fix now costs. Also rejected on the
+    # display: `nd_mode:=period`, `lead_mode:=spatial`, `steer_tau` alone,
+    # `w_dcmd` without `cmd_tau`. See docs/FINALS_RUNBOOK.md 5D.
 elif [[ "$CONTROLLER" == mpc2 ]]; then
     CTRL_ARGS=(-p map_prefix:="$MAP")
 fi
@@ -122,9 +160,39 @@ LOC_ARGS=()
 # cost. `publish_on_reloc:=false` suppresses the one pose after a global reinit
 # (the centroid of a track-wide cloud is not a pose). Uncomment once the live
 # A/B (`icra2025_step9`) plus the Porto and ICRA-2026 regressions are back.
-# A FINALS TRACK WITH A LONG STRAIGHT NEEDS THIS -- check the drill's
-# centerline for a stretch where the profile asks for more than 5.8 m/s.
-LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)  # enabled Sept 12: ICRA 2025 4 laps/14 coll -> 32/0; Porto 70.3 s, ICRA 2026 148.9 s unchanged
+# ENABLED Sept 12 (the line below is live, not prepared): ICRA 2025 went from
+# 4 laps / 14 collisions to 32 laps / 0 collisions / 148.8 s, with Porto
+# (70.31 s) and ICRA 2026 (148.9 s) unchanged. The cap is now 9.0 m/s; a finals
+# profile that asks for MORE than that on a long straight needs it raised again
+# -- Gate B in docs/FINALS_RUNBOOK.md measures exactly that, and
+# `-e PIT_CREW_LOCALIZATION_ARGS="-p max_step_mps:=12.0"` is the override.
+# Caveat: a higher cap also lets the cloud dead-reckon further forward after a
+# collision reset (up to 0.89 m in the worst measured window).
+LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)
+#
+# --- PREPARED, NOT ENABLED: telemetry-gap handling (Sept 12) ----------------
+# If the organisers' box stalls the simulator (OBS plus a rosbag on the same
+# host), two 0.5 s constants coincide and the filter dead-reckons the whole gap
+# at the STALE pre-gap speed: 0.9 m of phantom travel for a car that did not
+# move, 2.25 m of error and 9 relocalizations for a 1 s telemetry-only gap.
+# Replayed on the real collision bag (25 injected stalls x 6 seeds) these bring
+# the worst post-gap error to 0.46 m. Widening the cloud works; capping the
+# step throws away real motion. Pair with the controller's own `gap_predict_s`
+# (PIT_CREW_CONTROLLER_ARGS="-p gap_predict_s:=0.6"). Neither has been driven
+# live -- run scripts/stall_inject.sh against a live run first.
+# LOC_ARGS+=(-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3
+#            -p scan_dt_max:=1.2 -p enc_gap_max:=1.5)
+#
+# --- PREPARED, NOT ENABLED: teleport detection after a collision reset ------
+# The reset moves the car ~0.88 m and nothing notices: the encoder keeps
+# reading (+2.1 m/s over-read for 0.4 s) and the filter never declares itself
+# lost. The SCAN branch caught 9/9 real resets within one frame at 0 false
+# positives on the collision bag (clean max 0.194 m, so 0.35 is the threshold);
+# the IMU branch is unusable (1/9, and one frame early) -- keep it at 0.
+# Reseeding at checkpoints helped on 0/9 and costs 0.06 m, so hold-only; the
+# image also carries no `checkpoints_csv`, which reseeding would need.
+# LOC_ARGS+=(-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0.0
+#            -p teleport_hold_n:=7 -p teleport_reseed:=false)
 # Extra `-p name:=value` parameters for the finals, without editing this file.
 # Word-split ON PURPOSE (the only unquoted expansions here) so
 # PIT_CREW_CONTROLLER_ARGS="-p rate_adaptive:=true -p ilc_enable:=true" works;
