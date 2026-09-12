@@ -398,7 +398,12 @@ on a pure-slew plant a modelled lag of 0.06+ is a mismatch that collides.
 Caveat: the hairpin inside excursion does NOT improve in the harness
 (-0.20 -> -0.27 m most-inside). Do not re-derive: ForzaETH's L1 numbers
 (0.6 v - 0.18, min 0.8 m) are a pure-pursuit lookahead, not a plan knot:
-198/210 collisions as a publish lead.
+198/210 collisions as a publish lead. **Driven on the display (0.058):
+steer_tau 0.04 + spatial: 10 collisions / 10 laps; spatial alone:
+11 / 10; steer_tau 0.04 alone: 10 / 30 (median 6.95, same as smoothing
+alone's 10 / 27). REJECTED: the spatial lead makes it worse, the rack
+lag changes nothing at the hairpin.** The harness's hairpin caveat was
+the right signal.
 
 **Why the steering wiggles (research, Sept 12, full report in
 docs/research/steering_smoothness_peer_stacks.md):** every peer stack
