@@ -348,6 +348,23 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Closed-loop timing hunt (Sept 12, offline): NOT reproduced.** Per-lap
+most-inside offset at s 9.5-12 is the discriminating metric: Xvfb
+-0.21..-0.23 p50 (3% of laps below -0.30), display -0.30..-0.33 (50-83%
+below -0.30), wall at ~-0.35; the smoothing config is the MOST inside
+despite 4.6x less flutter, so the wiggle is not what puts the car there.
+Five candidates ruled out by sign in the harness (opt-in options
+committed in sim_tracker.py): publish latency / one-tick-late latching
+(makes the car late and WIDE and slow), pose age / rate-scaled transport
+lag (wide at both rates), encoder filter (already per-second), stale
+/steering feedback (0.013 m outward), dead-time mis-compensation
+(slightly more inside). Live cmd->feedback fit: cmd_dead_time = period +
+0.045 s (0.103 at 0.058, 0.142 at 0.100). The harness's inside offset is
+a steep non-monotone function of total loop delay near the operating
+point; live sits on the steep part. Pragmatic lever: barrier_margin 0.24
+-> 0.34 moves the hairpin offset outward at both rates (+0.056 m at
+0.058) for +0.07 s/lap; display A/B queued (disp_bm34).
+
 **Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
 committed; display A/B queued):** `steer_tau` (first-order rack lag
 after the dead time, exact per-step response, analytic Jacobians),
