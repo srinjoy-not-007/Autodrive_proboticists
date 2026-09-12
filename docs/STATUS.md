@@ -124,6 +124,20 @@ table's behaviour at the lap wrap / per-lap update is the suspect, under
 offline analysis. ILC is NOT promotable until this is explained. ILC alone
 (0/32) remains the cleanest short fast-rate run; n is small.
 
+**Rate-invariant mpc3 set from CMA-ES (Sept 12, offline; live test
+queued as `rateinv`):** 239 evaluations over 15 params, objective summed
+over frames 0.088/0.097/0.104 with rate_adaptive on. Verified on unseen
+seeds (3 x 20 laps per frame): median 7.21-7.23 at every rate (defaults
+7.11-7.21), |e| p50 0.037 (defaults 0.067-0.093), p95 0.12 (0.18-0.21), min
+clearance 0.17-0.20 m (0.00-0.125), 0 collisions (defaults 1 at 0.088).
+Same speed, half the error, twice the margin. Set: w_lat 18, w_yaw 6,
+w_rate 1.8, w_steer 0.33, w_barrier 900, barrier_margin 0.22, e_free 0.105,
+k_e 3.7, apply_ahead_s 0.082, delay_s 0.145, thr_lead_s 0.24, ay_budget
+7.7, horizon 20, step_dt 0.045. delay_s 0.145 (below the measured 0.18) is
+the most likely harness artefact; w_rate, w_barrier and step_dt sit on
+their search bounds. The harness itself is ~10x optimistic on collisions
+at 0.088 (1 per 57 laps vs 7 per 32 live), so these are margin claims.
+
 **Curvature-rate-limited lines (Sept 12, offline, not driven):**
 `optimize_raceline.py --dkappa-max` (opt-in, uncommitted until
 check_pipeline runs on an idle host) halves the hairpin-entry curvature
