@@ -13,6 +13,17 @@ collisions, 75.21 s sim timer with three stalled 8 s laps; re-run on a quiet
 host pending). The mesh pipeline's automatic profile stays ay 6.0 for
 unseen tracks; Porto ships the explicitly validated ay 6.5 file.
 
+Image with the ay 6.5 line, quiet host, as shipped: 14 laps, 0 collisions,
+**72.94 s sim timer**, PASS.
+Offline CMA (seeds 1-3, validated on 4-6) on the ay 6.75 wide line
+(`porto_mesh_cand2_w0.60_ay6.75_race.csv`, same geometry as the shipping
+line): e_free 0.193, k_e 0.654, barrier_margin 0.211, w_lat 8.07, w_rate
+1.906, ay_budget 6.566, horizon 30, step_dt 0.0402 -> live 32 laps, 0
+collisions, **70.59 s, median 7.09, best 6.98**; the same line at default
+params took 1 collision (72.69 s), so the smoother steering (w_rate ~2,
+ay_budget at the measured 6.57 limit) is what buys it. 100-lap validation
+running.
+
 ## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
 
 **Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.0.csv`
