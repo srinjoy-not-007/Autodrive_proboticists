@@ -59,7 +59,11 @@ it. Committed steps (nd 3) do not change over 0.088-0.104. ILC implemented
 converges by lap 8-10 to p50 0.03 but costs 0.6-0.8 s/lap offline. The
 harness still does not reproduce the live speed lag (0.5 vs 1.45 m), so
 the brake-only lead is unvalidated. Live A/B of rate_adaptive at Low
-quality (11 Hz) queued.
+quality (11 Hz) queued. **mpc3 at Ultra, 100 laps: 2 collisions (s 28.4
+lap 23, s 11.3 lap 99), median 7.20, first ten 73.39 s** -- at the
+organiser-like rate the shipping mpc3 config is ~2%/lap, not clean; its
+expected race (~75 s) still beats the legacy's clean 78.4 s, but the
+rate-adaptive fix is what has to make it clean.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
