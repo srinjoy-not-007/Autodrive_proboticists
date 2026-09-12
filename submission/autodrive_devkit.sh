@@ -141,6 +141,14 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # mismatch that collides in the harness.
     CTRL_ARGS+=(-p steer_tau:=0.04)
     CTRL_ARGS+=(-p barrier_margin:=0.34)  # enabled Sept 12: display 32/0 x2 (69.44, 69.36 s), Porto 100/0 Xvfb 71.50 s, CDC-TF/ICRA25/ICRA26 32/0 each
+    # PREPARED (Sept 12 evening, not enabled): barrier 0.40 on Porto and on
+    # safe lines. Display 32/0 70.13 s with the hairpin most-inside worst
+    # -0.296 m (0/32 laps below -0.30) vs 16/32 at 0.34, for +0.8 s of race;
+    # a line's feasible margin is min half-width - 0.135 (Porto 0.285, safe
+    # lines 0.385-0.585, the fast2/fast3 lines 0.345), and above it the
+    # barrier pushes across the line, so keep 0.34 on fast lines. Enable
+    # after the Porto 100-lap Xvfb run at 0.40 (chain6):
+    # case "$LINE" in *_safe.csv|*cr_dk0.8.csv) CTRL_ARGS+=(-p barrier_margin:=0.40) ;; esac
     #
     # REJECTED, do not resurrect: `-p apply_floor_steps:=0.0 -p rate_terms:=...`
     # (the old "fix 1"). It removed the command-slew saturation at 0.058 s
