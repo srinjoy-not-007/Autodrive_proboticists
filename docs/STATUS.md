@@ -358,6 +358,23 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Period-range audit of the finals candidate (Sept 12, 7128 harness
+laps; note the harness's seeds do nothing without pose/yaw noise):**
+collision-free on all six track/line cells and both plants over
+0.045-0.104 s (1728 laps, 0), and through 0.125 once pose noise is on;
+degrades above 0.125 on the pole plant, collisions on four of six cells
+at 0.150. Mid-run drift (step, ramp, sawtooth): 0 collisions in 432 laps
+vs 17 for the pre-barrier config. On the identified actuator the
+candidate takes 12 collisions per 1296 laps vs 178 pre-barrier.
+Regressions attributed: **steer_tau 0.04 costs Porto clearance at
+0.045-0.075 (0.250 -> 0.050 m at 0.075/slew; the barrier alone improves
+it) and doubles |e| p95 on the icra2025 safe line at 0.097-0.104 (0.138
+-> 0.216) for 0.08-0.10 s/lap**; the barrier owns the two knife-edge
+0.125 collisions (gone under noise). Live evidence keeps steer_tau
+shipped (display 69.36 clean, ICRA 2026 -2 s, ICRA 2025 fast line
+clean) but its live hairpin margin cost (~0.01 m) is consistent with
+this; the barrier 0.40 rule on safe lines/Porto is the counterweight.
+
 **Turn-in timing probe (Sept 12, committed, not yet run live):**
 `ros2 run pit_crew turnin_probe` / `scripts/turnin_probe.sh` measures
 pose-stamp-to-yaw-rate delay INSIDE the race loop (publishes from the
