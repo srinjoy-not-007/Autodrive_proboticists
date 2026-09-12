@@ -42,6 +42,17 @@ localization offset, which is what actually produces the hairpin collisions:
         --laps 20 --pose-noise 0.03 --plant-realistic --speed-diag \
         --frame 0.104 --pose-lon-bias 0.00      # 0 collisions / 100 laps, 5 seeds
     ...  --frame 0.088 --pose-lon-bias 0.15      # 64 / 100, all at s 11.1-11.8
+
+The structural alternative to scaling the per-period constants is to stop
+solving in the pose callback at all (`-r control_mode=timer`, `-r control_hz=20`):
+the same solve on a fixed wall clock, the pose callback only storing the
+estimate.  Rate invariance is then a property of the schedule rather than of a
+tune, and is checked by running the SAME command at three sensor periods:
+
+    for f in 0.088 0.097 0.104; do .venv/bin/python tools/sim_tracker.py \
+        --tracker mpc3 --line data/racelines/porto_mesh_mc0.63_ay6.75.csv \
+        --map data/maps/porto_mesh --laps 12 --plant-realistic --enc-alpha 0.35 \
+        --pose-noise 0.03 --frame $f -r control_mode=timer; done
 """
 
 import argparse
@@ -312,7 +323,14 @@ class MPC3Sim:
     """
 
     name = 'mpc3'
-    rate = None                      # solves once per sensor frame
+    rate = None                      # solves once per sensor frame ('per_pose')
+    # `control_mode` 'timer' sets `self.rate` to `control_hz` instead, and then
+    # `run()` drives `update()` off the wall clock exactly as it already does
+    # for `LegacyMPCSim` -- the plant has always stepped at 1 kHz, so the only
+    # thing that changes is the solve schedule.  The command is still PICKED UP
+    # by the bridge at a sensor frame (that is the simulator, not the tracker),
+    # so what timer mode buys is a command that is at most one tick old at the
+    # pickup instead of one sensor period old.
 
     def __init__(self, path, **kw):
         self.path = path
@@ -339,7 +357,10 @@ class MPC3Sim:
                       # safe line, 7.86 -> 8.09 s with it, 7.86 -> 7.76 s
                       # without).  Pass `ilc_v_enable=1` to re-measure it.
                       ilc_v_enable=0, ilc_v_down=1.0, ilc_v_up=0.005,
-                      ilc_v_lo=0.85, ilc_v_hi=1.05, ilc_store='')
+                      ilc_v_lo=0.85, ilc_v_hi=1.05, ilc_store='',
+                      # --- solve schedule (opt-in; see mpc3.py) ------------
+                      control_mode='per_pose', control_hz=20.0,
+                      timer_apply_ahead_s=0.0, timer_sync_dead=1)
         solver_keys = ('horizon', 'step_dt', 'min_step_m', 'iters', 'outer',
                        'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk',
                        'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
@@ -365,6 +386,8 @@ class MPC3Sim:
             u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'])
         self.v_plan0 = 0.0
         self._enc_seen = False
+        self.meas = None                 # (t_stamp, x, y, yaw); None = no pose
+        self._last = (0.0, 0.0)          # last (steer, throttle) published
         self.speed_meas = 0.0
         self.idx = None
         self.e_lat = 0.0
@@ -404,6 +427,23 @@ class MPC3Sim:
                 store=str(self.P['ilc_store']))
             self.ilc.set_nominal_clearance(path)
             self.mpc.ilc = self.ilc
+        # Mirrors mpc3.MPC3Tracker.__init__ exactly: only `apply_ahead_s` moves
+        # (one tick, because the command is held for one tick), `nd` and the
+        # horizon are untouched, and `rate_adaptive` is switched off because in
+        # timer mode nothing the controller does is timed by the sensor.
+        self.control_mode = str(self.P['control_mode']).strip().lower()
+        if self.control_mode not in ('per_pose', 'timer'):
+            raise SystemExit("control_mode must be 'per_pose' or 'timer', not "
+                             f"{self.P['control_mode']!r}")
+        self._bridge = (float(self.P['cmd_dead_time'])
+                        - 0.5 * float(self.P['rate_nominal']))
+        if self.control_mode == 'timer':
+            self.rate = max(float(self.P['control_hz']), 1.0)
+            self.rate_ctl.enabled = False
+            ahead = float(self.P['timer_apply_ahead_s']) or 1.0 / self.rate
+            self.mpc.set_rate(apply_ahead_s=ahead)
+            if self.P['timer_sync_dead']:
+                self.act.dead_time = self._bridge
 
     # -- the two "callbacks" ------------------------------------------------
     def on_frame(self, t, gyro, speed, steer_fb):
@@ -432,6 +472,21 @@ class MPC3Sim:
         r = self.rate_ctl.applied / self.rate_ctl.adapter.nominal
         return 1.0 - (1.0 - nominal) ** r
 
+    def pickup_time(self, t, ts):
+        """When a command published at ``t`` is actually LATCHED.
+
+        The bridge consumes one command per telemetry tick, and the pose stamp
+        IS a telemetry tick, so the pickup grid is observable without knowing
+        anything about the tracker's own schedule.  Commands issued between two
+        ticks share a pickup time and the last one wins -- which is what the
+        simulator does, and what `Actuator._target_at` does with equal stamps.
+        """
+        p = float(self.rate_ctl.est.period)
+        if not (p > 1e-3):
+            return t
+        k = max(1, int(math.ceil((t - ts) / p - 1e-9)))
+        return ts + k * p
+
     def measured_speed(self):
         v = self.speed_meas
         if v > self.P['v_meas_min']:
@@ -453,7 +508,16 @@ class MPC3Sim:
     def update(self, t):
         import time
         t0 = time.perf_counter()
+        if self.meas is None:
+            # Timer mode only: ticks can precede the first pose.  Hold, which is
+            # what the latched command does in the simulator anyway.
+            return self._last
         ts, x, y, yaw = self.meas
+        if self.control_mode == 'timer' and t - ts > self.P['stale_pose_s']:
+            # The node's `on_control_tick` skips the tick and lets the watchdog
+            # hold the steering and coast; here that is the same publication.
+            self._last = (self._last[0], 0.0)
+            return self._last
         v_meas = self.measured_speed()
         v0 = max(v_meas if v_meas is not None else self.start_speed(), 0.4)
         g = self.mpc.cfg['yaw_gain']
@@ -494,8 +558,11 @@ class MPC3Sim:
         self.v_cmd = float(info['v_cmd'])
         th = float(self.thr.command(self.v_cmd, v_meas, 0.0, now=t,
                                     kappa=float(self.path.kappa[i0])))
-        self.act.record(t, cmd)
+        self.act.record(self.pickup_time(t, ts)
+                        if (self.control_mode == 'timer'
+                            and self.P['timer_sync_dead']) else t, cmd)
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
+        self._last = (cmd, th)
         return cmd, th
 
 

@@ -189,6 +189,37 @@ class MPC3Tracker(Node):
             # run N's table, so the harness (which never had one) would no
             # longer be measuring what races.  Set it deliberately, per line.
             ('ilc_store', ''),
+            # --- control schedule (OPT-IN: 'timer') ---------------------------
+            # 'per_pose' is the validated structure: solve inside the pose
+            # callback, so the control rate IS the sensor rate and the command
+            # is held for one sensor period.  That is what makes several
+            # constants implicitly per-period (see `RateAdapter`), and the
+            # sensor period is a per-start lottery of the simulator
+            # (0.088-0.106 s measured on one host).  'timer' is the Autoware
+            # structure instead: a fixed wall-clock solve, so the command is
+            # re-issued every `1/control_hz` whatever the sensor does, the pose
+            # callback only stores the measurement, and the only thing the
+            # sensor period still sets is how FRESH the estimate is.
+            ('control_mode', 'per_pose'),
+            ('control_hz', 20.0),
+            # Timer mode only.  The devkit bridge consumes ONE command per
+            # telemetry tick, so a command published off that grid waits
+            # 0..one period before it is latched and the commands in between
+            # are dropped.  Solving in the pose callback hides that (one
+            # publish per tick, at a fixed phase); solving on a wall clock does
+            # not, and the `Actuator`'s constant dead time then models commands
+            # that never acted.  With this on, a command is recorded at the
+            # tick it will actually be latched at -- the pose STAMP is a tick,
+            # so the grid is observable -- and superseded ones fall out because
+            # `Actuator._target_at` keeps the last entry with equal stamps.
+            # Measured (12 laps x 3 seeds, frame 0.104): off -> |e| p50 0.136,
+            # 19 collisions; on -> 0.092 and 6.
+            ('timer_sync_dead', True),
+            # 0.0 = one tick period, which is what 'timer' mode means by
+            # `apply_ahead_s`: the command published now is held for exactly
+            # one tick, so the angle worth publishing is the plan's angle one
+            # tick after it bites.  Set it explicitly to sweep it.
+            ('timer_apply_ahead_s', 0.0),
             # --- safety --------------------------------------------------------
             ('stuck_seconds', 1.5),
             ('stuck_distance', 0.20),
@@ -304,6 +335,42 @@ class MPC3Tracker(Node):
                 f', {self.ilc.laps} lap(s) restored from '
                 f'{store or "(no store)"}')
 
+        # The solve schedule.  Validated default is 'per_pose'; nothing below
+        # runs at all in that mode, so it is bit-identical to the shipping
+        # controller.
+        self.control_mode = str(v['control_mode']).strip().lower()
+        if self.control_mode not in ('per_pose', 'timer'):
+            raise RuntimeError(
+                f"control_mode must be 'per_pose' or 'timer', not "
+                f"{v['control_mode']!r}")
+        self.control_period = 1.0 / max(float(v['control_hz']), 1.0)
+        # What is left of the measured command-to-movement delay once the
+        # half-tick a latched command waits at the pickup boundary is taken
+        # out; the same decomposition `RateAdapter` uses.
+        self._bridge = (float(v['cmd_dead_time'])
+                        - 0.5 * float(v['rate_nominal']))
+        if self.control_mode == 'timer':
+            # The two are alternative answers to the same problem and they
+            # fight: `rate_adaptive` re-points the per-period constants at the
+            # MEASURED sensor period, and in timer mode nothing the controller
+            # does is timed by the sensor any more.  Timer mode wins; the
+            # estimator keeps measuring so the period is still logged.
+            if v['rate_adaptive']:
+                self.rate_ctl.enabled = False
+                self.get_logger().warn(
+                    'rate_adaptive is ignored in control_mode=timer: the '
+                    'control period is already fixed')
+            ahead = (float(v['timer_apply_ahead_s'])
+                     or self.control_period)
+            # ONLY `apply_ahead_s`.  `delay_s` and `step_dt` are properties of
+            # the actuator and of the horizon, not of the schedule, so `nd =
+            # round(delay_s / step_dt)` is deliberately untouched.
+            self.mpc.set_rate(apply_ahead_s=ahead)
+            if v['timer_sync_dead']:
+                # Commands are stamped with the tick they are latched at, so
+                # what is left to model is the bridge alone.
+                self.act.dead_time = self._bridge
+
         self.pose = None
         self.gyro_z = 0.0
         self.v_plan0 = 0.0           # profile speed at the car (encoder fallback)
@@ -336,6 +403,12 @@ class MPC3Tracker(Node):
         self.pub_throttle = self.create_publisher(Float32, f'{ns}/throttle_command', 1)
         self.pub_cte = self.create_publisher(Float32, '/pit_crew/cte', 10)
         self.create_timer(1.0 / max(float(v['watchdog_hz']), 1.0), self.watchdog)
+        if self.control_mode == 'timer':
+            self.create_timer(self.control_period, self.on_control_tick)
+            self.get_logger().info(
+                f'control schedule: TIMER at {1.0 / self.control_period:.1f} Hz '
+                f'(apply_ahead {self.mpc.cfg["apply_ahead_s"]:.3f} s, nd '
+                f'{self.mpc.nd}); the pose callback only stores the estimate')
         self.get_logger().info(
             f"mpc3 ready: {self.path.n} pts, horizon {v['horizon']}x"
             f"{v['step_dt']:.3f}s ({self.mpc.nd} committed), delay "
@@ -436,6 +509,41 @@ class MPC3Tracker(Node):
         self._trail.append((stamp, mx, my))
         while self._trail and stamp - self._trail[0][0] > self.P['stuck_seconds']:
             self._trail.pop(0)
+        if self.control_mode == 'per_pose':
+            self.control_step()
+
+    def pickup_time(self, t, ts):
+        """The tick at which a command published at ``t`` is actually latched.
+
+        ``ts`` is the newest pose stamp, which IS a telemetry tick, and the
+        period is the one ``RateControl`` measures whether or not it is allowed
+        to act on it.  Before the estimator is ready this is the identity, i.e.
+        the per-pose behaviour.
+        """
+        p = float(self.rate_ctl.est.period)
+        if not (p > 1e-3) or not math.isfinite(ts):
+            return t
+        k = max(1, int(math.ceil((t - ts) / p - 1e-9)))
+        return ts + k * p
+
+    def on_control_tick(self):
+        """One solve on the wall clock (``control_mode`` 'timer' only).
+
+        The pose callback has already stored and blended the newest estimate;
+        this propagates it to NOW inside ``_control_step`` exactly as the
+        per-pose path does -- same ``Actuator.predict``, same measured speed and
+        gyro, only ``t_now`` is the tick instant instead of the callback
+        instant.  Nothing here depends on the sensor period.
+
+        The guard is the same one the watchdog uses: with no fresh pose there is
+        nothing to solve from, so skip the tick and let the watchdog hold the
+        steering and coast.  Skipping rather than publishing keeps the coast in
+        one place.
+        """
+        if self.pose is None:
+            return
+        if self.now() - self.pose[3] > self.rate_ctl.values['stale_pose_s']:
+            return
         self.control_step()
 
     def drop_pose(self, why, now):
@@ -635,7 +743,11 @@ class MPC3Tracker(Node):
     def publish(self, steer, throttle):
         self.steer = float(np.clip(steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
-        self.act.record(self.now(), self.steer)
+        t_rec = self.now()
+        if (self.control_mode == 'timer' and self.P['timer_sync_dead']
+                and self.pose is not None):
+            t_rec = self.pickup_time(t_rec, self.pose[3])
+        self.act.record(t_rec, self.steer)
         self.pub_throttle.publish(Float32(data=float(throttle)))
 
 
