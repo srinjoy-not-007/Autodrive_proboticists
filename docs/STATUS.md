@@ -145,7 +145,13 @@ The line is converged: the best gate-passing candidate
 0.027 s/lap in the harness; ay 7.25+ turns back (error grows, runs wide);
 lines under the 0.28 m gate are the least robust under stress. A/B
 queued live (dk06_w063_ay70, 32 laps). The remaining ~0.5 s to the
-winners is not in the line.
+winners is not in the line. Driven: 32 laps / 0 collisions / **69.92 s**
+(best official race so far, 0.092 s instance). Re-ranked under the
+smoothing config (w_dcmd 50 + cmd_tau 0.10, 3168 harness laps, incl. 6
+new below-gate lines w 0.50-0.57 / ay 7.0-7.25): field spans 0.10
+s/lap; under the identified actuator (pole tau 0.06, dead 0.10) cr_dk0.8
+wins outright with 0.090 m min clearance vs 0.025-0.056 for the tight
+lines; ay 7.25 collides. No tighter line is worth a live slot.
 
 **REAL-DISPLAY RUN (Sept 12) -- the organisers' setup, and a failure.**
 Same shipping config (cr_dk0.8 + rate_adaptive, Ultra), simulator
