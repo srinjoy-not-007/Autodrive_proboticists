@@ -33,7 +33,9 @@ run_stanley.sh now pin OMP/OPENBLAS/MKL threads to 1. Both configs are
 being re-run for 100 laps with the pin. With the pin the ay 6.75 candidate
 is faster (median 7.049, first ten 70.24) but still 3 collisions/100 at the
 s 11.2 hairpin entry: dropped. Next: its smoother-steering parameters on the
-clean ay 6.5 line.
+clean ay 6.5 line. **Shipping config (mpc3 defaults, mc0.60_ay6.5) with the
+BLAS pin: 100 laps, 0 collisions, 72.49 s (sim timer 72.02), median 7.21** --
+the second clean century for this config (71.63 s before the pin).
 
 ## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
 
