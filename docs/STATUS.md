@@ -248,6 +248,15 @@ teleport detector (scan jump) + checkpoint reseed is being designed.
 Caveat on max_step_mps 9.0: it also lets the cloud dead-reckon further
 forward after a reset (up to 0.89 m worst window) -- pair with a
 sanity bound if shipped.
+Teleport detector built (opt-in, committed): the encoder never drops
+after a reset (wheels keep spinning, +2.1 m/s over-read for 0.4 s), the
+filter never declares itself lost, so detection has to come from a scan
+discontinuity (12% of resets at 1 false trigger per 2980 scans; resets
+move the car only 0.65 m p50, one period of driving is 0.28 m) or the
+IMU (0 false triggers at 15 m/s2; detection rate UNVALIDATED, no bag
+with a collision exists yet). On detection: reseed at checkpoints within
+2.5 m + encoder reset; replay p90 peak error 1.81 -> 0.49 m. Next: one
+BAG=1 run with collisions to validate the IMU branch.
 
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
