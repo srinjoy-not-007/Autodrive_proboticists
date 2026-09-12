@@ -441,7 +441,8 @@ class RateControl:
 
     def __init__(self, mpc, act, enabled=False, filt=None, speed_est=None,
                  thr=None, nominal=RATE_NOMINAL, window=20, terms=RATE_TERMS,
-                 min_change=0.002, rate_lo=0.5, rate_hi=1.5, **nominals):
+                 min_change=0.002, rate_lo=0.5, rate_hi=1.5, rate_slew=0.0,
+                 **nominals):
         self.mpc = mpc
         self.act = act
         self.filt = filt
@@ -465,6 +466,20 @@ class RateControl:
         # was validated, not an extrapolation of it.
         self.rate_lo = float(rate_lo) * float(nominal)
         self.rate_hi = float(rate_hi) * float(nominal)
+        # OPT-IN bound on how fast the APPLIED period may follow the measured
+        # one, in seconds of period per second of wall clock.  0.0 (default)
+        # is the historical behaviour and is byte-identical to it.
+        #
+        # Why it exists: `RateEstimator` is a median over `window`, so it does
+        # not follow a drift smoothly -- it holds the old value for half a
+        # window and then steps.  Measured here on a 0.092 -> 0.110 s step at
+        # window 20: the estimate is 0.092 for 9 samples (0.83 s), then 0.101
+        # for one, then 0.110, i.e. the whole 0.018 s arrives in two samples.
+        # Every adapted constant is linear in the period, so that is a step in
+        # `apply_ahead_s` (0.0156 s here) and in `thr_lead_s` (0.039 s) inside
+        # one frame.  A slew spreads it: at 0.01 s/s the same step takes 1.8 s.
+        self.slew = float(rate_slew)
+        self._t_prev = None
         self.clamped = 0
         self.applied = float(nominal)
         self.values = self.adapter.values(nominal)
@@ -481,8 +496,29 @@ class RateControl:
         if not (self.rate_lo <= p <= self.rate_hi):
             self.clamped += 1
             p = min(max(p, self.rate_lo), self.rate_hi)
+        if self.slew > 0.0:
+            if self._t_prev is None:
+                # ACQUISITION is not a drift: the first estimate the window is
+                # ready to give is taken whole.  Rate-limiting it too would
+                # leave the car racing the 0.104 s tune on a 0.058 s host for
+                # `|0.104 - 0.058| / slew` seconds, which is the whole race at
+                # any useful slew.
+                self._t_prev = float(t_stamp)
+            else:
+                # Bound the CHANGE, not the value: a clamped or stepped
+                # estimate is still followed, only smoothly.  The budget is
+                # measured from the last ACCEPTED change, not from the last
+                # sample -- otherwise `min_change` and the slew deadlock each
+                # other (a per-sample budget of `slew * period` below
+                # `min_change` is never big enough to be applied, and the
+                # adaptation freezes at its acquisition value for the rest of
+                # the run: measured, `rate_slew` 0.005 on a 0.058 -> 0.125 s
+                # ramp gave 74 collisions in 60 laps that way).
+                step = self.slew * max(float(t_stamp) - self._t_prev, 0.0)
+                p = min(max(p, self.applied - step), self.applied + step)
         if abs(p - self.applied) < self.min_change:
             return self.values
+        self._t_prev = float(t_stamp)
         self.applied = p
         v = self.adapter.values(p)
         self.values = v

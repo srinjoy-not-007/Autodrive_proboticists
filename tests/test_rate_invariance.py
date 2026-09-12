@@ -312,11 +312,11 @@ class TestCommandHold:
 # --------------------------------------------------------------------------
 # mpc3_core.RateControl  -- the encoder's reject window follows too
 # --------------------------------------------------------------------------
-def _rate_control(thr=None, speed_est=None, enabled=True):
+def _rate_control(thr=None, speed_est=None, enabled=True, **kw):
     mpc = types.SimpleNamespace(set_rate=lambda **kw: None)
     act = types.SimpleNamespace(dead_time=0.135)
     return RateControl(mpc, act, enabled=enabled, speed_est=speed_est, thr=thr,
-                       nominal=NOMINAL)
+                       nominal=NOMINAL, **kw)
 
 
 def _feed(rc, period, n=30):
@@ -325,6 +325,62 @@ def _feed(rc, period, n=30):
         rc.update(t)
         t += period
     return rc
+
+
+def _stamps(rc, period, n, t=1000.0):
+    """Feed `n` stamps `period` apart, continuing from `t`; returns the next."""
+    for _ in range(n):
+        rc.update(t)
+        t += period
+    return t
+
+
+class TestRateSlew:
+    """`rate_slew`: OPT-IN bound on how fast the APPLIED period may move.
+
+    The organisers' period is unknown and may DRIFT mid-run (OBS recording
+    starting, thermal throttling).  `RateEstimator` is a median, so it does not
+    follow a drift smoothly -- measured on a 0.092 -> 0.110 s step at window
+    20, it holds 0.092 for nine samples and then delivers the whole 0.018 s in
+    two.  Off (0.0) is the default and is byte-identical to the tune that
+    raced.
+    """
+
+    def test_off_by_default_and_the_step_arrives_whole(self):
+        rc = _rate_control()
+        t = _stamps(rc, 0.092, 30)
+        assert rc.slew == 0.0
+        assert rc.applied == pytest.approx(0.092, abs=1e-9)
+        _stamps(rc, 0.110, 25, t)
+        assert rc.applied == pytest.approx(0.110, abs=1e-9)
+
+    def test_acquisition_is_never_rate_limited(self):
+        """A slow slew must not leave the car on the 0.104 s tune all race."""
+        rc = _rate_control(rate_slew=0.005)
+        _stamps(rc, 0.058, 30)
+        assert rc.applied == pytest.approx(0.058, abs=1e-9)
+
+    def test_a_drift_is_followed_but_bounded(self):
+        rc = _rate_control(rate_slew=0.01)
+        t = _stamps(rc, 0.092, 30)
+        t = _stamps(rc, 0.110, 12, t)      # the step lands mid-window
+        assert 0.092 < rc.applied < 0.110
+        _stamps(rc, 0.110, 60, t)          # given time it gets there
+        assert rc.applied == pytest.approx(0.110, abs=rc.min_change)
+
+    def test_the_budget_accumulates_across_skipped_samples(self):
+        """`min_change` and the slew must not deadlock each other.
+
+        A per-sample budget of `slew * period` below `min_change` would never
+        be big enough to apply, and the adaptation would freeze at its
+        acquisition value for the rest of the run -- measured in the harness,
+        `rate_slew` 0.005 on a 0.058 -> 0.125 s ramp took 74 collisions in 60
+        laps that way.
+        """
+        rc = _rate_control(rate_slew=0.005)
+        t = _stamps(rc, 0.092, 30)
+        _stamps(rc, 0.110, 200, t)
+        assert rc.applied == pytest.approx(0.110, abs=rc.min_change)
 
 
 class TestRateControlSpeedEstimator:

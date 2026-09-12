@@ -244,13 +244,26 @@ class MPC3Tracker(Node):
             ('rate_terms', ','.join(RATE_TERMS)),
             # Trust band on the MEASURED period, as a ratio of `rate_nominal`.
             # 0.5-1.5 x 0.104 s is [0.052, 0.156]; outside it `RateControl`
-            # falls back to the validated tune rather than extrapolating.  The
+            # clamps the PERIOD, so what is applied is the tune for 0.052 s (or
+            # 0.156 s), NOT the validated 0.104 s one -- and below 0.069 s
+            # `apply_floor_steps` makes the `apply` term inert anyway, so every
+            # period from 0.040 to 0.069 s publishes the same 0.060 s lead.  The
             # brief for the finals is that the organisers' machine may sit
             # anywhere in 0.05-0.11 s, and 0.050 s is BELOW that floor -- it
             # would silently race the 0.104 s tune at 20 Hz.  Exposed so the
             # floor can be moved from the launch line without a rebuild.
             ('rate_lo', 0.5),
             ('rate_hi', 1.5),
+            # OPT-IN bound on how fast the APPLIED period may follow the
+            # measured one, in seconds of period per second.  0.0 is off and
+            # byte-identical.  `RateEstimator` is a median, so a mid-run drift
+            # (an OBS recording starting, say) is not followed smoothly: it is
+            # held for half a window and then arrives in two samples.  Measured
+            # on a 0.092 -> 0.110 s step at window 20: 0.83 s of nothing, then
+            # the whole 0.018 s in two samples -- a 0.0156 s step in
+            # `apply_ahead_s` and a 0.039 s step in `thr_lead_s` inside one
+            # frame.  0.01 spreads that same step over 1.8 s.
+            ('rate_slew', 0.0),
             # --- iterative learning control (OPT-IN) --------------------------
             ('ilc_enable', False),
             ('ilc_bin_m', 0.25),
@@ -385,6 +398,7 @@ class MPC3Tracker(Node):
             terms=tuple(str(v['rate_terms']).split(',')),
             min_change=float(v['rate_min_change']),
             rate_lo=float(v['rate_lo']), rate_hi=float(v['rate_hi']),
+            rate_slew=float(v['rate_slew']),
             cmd_dead_time=float(v['cmd_dead_time']),
             delay_s=float(v['delay_s']),
             apply_ahead_s=float(v['apply_ahead_s']),
@@ -864,7 +878,12 @@ class MPC3Tracker(Node):
                 f'{self.rate_ctl.est.period * 1e3:.1f} ms '
                 f'({"adapted" if self.rate_ctl.enabled else "measured only"}: '
                 f'apply {self.mpc.cfg["apply_ahead_s"]:.3f} thr '
-                f'{self.mpc.cfg["thr_lead_s"]:.3f} nd {self.mpc.nd})')
+                f'{self.mpc.cfg["thr_lead_s"]:.3f} nd {self.mpc.nd}'
+                # The clamp is otherwise SILENT: on a host outside
+                # [rate_lo, rate_hi] x rate_nominal the constants in force are
+                # the ones for the clamp EDGE, not the measured period, and
+                # nothing in the log said so.  Count, not a warning per pose.
+                f'{f", clamped x{self.rate_ctl.clamped}" if self.rate_ctl.clamped else ""})')
 
     # ------------------------------------------------------------------
     def publish(self, steer, throttle):
