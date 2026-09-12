@@ -178,6 +178,19 @@ queued to test the speed dependence; a slip-robust fix (throttle slip
 guard / IMU-fused speed / conservative v_max for unseen tracks) is being
 designed offline. **This is the finals risk to close before Sep 16.**
 
+**Tight-circuit lines (Sept 12, offline; live A/B queued):** the drill's
+MESH_RACE_KAPPA_MAX 1.0 gate rejected every raceline on both 2025
+circuits while shipping centerlines that are tighter still (cdctf2025
+safe kappa max 2.10 = a skeleton S-kink in a 1.75 m corridor; icra2025
+1.63 = a genuine 172-degree hairpin, r 0.61 vs lock 0.56). A relative gate
+(kappa <= max(lock 1.78, the safe line's own max)) plus `--dkappa-max 1.5
+--dkappa-refine 3 --kappa-bound 1.0` (opt-in flags in make_track_lines.py,
+uncommitted, Porto/ICRA-2026 outputs byte-identical) yields fast lines at
+0.295-0.304 m clearance: cdctf ideal 10.66 -> 9.92, icra2025 14.56 ->
+13.85. Harness (432 laps, 0 collisions): -0.73 and -0.72 s/lap, better
+tracking (|e| p95 0.25 vs 0.37) but driven min clearance 0.07-0.11 m vs
+0.15-0.20 for safe -- the number to watch live. Porto's pick unchanged.
+
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
 qualification session entitles a team for the final race"); ranking is
