@@ -9,7 +9,11 @@ collisions, 70.82 s on the simulator timer, best 6.98 s.** Baseline main
 89.6 s; winners 65 s. Rejected since: the ay 6.75 line (2-3/100 at the
 s 11.2 hairpin entry) and the CMA "smooth" parameter set on the shipping
 line (5/32, same corner). That entry is the next limit; single-parameter
-isolations of the search's knobs are running.
+isolations of the search's knobs: ay_budget 6.57 alone -> 2/32; horizon 30 +
+step_dt 0.040 alone -> 2/32 but median 7.06 (fast); both collide at the s
+11.3 hairpin entry arriving at ~5 m/s one second before a 2.9 m/s corner,
+i.e. a late/weak braking point, not a steering problem. Testing horizon 30
+with earlier braking (a_brake 3.5; thr_lead_s 0.30).
 
 ## September 13: 71.6 s / 100 laps clean
 
