@@ -131,6 +131,15 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   second clean control, not a stall test). Ownership fixed; the gap
   and both arms of chain7 log stalls; the baseline-with-stalls arm is
   re-queued.
+- stall_gap arm (8 sim pauses of 0.4-0.63 s delivered for 0.33 asked,
+  gap_predict_s 0.6, no localization gap params): 32 laps, 0
+  collisions, but one 21.2 s lap: 7 s after the second stall the car
+  STOPPED at s 27.1 for 13 s (throttle 0, steering held, no collision)
+  and resumed by luck -- the coast watchdog after localization declared
+  itself lost post-stall and, with publish_on_reloc false, published no
+  pose. Exactly the predicted localization failure; the `both` arm (with
+  gap_dt / gap_noise_mult / lost_patience_min / scan_dt_max / enc_gap_max)
+  is the real test.
 - Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
   data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
   0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
