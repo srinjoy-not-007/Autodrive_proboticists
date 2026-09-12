@@ -114,6 +114,22 @@ stage "3/5 centerline + swept racing lines (no recon: checkpoints stand in)"
 #                        rung that still yields an accepted candidate, and if
 #                        none does, make_track_lines ships `safe` by itself.
 #
+#   --checkpoints auto --gate-separation 0.60
+#                        OPT-IN, not in the default set. The lap counter keeps
+#                        ONE checkpoint latch (LapTimer.cs) and overwrites
+#                        PreviousCheckpoint on every trigger EXIT, so a body
+#                        inside two trigger boxes at once can drop a
+#                        checkpoint and the lap is not scored at all --
+#                        measured once in 32 laps on cdctf2025 fast3_m53,
+#                        whose gates 18-20 sit 0.39-0.48 m apart along the
+#                        line. 0.60 m = body 0.50 + box 0.10. Stage 5 below
+#                        MEASURES this on whatever line was chosen and exits 2
+#                        if it is short, so add these two flags and regenerate
+#                        when it does. On cdctf2025 the constraint costs the
+#                        whole width-using raceline (every candidate then
+#                        fails the kappa gate) and the safe line is what
+#                        ships, so it is a deliberate choice, not a default.
+#
 # `LINE_ARGS=` (explicitly empty) restores the old flagless behaviour; setting
 # it to anything else replaces the set wholesale.
 DRILL_LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0

@@ -91,9 +91,11 @@ qualification is secure (pass/fail on collisions; the built image raced
 the organisers' way on the real display at 70.06 s clean), the finals
 work resumes on Sep 16 with the released track. Steer_tau 0.02 vs 0.04:
 display 69.88 s with the best hairpin margin; circuit regression at
-0.02 clean on CDC-TF (113.4) and ICRA 2025 (142.3, +2 s); ICRA 2026 and
-Porto Xvfb were the last runs of the session (see experiments.tsv rows
-icra26_t02, porto_t02_xvfb). Open items for the next session, ranked:
+0.02 clean on CDC-TF (113.4) and ICRA 2025 (142.3, +2 s), ICRA 2026
+150.1 (+2 s), Porto Xvfb 32 laps with 1 collision (71.6 s) where 0.04
+had 100/0. **Decision: steer_tau 0.04 stays shipped**; 0.02 is the
+display-preferred alternative (PIT_CREW_CONTROLLER_ARGS="-p
+steer_tau:=0.02") if the organisers' period turns out to be ~0.058. Open items for the next session, ranked:
 1. The line generator fails on a track with a corner tighter than the
    steering lock (SRL 2024 IROS: 24/24 candidates rejected, safe line
    0.265 m effective clearance). A partial attempt is saved as

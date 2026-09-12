@@ -1,0 +1,471 @@
+diff --git a/src/pit_crew/follow_the_gap.py b/src/pit_crew/follow_the_gap.py
+index 87905e1..52c2a6b 100644
+--- a/src/pit_crew/follow_the_gap.py
++++ b/src/pit_crew/follow_the_gap.py
+@@ -48,13 +48,55 @@ class FollowTheGap(Node):
+             ('escape_seconds', 1.2),        # how long to reverse
+             ('direction_lock_s', 4.0),      # s after an escape to hold heading
+             ('output_ns', ''),              # set to route via the arbiter
++            # ---- opt-in, all default OFF -------------------------------- #
++            # Everything below defaults to 0.0, i.e. this node behaves exactly
++            # as it did before unless a parameter file asks otherwise. They
++            # exist because the offline harness (`tools/ftg_sim.py`) drove the
++            # shipped profile round five circuits and it only completed one of
++            # them; see docs/FINALS_RUNBOOK.md for the measured before/after.
++            #
++            # BACKTRACK VETO. Follow-the-Gap has no notion of travel direction,
++            # and the failure is specific: at a wall TIP -- the end of an
++            # infield barrier -- the corridor it has just driven is wide open
++            # beside it, so the widest gap points back down the track and the
++            # car U-turns. Measured on 2025 CDC-TF and on the 2024 IROS
++            # rehearsal track, where it cost every lap. The discriminator is
++            # not heading (a hairpin turns 180 deg too) but LINE OF SIGHT to
++            # where we have already been: round a hairpin a wall stands between
++            # the two corridors, at a wall tip nothing does. So dead-reckon a
++            # short trail, and veto a gap that points at a piece of trail we
++            # can still SEE and left more than `backtrack_min_s` metres ago.
++            ('backtrack_veto', 0.0),        # m, veto radius; 0 = off
++            ('backtrack_min_s', 5.0),       # m back along our own path
++            ('backtrack_max_s', 25.0),      # m; older than this is a lap ago
++            ('backtrack_probe', 1.2),       # m ahead along the candidate gap
++            # ADAPTIVE BUBBLE. The fixed 0.35 m bubble plus the 0.30 m
++            # disparity margin masks 0.435 m either side of the nearest point;
++            # in a 1.0 m corridor that is the whole corridor, and the node then
++            # has no gap at all and stops. Scale the bubble by the free width
++            # the scan actually reports instead.
++            ('bubble_frac', 0.0),           # fraction of half-corridor; 0 = off
++            ('bubble_min', 0.12),           # m, never below this
++            # SPEED FROM GAP WIDTH, not just from straight-ahead range. A gap
++            # can be 6 m deep and 0.8 m wide; the depth-only rule sends the car
++            # into it at v_max.
++            ('gap_width_vmax', 0.0),        # m of width that earns v_max; 0=off
++            ('gap_width_floor', 0.35),      # smallest speed fraction it may ask
++            # STUCK BY SPEED. The frontal-clearance test misses the case that
++            # actually happens: the car wedged at an angle with its nose clear.
++            # The encoders say it is not moving; believe them.
++            ('stuck_speed', 0.0),           # m/s below which we are not moving
+         ])
+         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
+          self.disp_thresh, self.extend_margin, self.bubble_r,
+          fov_deg, self.range_clip, self.steer_sign,
+          self.steer_alpha, self.steer_tau, self.center_gain, throttle_gain,
+          self.stuck_clearance, self.stuck_seconds,
+-         self.escape_seconds, self.dir_lock_s, output_ns) = [x.value for x in p]
++         self.escape_seconds, self.dir_lock_s, output_ns,
++         self.backtrack_veto, self.backtrack_min_s, self.backtrack_max_s,
++         self.backtrack_probe, self.bubble_frac, self.bubble_min,
++         self.gap_width_vmax, self.gap_width_floor,
++         self.stuck_speed) = [x.value for x in p]
+         # Heading integrated from the gyro, and the heading the car was
+         # travelling in before it got stuck. Follow-the-Gap has no notion of
+         # travel direction: measured on the 2025 ICRA circuit, it circulated
+@@ -73,6 +115,16 @@ class FollowTheGap(Node):
+         self._stuck_since = None
+         self._escape_until = None
+         self._escape_steer = 0.0
++        # Dead-reckoned breadcrumb trail, for `backtrack_veto`. Odometry only:
++        # gyro heading and encoder speed, no map and no localization, because
++        # this node is the fallback for the case where those have died. It only
++        # has to be right over the last ~25 m.
++        self.speed_est = vehicle.SpeedEstimator()
++        self._speed = 0.0
++        self._odo = [0.0, 0.0, 0.0]        # x, y, travelled distance
++        self._trail = []                   # (x, y, s) every ~0.25 m
++        self._scan_t = None
++        self._slow_since = None
+ 
+         self.fov_limit = math.radians(fov_deg)
+         self.angles = vehicle.LIDAR_ANGLE_MIN + \
+@@ -106,11 +158,17 @@ class FollowTheGap(Node):
+         self._yaw_t = now
+ 
+     def on_encoder(self, wheel, msg: JointState):
+-        # FTG deliberately ignores measured speed: it commands a fixed v_max
+-        # and lets the open-loop throttle curve hold it, so there is no speed
+-        # loop to close here. (The encoders themselves are fine and the
+-        # localizer uses them — see vehicle.SpeedEstimator.) Diagnostics only.
+-        pass
++        # FTG deliberately does not close a speed LOOP: it commands a fixed
++        # v_max and lets the open-loop throttle curve hold it. It does need to
++        # know whether the car is moving at all -- for `stuck_speed`, and to
++        # dead-reckon the breadcrumb trail `backtrack_veto` needs. Both are
++        # opt-in, so with the shipped profile this stays a no-op.
++        if self.stuck_speed <= 0.0 and self.backtrack_veto <= 0.0:
++            return
++        if not msg.position:
++            return
++        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
++        self._speed = self.speed_est.update(wheel, stamp, float(msg.position[0]))
+ 
+     # ------------------------------------------------------------------ #
+ 
+diff --git a/tools/make_track_lines.py b/tools/make_track_lines.py
+index 80833a3..c4ef796 100755
+--- a/tools/make_track_lines.py
++++ b/tools/make_track_lines.py
+@@ -58,6 +58,7 @@ import yaml
+ sys.path.insert(0, 'tools')
+ from footprint_analysis import load_dist, clearance, CORNERS   # noqa: E402
+ from extract_centerline import ensure_traj                     # noqa: E402
++from open_corners import curvature as curvature_xy             # noqa: E402
+ 
+ import numpy as np   # noqa: E402
+ 
+@@ -433,9 +434,59 @@ def build(track, tag, extra, cfg):
+     # ICRA-2026 never reach the lock limit, so this candidate only ever adds an
+     # option on tracks that would otherwise produce nothing.
+     opened = f'data/racelines/{stem}_opened_{tag}'
++    # --open-kappa switches that call to the CORRIDOR-AWARE opener, which is a
++    # different fix for a different failure. `open_corners.py`'s other methods
++    # read the room out of the centerline CSV's w_right/w_left, rays cast along
++    # the normal and capped at 3.0 m; on SRL 2024 IROS w_right is 3.025 for
++    # most of the lap, so they are told there is unlimited room and produce a
++    # line with 0.079 m of body clearance. `--method corridor` reads the map's
++    # distance field instead -- the same field the clearance gate measures --
++    # and rounds only the corners that are tighter than the target, projecting
++    # every iteration back onto `dist >= --open-wall-floor`.
++    #
++    # It is also the fix for the RACELINE candidates, which is why the sweep
++    # below picks up the opened reference as a second source. A pixel skeleton is the medial axis, and the medial axis of a
++    # corridor whose outer wall has a sharp vertex has a sharp vertex too,
++    # however wide the corridor: SRL 2024 IROS has |kappa| 5.42 (radius 0.18 m)
++    # at a point 1.415 m from the nearest wall. Every min-curvature candidate
++    # then has to cusp there -- 24/24 rejected, "direction reversal(s)" on the
++    # skeleton and "corridor exhausted" on the anchored reference. Off the
++    # opened reference the same sweep solves cleanly.
++    open_args = ['--method', 'corridor', '--map', mp,
++                 '--kappa-target', f'{cfg.open_kappa:g}',
++                 '--wall-floor', f'{cfg.open_wall_floor:g}'] \
++        if cfg.open_kappa is not None else []
+     has_opened = subprocess.run(
+-        [VENV, 'tools/open_corners.py', cl + '.csv', '--out', opened],
+-        capture_output=True, text=True).returncode == 0
++        [VENV, 'tools/open_corners.py', cl + '.csv', '--out', opened]
++        + open_args, capture_output=True, text=True).returncode == 0
++
++    # The opener is an exact no-op where the centerline already meets the
++    # target, so on Porto (peak 1.02) nothing engages and every shipped output
++    # is byte-identical with or without the flag.
++    engaged = False
++    if cfg.open_kappa is not None and has_opened:
++        # Geometry, not bytes: the opener returns the reference unchanged when
++        # nothing exceeds the target, but it rewrites it at %.4f, so the FILES
++        # differ on Porto and ICRA-2026 while the LINE does not.
++        xy_cl = np.loadtxt(cl + '.csv', delimiter=',')[:, :2]
++        xy_op = np.loadtxt(opened + '.csv', delimiter=',')[:, :2]
++        moved = (xy_cl.shape != xy_op.shape
++                 or np.abs(xy_cl - xy_op).max() > 1e-4)
++        k_cl = float(np.abs(curvature_xy(xy_cl)).max())
++        k_op = float(np.abs(curvature_xy(xy_op)).max()) if moved else k_cl
++        # The relaxation is projected onto the corridor every iteration, and on
++        # a reference that is already close to a wall the projection can put
++        # back a kink the smoothing just took out -- measured on ICRA-2026's
++        # trajectory-anchored reference, |kappa| 1.57 -> 2.22. An opener that
++        # makes the peak worse is not used.
++        engaged = moved and k_op < k_cl - 1e-6
++        if engaged:
++            print(f'  {tag:9s} corner opening: reference |kappa| max '
++                  f'{k_cl:.2f} -> {k_op:.2f} 1/m (target '
++                  f'{cfg.open_kappa:g}); racelines are swept off BOTH')
++        elif moved:
++            print(f'  {tag:9s} corner opening: |kappa| max {k_cl:.2f} -> '
++                  f'{k_op:.2f} 1/m -- no better, reference left alone')
+ 
+     out = {'centerline': cl}
+     # `rungs` is [None] -- one pass, no wall floor -- unless
+@@ -446,15 +497,31 @@ def build(track, tag, extra, cfg):
+     # has already been beaten are skipped rather than solved, so a track that
+     # clears 0.53 costs exactly what it did before.
+     rungs = cfg.min_halfwidth_ladder or [None]
+-    cands = [('safe', ['--centerline-only'], None, None)]
++    cands = [('safe', ['--centerline-only'], None, None, cl, '')]
++    # With the opener engaged the opened line is the FALLBACK, so it has to be
++    # measured before the racelines are gated against it: `--kappa-gate safe`
++    # reads the fallback's own peak, and reading the un-opened line's 3.33
++    # would wave through a raceline no tracker has held.
++    if has_opened and engaged:
++        cands += [('opened', ['--centerline-only'], None, None, opened, '')]
++    # Both references, not one. Opening the corners is what makes a raceline
++    # solvable on SRL 2024 IROS (24/24 rejected off the plain skeleton, clean
++    # off the opened one) and it is what makes it UNsolvable on ICRA-2026
++    # (every w_veh "corridor exhausted" off the opened reference, where the
++    # plain one yields 0.395 m at 14.27 s). Sweeping both costs one extra pass
++    # on the tracks where the opener engages at all and cannot lose a candidate
++    # that exists today.
++    refs = [(cl, '')] + ([(opened, '_o')] if engaged else [])
+     for m in rungs:
+-        cands += [('raceline', ['--w-veh', str(w)], w, m) for w in cfg.w_veh]
+-    if has_opened:
+-        cands += [('opened', ['--centerline-only'], None, None)]
++        for rsrc, rtag in refs:
++            cands += [('raceline', ['--w-veh', str(w)], w, m, rsrc, rtag)
++                      for w in cfg.w_veh]
++    if has_opened and not engaged:
++        cands += [('opened', ['--centerline-only'], None, None, opened, '')]
+ 
+     best = None
+     rung_used = None
+-    for kind, args, w, m in cands:
++    for kind, args, w, m, src_stem, rtag in cands:
+         if kind == 'raceline' and best is not None and m != rung_used:
+             continue
+         args = args + cfg.profile
+@@ -466,11 +533,13 @@ def build(track, tag, extra, cfg):
+         suffix = tag if w is None else f'{tag}_w{w:g}'
+         if m is not None:
+             suffix += f'_m{round(m * 100):d}'
++        suffix += rtag
+         path = f'data/racelines/{stem}_{kind}_{suffix}'
+         label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
+         if m is not None:
+             label += f' m{m:.2f}'
+-        src = (opened if kind == 'opened' else cl) + '.csv'
++        label += '/op' if rtag else ''
++        src = src_stem + '.csv'
+         if subprocess.run([VENV, 'tools/optimize_raceline.py', src,
+                            '--out', path] + args,
+                           capture_output=True, text=True).returncode != 0:
+@@ -511,9 +580,13 @@ def build(track, tag, extra, cfg):
+                 # the absolute 1.0 bar -- cdctf2025 peaks at 2.10 1/m and
+                 # icra2025 at 1.63 -- so rejecting a raceline at 1.7 while
+                 # shipping a centerline at 2.10 rejects the easier line.
++                fb = out.get('safe')
++                if (fb is None or not fb.get('ok')) and out.get(
++                        'opened', {}).get('ok'):
++                    fb = out['opened']       # what would actually be shipped
+                 gate = max(1.0 / MIN_TURN_R, float(np.abs(np.loadtxt(
+-                    out['safe']['path'] + '.csv', delimiter=',')[:, 4]).max())
+-                    if 'safe' in out else 0.0)
++                    fb['path'] + '.csv', delimiter=',')[:, 4]).max())
++                    if fb else 0.0)
+             if kmax > gate:
+                 bad.append(f'kappa max {kmax:.2f} above the {gate:.2f} '
+                            f'the tracker has held on a width-using line')
+@@ -653,6 +726,25 @@ def configure(argv=None):
+                          'never inside two trigger boxes at once, and REJECT '
+                          'any candidate that still occupies three. A lap the '
+                          'sim does not count costs a whole lap time.')
++    ap.add_argument('--open-kappa', type=float, default=None, metavar='K',
++                    help='OPT-IN (off by default; outputs are byte-identical '
++                         'without it, and byte-identical WITH it on any track '
++                         'whose centerline already meets K). Round every '
++                         'corner of the reference centerline tighter than K '
++                         '1/m, using the map\'s distance field, and build the '
++                         'raceline candidates off the result. This is the fix '
++                         'for a MEDIAL-AXIS corner: a skeleton centerline '
++                         'kinks wherever the outer wall has a sharp vertex, '
++                         'however wide the corridor there -- SRL 2024 IROS '
++                         'peaks at |kappa| 5.42 (radius 0.18 m) 1.415 m from '
++                         'the nearest wall, which costs the safe line 0.261 m '
++                         'of apex deviation and cusps every raceline '
++                         'candidate. 1.4 (radius 0.714 m, 27%% outside the '
++                         'steering lock) is the drill value.')
++    ap.add_argument('--open-wall-floor', type=float, default=0.45, metavar='M',
++                    help='hard floor on the opened reference\'s distance to '
++                         'the nearest wall (default 0.45 = car half-width '
++                         '0.135 + 0.315). Only used with --open-kappa.')
+     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
+                     help='pass --kappa-bound to the QP for the raceline '
+                          'candidates (opt-in; off by default).')
+diff --git a/tools/open_corners.py b/tools/open_corners.py
+index 1bdb723..acbc19f 100644
+--- a/tools/open_corners.py
++++ b/tools/open_corners.py
+@@ -40,6 +40,142 @@ def curvature(xy):
+     return (dx * ddy - dy * ddx) / np.maximum((dx * dx + dy * dy) ** 1.5, 1e-9)
+ 
+ 
++class CorridorField:
++    """The map's own distance-to-wall field, sampled bilinearly with a gradient.
++
++    `open_corners` and every other method in this file read the corridor out of
++    the centerline CSV's `w_right`/`w_left` columns, which are rays cast along
++    the reference normal and capped at 3.0 m. On a track with a genuinely wide
++    corner that cap is reached (SRL 2024 IROS: `w_right` is 3.025 for most of
++    the lap), so the CSV says there is unlimited room where there is a wall
++    just off the normal -- which is how the existing `opened` candidate comes
++    out at 0.079 m of body clearance on that track. The distance field does not
++    have that failure mode: it is the same field `footprint_analysis` measures
++    clearance with, so what the opener is told and what the gate checks agree.
++    """
++
++    def __init__(self, prefix):
++        from scipy import ndimage
++        from footprint_analysis import load_dist
++        self._nd = ndimage
++        self.d, self.res, self.ox, self.oy = load_dist(prefix)
++        self.gy, self.gx = np.gradient(self.d, self.res)
++
++    def _coords(self, p):
++        return np.vstack([(p[:, 1] - self.oy) / self.res,
++                          (p[:, 0] - self.ox) / self.res])
++
++    def dist(self, p):
++        return self._nd.map_coordinates(self.d, self._coords(p), order=1,
++                                        mode='nearest')
++
++    def outward(self, p):
++        """Unit vector pointing away from the nearest wall."""
++        c = self._coords(p)
++        g = np.column_stack([
++            self._nd.map_coordinates(self.gx, c, order=1, mode='nearest'),
++            self._nd.map_coordinates(self.gy, c, order=1, mode='nearest')])
++        return g / np.maximum(np.linalg.norm(g, axis=1, keepdims=True), 1e-9)
++
++
++def resample_closed(xy, n):
++    """Uniform arclength resample of a closed path, n points."""
++    seg = np.linalg.norm(np.diff(np.vstack([xy, xy[:1]]), axis=0), axis=1)
++    s = np.concatenate([[0.0], np.cumsum(seg)])
++    t = np.linspace(0.0, s[-1], n, endpoint=False)
++    return np.column_stack([np.interp(t, s, np.r_[xy[:, 0], xy[0, 0]]),
++                            np.interp(t, s, np.r_[xy[:, 1], xy[0, 1]])])
++
++
++def open_kappa_corridor(xy, field, k_target, floor, iters=600, lam=0.30,
++                        max_shift=1.5, grow=5, proj=4):
++    """Round every corner tighter than `k_target`, inside the real corridor.
++
++    Why this is needed at all: a pixel skeleton IS the medial axis, and the
++    medial axis of a corridor whose OUTER wall has a sharp vertex has a sharp
++    vertex too -- however wide the corridor is. Measured on SRL 2024 IROS at
++    (1.38, -9.73): centerline |kappa| 5.42 (radius 0.18 m, a third of the
++    0.561 m steering lock) at a point that is 1.415 m from the nearest wall.
++    Nothing about that corner is tight; only the line through it is. The same
++    corner is what makes every min-curvature candidate cusp, because the QP's
++    reference spline has to follow it.
++
++    The relaxation is the Laplacian one -- deliberately, because shortening the
++    path is exactly the right move at a kink -- but it is gated on |kappa|
++    exceeding the target, so a corner that already meets it is never touched
++    and a straight is never pulled off line. Each iteration is projected back
++    onto `dist >= floor` along the distance field's own gradient, so the
++    corridor is a hard constraint rather than a penalty, and the whole path is
++    re-spaced afterwards so the smoothing cannot bunch points up.
++
++    Returns the opened path (same number of points, uniform spacing).
++    """
++    from scipy import ndimage
++    # A no-op must be an EXACT no-op: on a track whose centerline already meets
++    # the target (Porto peaks at 1.02, ICRA-2026 at 0.98) the resample alone
++    # would move every point by a few mm and change every downstream byte.
++    if np.abs(curvature(xy)).max() <= k_target:
++        return xy.copy()
++    n = len(xy)
++    base = resample_closed(xy, n)
++    p = base.copy()
++    for _ in range(iters):
++        k = np.abs(curvature(p))
++        # Act only where the line is tighter than asked, and ramp in: a hard
++        # on/off weight moves the boundary point alone and puts a new kink
++        # where the old one was.
++        w = np.clip((k - k_target) / max(k_target, 1e-6), 0.0, 1.0)
++        w = ndimage.maximum_filter1d(w, size=2 * grow + 1, mode='wrap')
++        w = ndimage.uniform_filter1d(w, size=2 * grow + 1, mode='wrap')
++        if not w.any():
++            break
++        lap = np.roll(p, 1, axis=0) + np.roll(p, -1, axis=0) - 2.0 * p
++        p = p + lam * w[:, None] * lap
++        for _ in range(proj):
++            need = floor - field.dist(p)
++            m = need > 0.0
++            if not m.any():
++                break
++            p[m] += field.outward(p[m]) * need[m, None]
++        # Never let a point wander a long way from the corridor it came from:
++        # the distance field cannot tell the inside of the ring from the
++        # outside, and a free-space blob beyond a wall looks just as good to it.
++        off = p - base
++        r = np.linalg.norm(off, axis=1)
++        far = r > max_shift
++        if far.any():
++            p[far] = base[far] + off[far] / r[far, None] * max_shift
++        p = resample_closed(p, n)
++    return p
++
++
++def widths_from_map(xy, field, limit=3.0, step=0.02):
++    """(w_right, w_left) by walking the normal out to the first wall.
++
++    The opened path is not a lateral offset of the reference -- points move in
++    two dimensions and are re-spaced -- so the CSV's widths cannot simply be
++    shifted by an alpha. Re-cast them instead, against the same field the
++    clearance gate uses.
++    """
++    nrm = normals(xy)
++    out = []
++    for sgn in (-1.0, 1.0):            # right first, then left
++        d = np.full(len(xy), limit)
++        live = np.ones(len(xy), dtype=bool)
++        t = step
++        while t < limit:
++            q = xy[live] + sgn * t * nrm[live]
++            hit = field.dist(q) <= 0.0
++            idx = np.flatnonzero(live)[hit]
++            d[idx] = t
++            live[idx] = False
++            if not live.any():
++                break
++            t += step
++        out.append(d)
++    return out[0], out[1]
++
++
+ def open_corners(cl, margin, iters, lam, focus, smooth):
+     """cl: (n,4) x, y, w_right, w_left. Returns lateral offset per point."""
+     c, wr, wl = cl[:, :2], cl[:, 2], cl[:, 3]
+@@ -211,7 +347,25 @@ def main():
+     ap.add_argument('--lam', type=float, default=0.35)
+     ap.add_argument('--smooth', type=int, default=5,
+                     help='half-window used to keep the offset profile smooth')
+-    ap.add_argument('--method', choices=('laptime', 'minimax', 'relax'),
++    ap.add_argument('--map', default=None, metavar='PREFIX',
++                    help='map the corridor is measured against, e.g. '
++                         'data/maps/finals_mesh. Required by (and switches on) '
++                         '--method corridor.')
++    ap.add_argument('--kappa-target', type=float, default=1.4, metavar='K',
++                    help='--method corridor: round every corner tighter than '
++                         'this, in 1/m. 1.4 is a 0.714 m radius, 27%% outside '
++                         'the 0.561 m steering lock, so the finished line has '
++                         'zero apex deviation.')
++    ap.add_argument('--wall-floor', type=float, default=0.45, metavar='M',
++                    help='--method corridor: hard floor on the opened path\'s '
++                         'distance to the nearest wall. 0.45 = car half-width '
++                         '0.135 + 0.315 m.')
++    ap.add_argument('--max-shift', type=float, default=1.5, metavar='M',
++                    help='--method corridor: furthest a point may move from '
++                         'the reference centerline. The distance field cannot '
++                         'tell the inside of the ring from the outside.')
++    ap.add_argument('--method', choices=('laptime', 'minimax', 'relax',
++                                         'corridor'),
+                     default='laptime',
+                     help='laptime: minimise a point-mass lap time (the one that '
+                          'works). minimax: optimise the largest curvature directly '
+@@ -235,6 +389,27 @@ def main():
+ 
+     cl = np.loadtxt(args.centerline, delimiter=',')
+     k0 = report('centerline', cl[:, :2])
++    if args.method == 'corridor':
++        if not args.map:
++            ap.error('--method corridor needs --map')
++        import sys
++        sys.path.insert(0, 'tools')
++        field = CorridorField(args.map)
++        p = open_kappa_corridor(cl[:, :2], field, args.kappa_target,
++                                args.wall_floor, iters=args.iters,
++                                max_shift=args.max_shift)
++        k1 = report('opened', p)
++        d = field.dist(p)
++        print(f'  -> R_min {1 / k0:.3f} m to {1 / k1:.3f} m, wall distance '
++              f'{field.dist(cl[:, :2]).min():.3f} -> {d.min():.3f} m '
++              f'(floor {args.wall_floor:.2f}), max shift '
++              f'{np.linalg.norm(p - cl[:, :2], axis=1).max():.3f} m')
++        wr, wl = widths_from_map(p, field)
++        np.savetxt(args.out + '.csv', np.column_stack([p[:, 0], p[:, 1],
++                                                       wr, wl]),
++                   delimiter=',', fmt='%.4f')
++        print(f'  wrote {args.out}.csv')
++        return
+     if args.method == 'laptime':
+         alpha, n, res = min_laptime(cl, args.margin, args.modes, args.ay,
+                                     args.vmax, args.penalty, args.iters,

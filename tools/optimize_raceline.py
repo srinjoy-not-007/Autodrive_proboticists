@@ -1123,10 +1123,10 @@ def gate_bounds(reftrack, normvec, args):
     so a crossing sits at `a0 + alpha * g` and a band maps straight through.
     These are kept apart from `checkpoint_bounds` because the two are consumed
     differently: the checkpoint-MARGIN bounds are symmetric about the
-    reference and so survive `corridor_of`'s mirrored corridor convention
+    reference and so survived `corridor_of`'s old mirrored convention
     (`-w_right, +w_left`), while a gate BAND is one-sided by design -- fed
-    through the mirror it put the QP's alpha 1.4 m the wrong side of its own
-    bound, measured.
+    through that mirror it put the QP's alpha 1.4 m the wrong side of its own
+    bound, measured.  `corridor_of` no longer mirrors on this path.
     """
     cps = load_checkpoints(args.checkpoints)
     floor = getattr(args, '_gate_relax', None)
@@ -1161,9 +1161,36 @@ def gate_bounds(reftrack, normvec, args):
 def corridor_of(reftrack, normvec, work, args, gates=True):
     """(lo, hi) bounds on the lateral shift alpha, as the solver sees them.
 
-    `work` is the corridor left by the body-sweep passes and already contains
-    the body half-width, so with no `--min-halfwidth` this is exactly the
-    `(-work[:, 2], work[:, 3])` the code used inline before -- byte-identical.
+    SIGN CONVENTION (established numerically, `tests/test_corridor_sign.py`).
+    tph's spline normals point to the RIGHT of travel, and `opt_min_curv`
+    bounds its alpha by `alpha <= reftrack[:, 2] - w_veh/2` and
+    `alpha >= -(reftrack[:, 3] - w_veh/2)`: column 2 (`w_tr_right_m`) is the
+    UPPER bound and column 3 (`w_tr_left_m`) the lower one. Measured against
+    the maps' own distance transforms, column 2 really is the wall distance
+    along +normal (cdctf2025 mean |err| 0.021 m against 1.312 m for column 3,
+    icra2025 0.015 against 0.541), so tph's box is the physical one and
+    positive alpha means RIGHT.
+
+    `(-work[:, 2], work[:, 3])` -- what this function returned for every line
+    ever shipped -- is therefore MIRRORED with respect to the QP's own box: it
+    clips alpha at the left wall on the right and vice versa. A bound that is
+    symmetric about the reference survives that; a ONE-SIDED bound
+    (`--min-halfwidth`, a gate band) does not. Restated through the mirror in
+    `_sweep_solve`, a wall floor whose feasible interval was `[lo, hi]` reached
+    the QP as `[-hi, -lo]` -- the mirror image of itself, which both forbids
+    legal positions and permits illegal ones wherever the two walls are not
+    equidistant. Measured cost on the two 2025 circuits at
+    `--min-halfwidth 0.53`: it is NOT what was keeping those lines under their
+    floor (held 0.522 -> 0.527 m on cdctf2025, 0.526 -> 0.520 m on icra2025;
+    the clearance passes bind first), but it was stating the constraint wrong.
+
+    So the mirror is corrected on the one-sided paths and left alone on the
+    plain path. That split is deliberate, not laziness: stating the plain
+    corridor in tph's sign is measured to move the Porto w_veh 0.60-0.78
+    `--dkappa-max` candidates (the clip binds there), and the shipping
+    `porto_mesh_cr_dk0.8.csv` comes from exactly that family. Fixing it means
+    re-driving those lines; until then the plain path stays bit-for-bit what
+    was validated.
 
     OPT-IN, September 12. `--min-halfwidth M` says: the PATH may not come
     closer than M to any wall. Why it is needed on top of `--w-veh`: w_veh
@@ -1175,10 +1202,11 @@ def corridor_of(reftrack, normvec, work, args, gates=True):
     (icra2025, s 42.5) from a wall. `--min-halfwidth` states the floor once
     and applies it at every stage.
     """
-    lo, hi = -work[:, 2], work[:, 3]
     if (getattr(args, 'min_halfwidth', None) is None
             and getattr(args, 'checkpoints', None) is None):
-        return lo, hi
+        return -work[:, 2], work[:, 3]      # FROZEN, mirrored -- see above
+    # tph's own sign: +alpha is right, bounded above by the right width.
+    lo, hi = -work[:, 3], work[:, 2]
     if gates and getattr(args, 'gate_separation', None):
         glo, ghi = gate_bounds(reftrack, normvec, args)
         lo, hi = np.maximum(lo, glo), np.minimum(hi, ghi)
@@ -1279,19 +1307,25 @@ def _sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
                     [reftrack[:, :2], keep])
                 args._extra_bounds = None
             # Restate the wall floor as a corridor width, so the QP's own
-            # `reftrack[:, 2] - w_veh/2` bound lands exactly on it.
+            # `reftrack[:, 2] - w_veh/2` bound lands exactly on it.  `keep` is
+            # read by tph as (right, left) = (upper, lower) bound on alpha, and
+            # `corridor_of` now hands back (lo, hi) in that same sign, so the
+            # RIGHT column takes `hi2` and the LEFT column `-lo2`.  It used to
+            # take them the other way round, which handed the QP the MIRROR
+            # IMAGE of a one-sided `--min-halfwidth` interval.
             inf = np.full((len(reftrack), 2), np.inf)
             lo2, hi2 = corridor_of(reftrack, normvec,
                                    np.column_stack([reftrack[:, :2], inf]),
                                    args, gates=False)
             keep_phys = keep.copy()
-            keep = np.minimum(keep, np.column_stack([-lo2, hi2])
+            keep = np.minimum(keep, np.column_stack([hi2, -lo2])
                               + args.w_veh / 2.0)
             if getattr(args, 'gate_separation', None):
-                # The gate band bounds tph's OWN alpha, so it is restated the
-                # other way round from the mirrored corridor above:
-                # `dev_right = keep_r - w/2 = b`, `dev_left = keep_l - w/2 =
-                # -a`.
+                # The gate band bounds tph's own alpha too, so it is restated
+                # the same way as the corridor above: `dev_right = keep_r -
+                # w/2 = b`, `dev_left = keep_l - w/2 = -a`.  (It was already
+                # written this way while `corridor_of` was mirrored, which is
+                # how the two disagreed.)
                 glo, ghi = gate_bounds(reftrack, normvec, args)
                 fin = np.isfinite(glo) | np.isfinite(ghi)
                 gk = np.column_stack([
@@ -1299,36 +1333,38 @@ def _sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
                     args.w_veh / 2.0
                     - np.where(np.isfinite(glo), glo, -np.inf)])
                 keep[fin] = np.minimum(keep[fin], gk[fin])
-            if (getattr(args, 'checkpoints', None) is not None
-                    and not getattr(args, 'gate_separation', None)):
-                # A gate can sit off the reference line's centre, so its bound
-                # can be one-sided and negative; the QP needs a corridor that
-                # still exists.  Only reached with --checkpoints, so the
-                # min-halfwidth lines are untouched.
+            if (getattr(args, 'gate_separation', None)
+                    or getattr(args, 'checkpoints', None) is not None):
+                # A GATE bound -- a band, or a box the reference line misses
+                # -- legitimately makes one of the two `keep` entries
+                # negative; that is how the QP is told "stay on the far
+                # side".  The checkpoint branch used to floor them at 0.05 m,
+                # which threw that half of the bound away: measured under
+                # --gate-separation (where the floor was already skipped for
+                # exactly this reason) the QP put alpha at +0.51 where the
+                # band said -1.27..-0.79.  Nothing is floored now; what the
+                # solver actually needs is that the two SUM to the vehicle
+                # width, which the fallback here guarantees.
                 #
-                # NOT applied under --gate-separation: a gate band is often
-                # entirely to one side of the reference (the whole point is to
-                # move the crossing), which makes one of the two `keep`
-                # entries legitimately negative, and flooring it at 0.05
-                # silently threw that half of the bound away -- measured, the
-                # QP then put alpha at +0.51 where the band said -1.27..-0.79.
-                # The solver only needs the two to SUM to the vehicle width,
-                # which the fallback below guarantees.
-                keep = np.maximum(keep, 0.05)
-            if getattr(args, 'gate_separation', None):
-                # The gate band is derived from the corridor the QP STARTED
-                # with, but the body-sweep passes shrink that corridor by up
-                # to 0.3 m at a hairpin, so the two can stop intersecting.
-                # The corridor wins where they do -- a line that keeps its
-                # gate spacing by driving through a wall is not a line -- and
-                # the finished-line report says what spacing survived.
+                # The band is derived from the corridor the QP STARTED with,
+                # but the body-sweep passes shrink that corridor by up to
+                # 0.3 m at a hairpin, so the two can stop intersecting.  The
+                # corridor wins where they do -- a line that keeps its gate
+                # spacing by driving through a wall is not a line -- and the
+                # finished-line report says what survived.
+                #
+                # NOT extended to a --min-halfwidth-only run: there the QP
+                # reporting "corridor exhausted" is the honest answer and the
+                # candidate is dropped, where the fallback instead hands back
+                # lines with kappa 12 1/m for the gates to reject (measured on
+                # icra2026_mesh).
                 short = keep.sum(axis=1) < args.w_veh + 0.02
                 if short.any():
                     keep[short] = keep_phys[short]
                     if not quiet:
-                        print(f'  gate separation: corridor wins at '
+                        print(f'  gate bounds: corridor wins at '
                               f'{int(short.sum())} of {len(keep)} reference '
-                              f'points (band and sweep do not intersect)')
+                              f'points (bound and sweep do not intersect)')
         shrink = float(np.mean(reftrack[:, 2:4] - keep))
         work = np.column_stack([reftrack[:, :2], keep])
         if not quiet:
