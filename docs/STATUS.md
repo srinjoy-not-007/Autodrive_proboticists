@@ -172,6 +172,12 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   rejected (direction reversals / corridor exhausted) and the safe line
   sits at 0.265 m effective clearance, below the floor** -- on a track
   like that the drill would ship an unproven line. Open; agent on it.
+- Qualification context (ICRA 2026 standings, same Porto track, 28
+  teams, all qualified -- there is no time cutoff, only the collision
+  tolerance): 70 s would have placed 2nd behind VAUL (64.80) and ahead
+  of DEWO SPEED (74.67). The final was won by the team ranked 9th in
+  qualification on a slower unseen track (110 s race, 11 s laps); the
+  qualification winner was outside the final's top ten.
 - **stall_base2 (shipping defaults, 8 real stalls of 0.4-1.0 s): 32
   laps, 0 collisions, longest lap 7.52 s, 70.27 s.** A sim pause freezes
   physics and telemetry together, so the defaults' 0.35 s coast is
