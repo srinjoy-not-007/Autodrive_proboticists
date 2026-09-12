@@ -129,9 +129,12 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   bm 0.40); tau 0 is dangerous on CDC-TF (26 collisions/144 on the pole
   plant); barrier 0.40 is free-or-better wherever the cap is >= 0.385
   (safe lines, fast3_m53) and worse at cap 0.345 (icra2025 fast2_m50).
-  pick_config now takes 0.40 at cap >= 0.385. Display A/B queued: Porto
-  steer_tau 0.02 + 0.40 vs the shipped 0.04 + 0.40 (harness: equal lap,
-  +0.078 m worst clearance).
+  pick_config now takes 0.40 at cap >= 0.385. **Display A/B: Porto
+  steer_tau 0.02 + 0.40 = 32/0, OFFICIAL 69.88 s, hairpin most-inside
+  p50 -0.257 / worst -0.275 (0/32 below -0.30)** vs 0.04 + 0.40 = 70.13 /
+  70.01 s, worst -0.296 / -0.313 (0 and 2 laps below -0.30): faster AND
+  more margin, as the sweep predicted. Circuit regression at 0.02
+  running (chain9); if clean, steer_tau 0.02 replaces 0.04 in the image.
 - Stall-test control (display, bm 0.40 + steer_tau 0.04, no stalls):
   32 laps, 1 collision on lap 32 at s 19.07 (offset -0.23 m at 4.35
   m/s, a different corner from the hairpin), 70.01 s. With the earlier
