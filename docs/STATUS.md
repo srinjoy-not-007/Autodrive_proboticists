@@ -6,7 +6,11 @@
 clearance, ideal 7.02 s), mesh map, single-threaded BLAS: 100 laps, 0
 collisions, 72.16 s (sim timer 71.70), median 7.19, best 6.94.** Chosen
 over `mc0.60_ay6.5` (71.63 / 72.49 s clean centuries, 0.292 m) as the equal
-with more room. Image race with the new line pending.
+with more room. Image with the new line raced as shipped: 14 laps, 0
+collisions, 73.75 s sim timer, PASS (the previous image sampled 70.82 s;
+14-lap samples scatter ~1.5 s). w_veh 0.63 at ay 7.0: best lap 6.71 s but
+4 collisions/32 (s 11.3 hairpin entry x3) -- rejected; ay 6.75 is the limit
+for this tracker on this line family.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
