@@ -364,7 +364,7 @@ class CurvatureBias:
     a plain low pass of ``gyro_z / v - tan(delta_meas)/L``, clamped, held
     constant across the horizon.
 
-    This is NOT the static understeer curve that CLAUDE.md forbids in the
+    This is NOT the static understeer curve the project notes forbid in the
     rollout.  That was an open-loop table that told the controller the tyres
     deliver less than they do at large angles, so it wound on more lock and
     saturated.  This is a measured closed-loop residual: when the car IS turning
@@ -391,8 +391,8 @@ class CurvatureBias:
         nearly still.  **Clamp**: the limit is 0.10 1/m, not 0.30.  A big
         adverse bias tells the controller the car is not turning, it answers
         with more lock, that lock slides, and the estimator sees even less
-        turning -- the runaway CLAUDE.md documents for the open-loop understeer
-        curve, reachable here too.  0.10 1/m is 0.03 rad of steering, enough to
+        turning -- the runaway recorded for the open-loop understeer curve,
+        reachable here too.  0.10 1/m is 0.03 rad of steering, enough to
         cancel the model's optimism and too small to wind the car into a slide.
         """
         if self.gain <= 0.0 or v < self.v_min:

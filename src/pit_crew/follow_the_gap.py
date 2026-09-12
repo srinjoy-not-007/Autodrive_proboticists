@@ -48,13 +48,55 @@ class FollowTheGap(Node):
             ('escape_seconds', 1.2),        # how long to reverse
             ('direction_lock_s', 4.0),      # s after an escape to hold heading
             ('output_ns', ''),              # set to route via the arbiter
+            # ---- opt-in, all default OFF -------------------------------- #
+            # Everything below defaults to 0.0, i.e. this node behaves exactly
+            # as it did before unless a parameter file asks otherwise. They
+            # exist because the offline harness (`tools/ftg_sim.py`) drove the
+            # shipped profile round five circuits and it only completed one of
+            # them; see docs/FINALS_RUNBOOK.md for the measured before/after.
+            #
+            # BACKTRACK VETO. Follow-the-Gap has no notion of travel direction,
+            # and the failure is specific: at a wall TIP -- the end of an
+            # infield barrier -- the corridor it has just driven is wide open
+            # beside it, so the widest gap points back down the track and the
+            # car U-turns. Measured on 2025 CDC-TF and on the 2024 IROS
+            # rehearsal track, where it cost every lap. The discriminator is
+            # not heading (a hairpin turns 180 deg too) but LINE OF SIGHT to
+            # where we have already been: round a hairpin a wall stands between
+            # the two corridors, at a wall tip nothing does. So dead-reckon a
+            # short trail, and veto a gap that points at a piece of trail we
+            # can still SEE and left more than `backtrack_min_s` metres ago.
+            ('backtrack_veto', 0.0),        # m, veto radius; 0 = off
+            ('backtrack_min_s', 5.0),       # m back along our own path
+            ('backtrack_max_s', 25.0),      # m; older than this is a lap ago
+            ('backtrack_probe', 1.2),       # m ahead along the candidate gap
+            # ADAPTIVE BUBBLE. The fixed 0.35 m bubble plus the 0.30 m
+            # disparity margin masks 0.435 m either side of the nearest point;
+            # in a 1.0 m corridor that is the whole corridor, and the node then
+            # has no gap at all and stops. Scale the bubble by the free width
+            # the scan actually reports instead.
+            ('bubble_frac', 0.0),           # fraction of half-corridor; 0 = off
+            ('bubble_min', 0.12),           # m, never below this
+            # SPEED FROM GAP WIDTH, not just from straight-ahead range. A gap
+            # can be 6 m deep and 0.8 m wide; the depth-only rule sends the car
+            # into it at v_max.
+            ('gap_width_vmax', 0.0),        # m of width that earns v_max; 0=off
+            ('gap_width_floor', 0.35),      # smallest speed fraction it may ask
+            # STUCK BY SPEED. The frontal-clearance test misses the case that
+            # actually happens: the car wedged at an angle with its nose clear.
+            # The encoders say it is not moving; believe them.
+            ('stuck_speed', 0.0),           # m/s below which we are not moving
         ])
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
          self.disp_thresh, self.extend_margin, self.bubble_r,
          fov_deg, self.range_clip, self.steer_sign,
          self.steer_alpha, self.steer_tau, self.center_gain, throttle_gain,
          self.stuck_clearance, self.stuck_seconds,
-         self.escape_seconds, self.dir_lock_s, output_ns) = [x.value for x in p]
+         self.escape_seconds, self.dir_lock_s, output_ns,
+         self.backtrack_veto, self.backtrack_min_s, self.backtrack_max_s,
+         self.backtrack_probe, self.bubble_frac, self.bubble_min,
+         self.gap_width_vmax, self.gap_width_floor,
+         self.stuck_speed) = [x.value for x in p]
         # Heading integrated from the gyro, and the heading the car was
         # travelling in before it got stuck. Follow-the-Gap has no notion of
         # travel direction: measured on the 2025 ICRA circuit, it circulated
@@ -73,6 +115,16 @@ class FollowTheGap(Node):
         self._stuck_since = None
         self._escape_until = None
         self._escape_steer = 0.0
+        # Dead-reckoned breadcrumb trail, for `backtrack_veto`. Odometry only:
+        # gyro heading and encoder speed, no map and no localization, because
+        # this node is the fallback for the case where those have died. It only
+        # has to be right over the last ~25 m.
+        self.speed_est = vehicle.SpeedEstimator()
+        self._speed = 0.0
+        self._odo = [0.0, 0.0, 0.0]        # x, y, travelled distance
+        self._trail = []                   # (x, y, s) every ~0.25 m
+        self._scan_t = None
+        self._slow_since = None
 
         self.fov_limit = math.radians(fov_deg)
         self.angles = vehicle.LIDAR_ANGLE_MIN + \
@@ -106,11 +158,17 @@ class FollowTheGap(Node):
         self._yaw_t = now
 
     def on_encoder(self, wheel, msg: JointState):
-        # FTG deliberately ignores measured speed: it commands a fixed v_max
-        # and lets the open-loop throttle curve hold it, so there is no speed
-        # loop to close here. (The encoders themselves are fine and the
-        # localizer uses them — see vehicle.SpeedEstimator.) Diagnostics only.
-        pass
+        # FTG deliberately does not close a speed LOOP: it commands a fixed
+        # v_max and lets the open-loop throttle curve hold it. It does need to
+        # know whether the car is moving at all -- for `stuck_speed`, and to
+        # dead-reckon the breadcrumb trail `backtrack_veto` needs. Both are
+        # opt-in, so with the shipped profile this stays a no-op.
+        if self.stuck_speed <= 0.0 and self.backtrack_veto <= 0.0:
+            return
+        if not msg.position:
+            return
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self._speed = self.speed_est.update(wheel, stamp, float(msg.position[0]))
 
     # ------------------------------------------------------------------ #
 

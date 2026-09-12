@@ -58,6 +58,7 @@ import yaml
 sys.path.insert(0, 'tools')
 from footprint_analysis import load_dist, clearance, CORNERS   # noqa: E402
 from extract_centerline import ensure_traj                     # noqa: E402
+from open_corners import curvature as curvature_xy             # noqa: E402
 
 import numpy as np   # noqa: E402
 
@@ -432,10 +433,70 @@ def build(track, tag, extra, cfg):
     # inside the corridor so clearance stays a hard constraint. Porto and
     # ICRA-2026 never reach the lock limit, so this candidate only ever adds an
     # option on tracks that would otherwise produce nothing.
+    # TWO stems, deliberately. `opened_ref` is the CORRIDOR the opener
+    # writes -- four columns, x,y,w_tr_right,w_tr_left -- and `opened` is
+    # where the candidate built FROM it is written, seven columns of
+    # s,x,y,psi,kappa,vx,ax. They used to be one name, so the `opened`
+    # candidate read its own reference and overwrote it in place with a
+    # raceline. Every later sweep that used the opened reference then
+    # parsed a raceline as a centerline, found no w_tr_* columns, and the
+    # QP reported `corridor exhausted` for every w_veh on SRL 2024 IROS --
+    # a file clobber wearing the costume of a geometry limit.
+    opened_ref = f'data/racelines/{stem}_openedref_{tag}'
     opened = f'data/racelines/{stem}_opened_{tag}'
+    # --open-kappa switches that call to the CORRIDOR-AWARE opener, which is a
+    # different fix for a different failure. `open_corners.py`'s other methods
+    # read the room out of the centerline CSV's w_right/w_left, rays cast along
+    # the normal and capped at 3.0 m; on SRL 2024 IROS w_right is 3.025 for
+    # most of the lap, so they are told there is unlimited room and produce a
+    # line with 0.079 m of body clearance. `--method corridor` reads the map's
+    # distance field instead -- the same field the clearance gate measures --
+    # and rounds only the corners that are tighter than the target, projecting
+    # every iteration back onto `dist >= --open-wall-floor`.
+    #
+    # It is also the fix for the RACELINE candidates, which is why the sweep
+    # below picks up the opened reference as a second source. A pixel skeleton is the medial axis, and the medial axis of a
+    # corridor whose outer wall has a sharp vertex has a sharp vertex too,
+    # however wide the corridor: SRL 2024 IROS has |kappa| 5.42 (radius 0.18 m)
+    # at a point 1.415 m from the nearest wall. Every min-curvature candidate
+    # then has to cusp there -- 24/24 rejected, "direction reversal(s)" on the
+    # skeleton and "corridor exhausted" on the anchored reference. Off the
+    # opened reference the same sweep solves cleanly.
+    open_args = ['--method', 'corridor', '--map', mp,
+                 '--kappa-target', f'{cfg.open_kappa:g}',
+                 '--wall-floor', f'{cfg.open_wall_floor:g}'] \
+        if cfg.open_kappa is not None else []
     has_opened = subprocess.run(
-        [VENV, 'tools/open_corners.py', cl + '.csv', '--out', opened],
-        capture_output=True, text=True).returncode == 0
+        [VENV, 'tools/open_corners.py', cl + '.csv', '--out', opened_ref]
+        + open_args, capture_output=True, text=True).returncode == 0
+
+    # The opener is an exact no-op where the centerline already meets the
+    # target, so on Porto (peak 1.02) nothing engages and every shipped output
+    # is byte-identical with or without the flag.
+    engaged = False
+    if cfg.open_kappa is not None and has_opened:
+        # Geometry, not bytes: the opener returns the reference unchanged when
+        # nothing exceeds the target, but it rewrites it at %.4f, so the FILES
+        # differ on Porto and ICRA-2026 while the LINE does not.
+        xy_cl = np.loadtxt(cl + '.csv', delimiter=',')[:, :2]
+        xy_op = np.loadtxt(opened_ref + '.csv', delimiter=',')[:, :2]
+        moved = (xy_cl.shape != xy_op.shape
+                 or np.abs(xy_cl - xy_op).max() > 1e-4)
+        k_cl = float(np.abs(curvature_xy(xy_cl)).max())
+        k_op = float(np.abs(curvature_xy(xy_op)).max()) if moved else k_cl
+        # The relaxation is projected onto the corridor every iteration, and on
+        # a reference that is already close to a wall the projection can put
+        # back a kink the smoothing just took out -- measured on ICRA-2026's
+        # trajectory-anchored reference, |kappa| 1.57 -> 2.22. An opener that
+        # makes the peak worse is not used.
+        engaged = moved and k_op < k_cl - 1e-6
+        if engaged:
+            print(f'  {tag:9s} corner opening: reference |kappa| max '
+                  f'{k_cl:.2f} -> {k_op:.2f} 1/m (target '
+                  f'{cfg.open_kappa:g}); racelines are swept off BOTH')
+        elif moved:
+            print(f'  {tag:9s} corner opening: |kappa| max {k_cl:.2f} -> '
+                  f'{k_op:.2f} 1/m -- no better, reference left alone')
 
     out = {'centerline': cl}
     # `rungs` is [None] -- one pass, no wall floor -- unless
@@ -446,15 +507,31 @@ def build(track, tag, extra, cfg):
     # has already been beaten are skipped rather than solved, so a track that
     # clears 0.53 costs exactly what it did before.
     rungs = cfg.min_halfwidth_ladder or [None]
-    cands = [('safe', ['--centerline-only'], None, None)]
+    cands = [('safe', ['--centerline-only'], None, None, cl, '')]
+    # With the opener engaged the opened line is the FALLBACK, so it has to be
+    # measured before the racelines are gated against it: `--kappa-gate safe`
+    # reads the fallback's own peak, and reading the un-opened line's 3.33
+    # would wave through a raceline no tracker has held.
+    if has_opened and engaged:
+        cands += [('opened', ['--centerline-only'], None, None, opened_ref, '')]
+    # Both references, not one. Opening the corners is what makes a raceline
+    # solvable on SRL 2024 IROS (24/24 rejected off the plain skeleton, clean
+    # off the opened one) and it is what makes it UNsolvable on ICRA-2026
+    # (every w_veh "corridor exhausted" off the opened reference, where the
+    # plain one yields 0.395 m at 14.27 s). Sweeping both costs one extra pass
+    # on the tracks where the opener engages at all and cannot lose a candidate
+    # that exists today.
+    refs = [(cl, '')] + ([(opened_ref, '_o')] if engaged else [])
     for m in rungs:
-        cands += [('raceline', ['--w-veh', str(w)], w, m) for w in cfg.w_veh]
-    if has_opened:
-        cands += [('opened', ['--centerline-only'], None, None)]
+        for rsrc, rtag in refs:
+            cands += [('raceline', ['--w-veh', str(w)], w, m, rsrc, rtag)
+                      for w in cfg.w_veh]
+    if has_opened and not engaged:
+        cands += [('opened', ['--centerline-only'], None, None, opened_ref, '')]
 
     best = None
     rung_used = None
-    for kind, args, w, m in cands:
+    for kind, args, w, m, src_stem, rtag in cands:
         if kind == 'raceline' and best is not None and m != rung_used:
             continue
         args = args + cfg.profile
@@ -466,11 +543,13 @@ def build(track, tag, extra, cfg):
         suffix = tag if w is None else f'{tag}_w{w:g}'
         if m is not None:
             suffix += f'_m{round(m * 100):d}'
+        suffix += rtag
         path = f'data/racelines/{stem}_{kind}_{suffix}'
         label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
         if m is not None:
             label += f' m{m:.2f}'
-        src = (opened if kind == 'opened' else cl) + '.csv'
+        label += '/op' if rtag else ''
+        src = src_stem + '.csv'
         if subprocess.run([VENV, 'tools/optimize_raceline.py', src,
                            '--out', path] + args,
                           capture_output=True, text=True).returncode != 0:
@@ -511,9 +590,13 @@ def build(track, tag, extra, cfg):
                 # the absolute 1.0 bar -- cdctf2025 peaks at 2.10 1/m and
                 # icra2025 at 1.63 -- so rejecting a raceline at 1.7 while
                 # shipping a centerline at 2.10 rejects the easier line.
+                fb = out.get('safe')
+                if (fb is None or not fb.get('ok')) and out.get(
+                        'opened', {}).get('ok'):
+                    fb = out['opened']       # what would actually be shipped
                 gate = max(1.0 / MIN_TURN_R, float(np.abs(np.loadtxt(
-                    out['safe']['path'] + '.csv', delimiter=',')[:, 4]).max())
-                    if 'safe' in out else 0.0)
+                    fb['path'] + '.csv', delimiter=',')[:, 4]).max())
+                    if fb else 0.0)
             if kmax > gate:
                 bad.append(f'kappa max {kmax:.2f} above the {gate:.2f} '
                            f'the tracker has held on a width-using line')
@@ -653,6 +736,25 @@ def configure(argv=None):
                          'never inside two trigger boxes at once, and REJECT '
                          'any candidate that still occupies three. A lap the '
                          'sim does not count costs a whole lap time.')
+    ap.add_argument('--open-kappa', type=float, default=None, metavar='K',
+                    help='OPT-IN (off by default; outputs are byte-identical '
+                         'without it, and byte-identical WITH it on any track '
+                         'whose centerline already meets K). Round every '
+                         'corner of the reference centerline tighter than K '
+                         '1/m, using the map\'s distance field, and build the '
+                         'raceline candidates off the result. This is the fix '
+                         'for a MEDIAL-AXIS corner: a skeleton centerline '
+                         'kinks wherever the outer wall has a sharp vertex, '
+                         'however wide the corridor there -- SRL 2024 IROS '
+                         'peaks at |kappa| 5.42 (radius 0.18 m) 1.415 m from '
+                         'the nearest wall, which costs the safe line 0.261 m '
+                         'of apex deviation and cusps every raceline '
+                         'candidate. 1.4 (radius 0.714 m, 27%% outside the '
+                         'steering lock) is the drill value.')
+    ap.add_argument('--open-wall-floor', type=float, default=0.45, metavar='M',
+                    help='hard floor on the opened reference\'s distance to '
+                         'the nearest wall (default 0.45 = car half-width '
+                         '0.135 + 0.315). Only used with --open-kappa.')
     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
                     help='pass --kappa-bound to the QP for the raceline '
                          'candidates (opt-in; off by default).')

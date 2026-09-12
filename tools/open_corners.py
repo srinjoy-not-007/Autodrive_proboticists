@@ -40,6 +40,142 @@ def curvature(xy):
     return (dx * ddy - dy * ddx) / np.maximum((dx * dx + dy * dy) ** 1.5, 1e-9)
 
 
+class CorridorField:
+    """The map's own distance-to-wall field, sampled bilinearly with a gradient.
+
+    `open_corners` and every other method in this file read the corridor out of
+    the centerline CSV's `w_right`/`w_left` columns, which are rays cast along
+    the reference normal and capped at 3.0 m. On a track with a genuinely wide
+    corner that cap is reached (SRL 2024 IROS: `w_right` is 3.025 for most of
+    the lap), so the CSV says there is unlimited room where there is a wall
+    just off the normal -- which is how the existing `opened` candidate comes
+    out at 0.079 m of body clearance on that track. The distance field does not
+    have that failure mode: it is the same field `footprint_analysis` measures
+    clearance with, so what the opener is told and what the gate checks agree.
+    """
+
+    def __init__(self, prefix):
+        from scipy import ndimage
+        from footprint_analysis import load_dist
+        self._nd = ndimage
+        self.d, self.res, self.ox, self.oy = load_dist(prefix)
+        self.gy, self.gx = np.gradient(self.d, self.res)
+
+    def _coords(self, p):
+        return np.vstack([(p[:, 1] - self.oy) / self.res,
+                          (p[:, 0] - self.ox) / self.res])
+
+    def dist(self, p):
+        return self._nd.map_coordinates(self.d, self._coords(p), order=1,
+                                        mode='nearest')
+
+    def outward(self, p):
+        """Unit vector pointing away from the nearest wall."""
+        c = self._coords(p)
+        g = np.column_stack([
+            self._nd.map_coordinates(self.gx, c, order=1, mode='nearest'),
+            self._nd.map_coordinates(self.gy, c, order=1, mode='nearest')])
+        return g / np.maximum(np.linalg.norm(g, axis=1, keepdims=True), 1e-9)
+
+
+def resample_closed(xy, n):
+    """Uniform arclength resample of a closed path, n points."""
+    seg = np.linalg.norm(np.diff(np.vstack([xy, xy[:1]]), axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    t = np.linspace(0.0, s[-1], n, endpoint=False)
+    return np.column_stack([np.interp(t, s, np.r_[xy[:, 0], xy[0, 0]]),
+                            np.interp(t, s, np.r_[xy[:, 1], xy[0, 1]])])
+
+
+def open_kappa_corridor(xy, field, k_target, floor, iters=600, lam=0.30,
+                        max_shift=1.5, grow=5, proj=4):
+    """Round every corner tighter than `k_target`, inside the real corridor.
+
+    Why this is needed at all: a pixel skeleton IS the medial axis, and the
+    medial axis of a corridor whose OUTER wall has a sharp vertex has a sharp
+    vertex too -- however wide the corridor is. Measured on SRL 2024 IROS at
+    (1.38, -9.73): centerline |kappa| 5.42 (radius 0.18 m, a third of the
+    0.561 m steering lock) at a point that is 1.415 m from the nearest wall.
+    Nothing about that corner is tight; only the line through it is. The same
+    corner is what makes every min-curvature candidate cusp, because the QP's
+    reference spline has to follow it.
+
+    The relaxation is the Laplacian one -- deliberately, because shortening the
+    path is exactly the right move at a kink -- but it is gated on |kappa|
+    exceeding the target, so a corner that already meets it is never touched
+    and a straight is never pulled off line. Each iteration is projected back
+    onto `dist >= floor` along the distance field's own gradient, so the
+    corridor is a hard constraint rather than a penalty, and the whole path is
+    re-spaced afterwards so the smoothing cannot bunch points up.
+
+    Returns the opened path (same number of points, uniform spacing).
+    """
+    from scipy import ndimage
+    # A no-op must be an EXACT no-op: on a track whose centerline already meets
+    # the target (Porto peaks at 1.02, ICRA-2026 at 0.98) the resample alone
+    # would move every point by a few mm and change every downstream byte.
+    if np.abs(curvature(xy)).max() <= k_target:
+        return xy.copy()
+    n = len(xy)
+    base = resample_closed(xy, n)
+    p = base.copy()
+    for _ in range(iters):
+        k = np.abs(curvature(p))
+        # Act only where the line is tighter than asked, and ramp in: a hard
+        # on/off weight moves the boundary point alone and puts a new kink
+        # where the old one was.
+        w = np.clip((k - k_target) / max(k_target, 1e-6), 0.0, 1.0)
+        w = ndimage.maximum_filter1d(w, size=2 * grow + 1, mode='wrap')
+        w = ndimage.uniform_filter1d(w, size=2 * grow + 1, mode='wrap')
+        if not w.any():
+            break
+        lap = np.roll(p, 1, axis=0) + np.roll(p, -1, axis=0) - 2.0 * p
+        p = p + lam * w[:, None] * lap
+        for _ in range(proj):
+            need = floor - field.dist(p)
+            m = need > 0.0
+            if not m.any():
+                break
+            p[m] += field.outward(p[m]) * need[m, None]
+        # Never let a point wander a long way from the corridor it came from:
+        # the distance field cannot tell the inside of the ring from the
+        # outside, and a free-space blob beyond a wall looks just as good to it.
+        off = p - base
+        r = np.linalg.norm(off, axis=1)
+        far = r > max_shift
+        if far.any():
+            p[far] = base[far] + off[far] / r[far, None] * max_shift
+        p = resample_closed(p, n)
+    return p
+
+
+def widths_from_map(xy, field, limit=3.0, step=0.02):
+    """(w_right, w_left) by walking the normal out to the first wall.
+
+    The opened path is not a lateral offset of the reference -- points move in
+    two dimensions and are re-spaced -- so the CSV's widths cannot simply be
+    shifted by an alpha. Re-cast them instead, against the same field the
+    clearance gate uses.
+    """
+    nrm = normals(xy)
+    out = []
+    for sgn in (-1.0, 1.0):            # right first, then left
+        d = np.full(len(xy), limit)
+        live = np.ones(len(xy), dtype=bool)
+        t = step
+        while t < limit:
+            q = xy[live] + sgn * t * nrm[live]
+            hit = field.dist(q) <= 0.0
+            idx = np.flatnonzero(live)[hit]
+            d[idx] = t
+            live[idx] = False
+            if not live.any():
+                break
+            t += step
+        out.append(d)
+    return out[0], out[1]
+
+
 def open_corners(cl, margin, iters, lam, focus, smooth):
     """cl: (n,4) x, y, w_right, w_left. Returns lateral offset per point."""
     c, wr, wl = cl[:, :2], cl[:, 2], cl[:, 3]
@@ -211,7 +347,25 @@ def main():
     ap.add_argument('--lam', type=float, default=0.35)
     ap.add_argument('--smooth', type=int, default=5,
                     help='half-window used to keep the offset profile smooth')
-    ap.add_argument('--method', choices=('laptime', 'minimax', 'relax'),
+    ap.add_argument('--map', default=None, metavar='PREFIX',
+                    help='map the corridor is measured against, e.g. '
+                         'data/maps/finals_mesh. Required by (and switches on) '
+                         '--method corridor.')
+    ap.add_argument('--kappa-target', type=float, default=1.4, metavar='K',
+                    help='--method corridor: round every corner tighter than '
+                         'this, in 1/m. 1.4 is a 0.714 m radius, 27%% outside '
+                         'the 0.561 m steering lock, so the finished line has '
+                         'zero apex deviation.')
+    ap.add_argument('--wall-floor', type=float, default=0.45, metavar='M',
+                    help='--method corridor: hard floor on the opened path\'s '
+                         'distance to the nearest wall. 0.45 = car half-width '
+                         '0.135 + 0.315 m.')
+    ap.add_argument('--max-shift', type=float, default=1.5, metavar='M',
+                    help='--method corridor: furthest a point may move from '
+                         'the reference centerline. The distance field cannot '
+                         'tell the inside of the ring from the outside.')
+    ap.add_argument('--method', choices=('laptime', 'minimax', 'relax',
+                                         'corridor'),
                     default='laptime',
                     help='laptime: minimise a point-mass lap time (the one that '
                          'works). minimax: optimise the largest curvature directly '
@@ -235,6 +389,27 @@ def main():
 
     cl = np.loadtxt(args.centerline, delimiter=',')
     k0 = report('centerline', cl[:, :2])
+    if args.method == 'corridor':
+        if not args.map:
+            ap.error('--method corridor needs --map')
+        import sys
+        sys.path.insert(0, 'tools')
+        field = CorridorField(args.map)
+        p = open_kappa_corridor(cl[:, :2], field, args.kappa_target,
+                                args.wall_floor, iters=args.iters,
+                                max_shift=args.max_shift)
+        k1 = report('opened', p)
+        d = field.dist(p)
+        print(f'  -> R_min {1 / k0:.3f} m to {1 / k1:.3f} m, wall distance '
+              f'{field.dist(cl[:, :2]).min():.3f} -> {d.min():.3f} m '
+              f'(floor {args.wall_floor:.2f}), max shift '
+              f'{np.linalg.norm(p - cl[:, :2], axis=1).max():.3f} m')
+        wr, wl = widths_from_map(p, field)
+        np.savetxt(args.out + '.csv', np.column_stack([p[:, 0], p[:, 1],
+                                                       wr, wl]),
+                   delimiter=',', fmt='%.4f')
+        print(f'  wrote {args.out}.csv')
+        return
     if args.method == 'laptime':
         alpha, n, res = min_laptime(cl, args.margin, args.modes, args.ay,
                                     args.vmax, args.penalty, args.iters,

@@ -36,7 +36,7 @@ What is new, and why
    angle), and asked curvature above ``ay_deliver / v^2`` is not delivered --
    a smooth knee consistent with the skidpad, where the car holds ~0.9 of asked
    curvature to 9.9 m/s2 and then lets go.  This is a *saturation*, not the
-   static understeer table CLAUDE.md forbids in a rollout: below the knee it is
+   static understeer table the project notes forbid in a rollout: below the knee it is
    the identity, so it can never tell the controller to wind on more lock in the
    linear region.  Above the knee it makes extra lock worthless, which is the
    only thing that stops the solver asking for it.

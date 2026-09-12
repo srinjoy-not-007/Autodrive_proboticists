@@ -135,8 +135,51 @@ stage "3/5 centerline + swept racing lines (no recon: checkpoints stand in)"
 DRILL_LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
                  --kappa-gate safe --min-halfwidth-ladder 0.53,0.50,0.45'
 # shellcheck disable=SC2086
+LINE_LOG="data/logs/drill_lines_${SLUG}.log"
+mkdir -p data/logs
 .venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" \
-    ${LINE_ARGS-$DRILL_LINE_ARGS} || exit 1
+    ${LINE_ARGS-$DRILL_LINE_ARGS} 2>&1 | tee "$LINE_LOG"
+[ "${PIPESTATUS[0]}" = "0" ] || exit 1
+
+# CORNER-OPENING RETRY. `--open-kappa` is deliberately NOT a default: on both
+# tuned tracks it changes the line that ships (Porto picks an anchored raceline
+# at 7.32 s instead of safe; ICRA-2026 picks an opened line at 13.66 s instead
+# of safe at 14.08 s), and those are configurations that have been driven. But
+# on a circuit whose SKELETON has a sharp vertex it is the difference between a
+# line that clears the evidence floor and one that does not: the medial axis of
+# a corridor with a sharp outer wall vertex has a sharp vertex too, however wide
+# the corridor -- SRL 2024 IROS carries |kappa| 5.42 (R 0.18 m) at a point
+# 1.415 m from the nearest wall, so every min-curvature candidate must cusp
+# there. Measured on that track: without it, 20/20 candidates rejected and the
+# drill ships safe at 0.265 m effective, UNDER the 0.28 m floor and explicitly
+# unproven; with it, the opened line ships at 0.372 m and 12.36 s ideal.
+#
+# So: only retry when the first pass failed to clear the floor, and only keep
+# the retry if it actually did better. A track that already clears the floor is
+# never touched, which is why this is safe to leave switched on for the day.
+if grep -q "nothing cleared the" "$LINE_LOG"; then
+    stage "3b/5 nothing cleared the clearance floor -- retrying with corner opening"
+    # 1.0 / 0.45 is the measured operating point and it is a CLIFF, not a slope:
+    # on SRL 2024 IROS target 1.0 converges before touching the wall floor
+    # (|kappa| 5.42 -> 1.11, wall distance 0.483 m). Every more aggressive
+    # setting tried -- target 0.9, 0.8, 0.6, 0.45, and floors 0.50/0.40/0.35 --
+    # drives the line ONTO the floor, where the projection back inside the
+    # corridor puts the kink straight back: |kappa| 1.97-2.84, all worse. Do not
+    # "tune" these two numbers on the day; they get worse in every direction.
+    # shellcheck disable=SC2086
+    .venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" \
+        ${LINE_ARGS-$DRILL_LINE_ARGS} --open-kappa 1.0 --open-wall-floor 0.45 \
+        2>&1 | tee "${LINE_LOG}.open"
+    [ "${PIPESTATUS[0]}" = "0" ] || exit 1
+    if grep -q "nothing cleared the" "${LINE_LOG}.open"; then
+        echo "  corner opening did not clear the floor either -- the line that"
+        echo "  ships is still UNPROVEN. Drive it before trusting it and keep"
+        echo "  PIT_CREW_MODE=reactive as the fallback."
+    else
+        echo "  corner opening cleared the floor; that is the line now in"
+        echo "  data/racelines/${SLUG}_mesh_race.csv"
+    fi
+fi
 
 stage "4/5 footprint clearance check on both lines we might race"
 # `tools/footprint_analysis.py <map> <csv>` cannot read a RACELINE csv: its
