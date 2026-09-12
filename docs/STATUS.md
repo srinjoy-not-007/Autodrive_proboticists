@@ -389,7 +389,14 @@ halved, clearance x2-5, for +0.14..+0.32 s/lap (0.30 is non-monotonic
 and collided: never). **Driven on the display: lon_ax45_b40 32 laps, 1
 collision, 70.62 s (median 7.06 vs the candidate's 6.95 clean) --
 REJECTED**: the honest ax profile is slower live and did not add margin.
-lead45 next.
+lead45 next. CORRECTION on the overspeed's cause: v_ceiling cannot sit
+above the profile (it is a min of it); the setpoint exceeds the profile
+on 18-39% of a braking approach because of the POINT LEAD. Opt-in
+`thr_brake_lead_s` (committed) extends the throttle lead only where the
+profile brakes, taking the window minimum: 0.05 removes 93-100% of the
+commanded overspeed at -0.018 s/lap with |e| p95 -24..-38% (288 harness
+laps, 0 collisions); 0.08 removes all of it at -0.003 s/lap. thr_source
+profile collides (rejected), min is a no-op. Display slot: thr_bl05.
 
 **Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
 the ay_limit steering cap is identical at both rates to 1.6% (the
