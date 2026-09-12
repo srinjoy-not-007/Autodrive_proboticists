@@ -97,12 +97,27 @@ click_at() {
 if [ "${DISP}" = ":99" ]; then
     HAMB_X=75;  HAMB_Y=43;  CONN_X=75;  CONN_Y=409
 else
+    # Make the window the 1920x1080 canvas the coordinates were measured on:
+    # on a 5120x2880 desktop Unity opens small and the UI is scaled, and
+    # fixed offsets (the old +51/+64/+302) missed every click. Resize, then
+    # read the geometry back (Position is the client-area origin, i.e. it
+    # already includes the window-manager decoration) and fall back to
+    # proportional scaling if the window manager refused the size.
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "DISPLAY=${DISP} xdotool windowmove $WID 0 0; sleep 0.5
+         DISPLAY=${DISP} xdotool windowsize $WID 1920 1080; sleep 1.5
+         DISPLAY=${DISP} xdotool windowactivate $WID 2>/dev/null; true"
     GEO=$(docker exec autodrive_roboracer_api /bin/bash -c \
         "DISPLAY=${DISP} xdotool getwindowgeometry $WID")
     OX=$(echo "$GEO" | sed -n 's/.*Position: \([0-9]*\),\([0-9]*\).*/\1/p')
     OY=$(echo "$GEO" | sed -n 's/.*Position: \([0-9]*\),\([0-9]*\).*/\2/p')
-    HAMB_X=$((OX + 51)); HAMB_Y=$((OY + 64))
-    CONN_X=$((OX + 51)); CONN_Y=$((OY + 302))
+    WW=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\1/p')
+    WH=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\2/p')
+    echo "window $WID at ${OX},${OY} size ${WW}x${WH}"
+    HAMB_X=$((OX + 75 * WW / 1920)); HAMB_Y=$((OY + 43 * WH / 1080))
+    CONN_X=$((OX + 75 * WW / 1920)); CONN_Y=$((OY + 409 * WH / 1080))
+    # Keep a screenshot per attempt for diagnosis (data/logs/display_click_*.png).
+    SHOT=1
 fi
 # MANUAL_CONNECT=1: a human clicks Connection (and sets graphics quality),
 # exactly as the organisers do. Wait for data instead of clicking.
@@ -118,6 +133,12 @@ echo "Clicking Connection on ${DISP} (window $WID)..."
 for attempt in 1 2 3; do
     # The sidebar may be open or collapsed and there is no way to ask which.
     # The hamburger (75,43) toggles it; Connection sits at (75,409) when open.
+    if [ "${SHOT:-0}" = 1 ]; then
+        docker exec autodrive_roboracer_api /bin/bash -c \
+            "DISPLAY=${DISP} import -window root /tmp/click_$attempt.png 2>/dev/null; true"
+        docker cp autodrive_roboracer_api:/tmp/click_$attempt.png \
+            "${REPO_DIR}/data/logs/display_click_$(date +%H%M%S)_$attempt.png" >/dev/null 2>&1 || true
+    fi
     click_at $CONN_X $CONN_Y
     sleep 3
     if connected; then echo "CONNECTED (IPS data flowing)"; exit 0; fi
