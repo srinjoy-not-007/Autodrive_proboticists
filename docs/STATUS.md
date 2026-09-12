@@ -18,6 +18,13 @@ est-truth p95 0.04). The logger's sample period was 0.088 s in the image run
 against 0.104 s in the clean 100-lap dev runs: mpc3 was validated at ~9.6
 Hz and misbehaves at 11.4 Hz (faster, later braking). Rate adaptivity is
 being built; do not trust a 14-lap image sample either way.
+CONFIRMED in the dev environment: with BLAS pinned the sim runs at 11.05
+Hz and the shipping config took 3 collisions in 10 laps (logger dt 0.091);
+every clean 100-lap mpc3 run logged dt 0.104-0.106 (9.5 Hz: the sim was
+slowed by concurrent load at the time). **mpc3 is clean at ~9.6 Hz and
+collides at ~11 Hz.** The organisers measured 0.097 s. Rate robustness is
+the blocking item; all mpc3 "clean centuries" must be re-read as 9.6 Hz
+results.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
