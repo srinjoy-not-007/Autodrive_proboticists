@@ -30,6 +30,12 @@ for i in $(seq 1 30); do
 done
 [ -z "$WID" ] && { echo "ERROR: simulator window not found"; exit 1; }
 sleep 8
+# Organisers run Ultra. The helper container has xdotool; sim_set_quality.sh
+# execs into autodrive_roboracer_api by default, so point it at the helper.
+if [ "${SIM_QUALITY:-ultra}" = "ultra" ]; then
+    SIM_API=pit_helper ./scripts/sim_set_quality.sh ultra >/dev/null 2>&1 || echo "WARN: could not set Ultra"
+    sleep 2
+fi
 
 # The submission image, as the organisers run it (plus -d instead of -it).
 docker run --name autodrive_roboracer_api --rm -d --network=host --ipc=host \
