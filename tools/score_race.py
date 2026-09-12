@@ -37,16 +37,23 @@ def _official_lap_times(rows, laps_wanted):
     and a value is accepted only once it differs from the previous lap's. A
     dropped or never-published latch yields None so the caller falls back
     rather than mis-attributing a lap.
+
+    Before the first crossing the simulator publishes `inf` (no lap completed
+    yet), and a row can be blank or `nan` -- those are *absent readings*, not a
+    corrupt column, so they are skipped rather than disqualifying the log.
     """
     if not rows or 'last_lap_time' not in rows[0]:
         return None
-    try:
-        values = [float(r['last_lap_time']) for r in rows]
-        counts = [int(r['lap_count']) for r in rows]
-    except (TypeError, ValueError):
-        return None
-    if any(not math.isfinite(v) for v in values):
-        return None
+    values, counts = [], []
+    for row in rows:
+        try:
+            values.append(float(row['last_lap_time']))
+        except (TypeError, ValueError):
+            values.append(float('nan'))  # blank/garbled row: no reading here
+        try:
+            counts.append(int(row['lap_count']))
+        except (TypeError, ValueError):
+            return None
     first_row_of = {}
     for i in range(1, len(rows)):
         if counts[i] != counts[i - 1]:
@@ -60,7 +67,8 @@ def _official_lap_times(rows, laps_wanted):
         stop = first_row_of.get(lap + 1, len(rows))
         found = None
         for k in range(start, max(stop, start + 1)):
-            if values[k] > 0.0 and values[k] != previous:
+            if (math.isfinite(values[k]) and values[k] > 0.0
+                    and values[k] != previous):
                 found = values[k]
                 break
         if found is None:

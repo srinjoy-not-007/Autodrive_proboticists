@@ -124,10 +124,36 @@ class OfficialLapTimes(unittest.TestCase):
                 self.assertIsNone(result['official_laps'])
                 self.assertEqual(len(result['laps']), 10)
 
-    def test_nonfinite_latch_is_rejected_not_summed(self):
+    def test_nonfinite_latch_inside_a_lap_is_skipped_not_summed(self):
+        """A single unreadable row must not be mistaken for a lap time."""
         rows = detailed()
         rows[len(rows) // 2]['last_lap_time'] = float('nan')
-        self.assertIsNone(MODULE.score_rows(rows)['official_laps'])
+        self.assertEqual(MODULE.score_rows(rows)['official_laps'],
+                         self.expected())
+
+    def test_inf_before_the_first_crossing_does_not_disqualify_the_column(self):
+        """Real logs open with `inf`: the sim has no completed lap to report.
+
+        Reproduces the structure of data/logs/race_20260912_030011.csv, whose
+        first 89 rows carry `inf` in both lap-time columns, followed by blank
+        and 'nan' rows of the kind a partially-flushed logger writes.
+        """
+        rows = detailed()
+        for row in rows:
+            if row['lap_count'] == 0:
+                row['last_lap_time'] = float('inf')
+                row['best_lap_time'] = float('inf')
+        rows[len(rows) // 3]['last_lap_time'] = ''
+        rows[len(rows) // 2]['last_lap_time'] = 'nan'
+        self.assertEqual(MODULE.score_rows(rows)['official_laps'],
+                         self.expected())
+
+    def test_latch_values_are_read_as_the_csv_strings_they_are(self):
+        """DictReader hands over text, not floats; parsing is the scorer's job."""
+        rows = [{k: (f'{v:.3f}' if k.endswith('lap_time') else str(v))
+                 for k, v in row.items()} for row in detailed()]
+        self.assertEqual(MODULE.score_rows(rows)['official_laps'],
+                         [round(v, 3) for v in self.expected()])
 
     def test_collision_window_is_unchanged_by_the_new_source(self):
         result = MODULE.score_rows(detailed())
@@ -148,6 +174,22 @@ class RealLogs(unittest.TestCase):
         self.assertIsNone(result['official_laps'])
         self.assertEqual(len(result['laps']), 10)
         self.assertEqual(len(result['sim_laps']), 10)
+
+    def test_new_format_log_on_disk_scores_officially(self):
+        import csv
+        path = (Path(__file__).resolve().parents[1]
+                / 'data' / 'logs' / 'race_20260912_030011.csv')
+        if not path.exists():
+            self.skipTest('reference log not present')
+        with open(path) as stream:
+            result = MODULE.score_rows(list(csv.DictReader(stream)))
+        self.assertEqual(result['official_laps'],
+                         [7.738, 7.715, 7.886, 8.153, 7.899,
+                          8.328, 7.997, 8.076, 7.702, 8.292])
+        self.assertAlmostEqual(result['official_race_time'], 79.786, places=3)
+        # The official latch and our own sample clock must name the same laps.
+        for official, sampled in zip(result['official_laps'], result['laps']):
+            self.assertAlmostEqual(official, sampled, delta=0.15)
 
 
 if __name__ == '__main__':
