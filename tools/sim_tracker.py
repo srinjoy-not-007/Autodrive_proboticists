@@ -68,7 +68,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 from pit_crew import vehicle                                    # noqa: E402
 from pit_crew.mpc2_core import (Actuator, CurvatureBias, MPC2,   # noqa: E402
                                 PoseFilter, RefPath, wrap)
-from pit_crew.mpc3_core import (ILC, MPC3, RateControl,            # noqa: E402
+from pit_crew.mpc3_core import (ILC, MPC3, GapRider, RateControl,  # noqa: E402
                                 RATE_NOMINAL, RATE_TERMS,
                                 corridor_clearance)
 from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
@@ -409,6 +409,10 @@ class MPC3Sim:
                       timer_apply_ahead_s=0.0, timer_sync_dead=1,
                       # --- teleport recovery (opt-in; see mpc3.py) ---------
                       v_pose_gate=0.0, v_pose_min_dt=0.03, reindex_after=0,
+                      # --- telemetry gap (opt-in; see mpc3_core.GapRider) ---
+                      gap_predict_s=0.0, gap_decel=3.0, gap_v_min=1.0,
+                      gap_reacq_blend=0.0, gap_reacq_gate_m=0.0,
+                      gap_reacq_n=2, gap_reacq_gap_s=0.0,
                       # --- OPT-IN: publish timing (see `publish_time`) ------
                       # The node records its own command at `now()`, i.e.
                       # AFTER the solve, so the actuator model's idea of when
@@ -424,7 +428,7 @@ class MPC3Sim:
                        'apply_ahead_s', 'apply_floor_steps', 'steer_rate',
                        'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
-                       'lead_k', 'lead_min_m')
+                       'lead_k', 'lead_min_m', 'nd_mode', 'dead_tick_c')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
@@ -470,7 +474,18 @@ class MPC3Sim:
             max_predict_s=self.P['max_predict_s'],
             stale_pose_s=self.P['stale_pose_s'],
             enc_alpha=self.P['enc_alpha'], pose_blend=self.P['pose_blend'],
-            enc_tau=self.mpc.cfg['thr_enc_tau'])
+            enc_tau=self.mpc.cfg['thr_enc_tau'],
+            dead_tick_c=self.mpc.cfg['dead_tick_c'])
+        self.gap = GapRider(
+            predict_s=float(self.P['gap_predict_s']),
+            decel=float(self.P['gap_decel']),
+            v_min=float(self.P['gap_v_min']),
+            reacq_blend=float(self.P['gap_reacq_blend']),
+            reacq_gate_m=float(self.P['gap_reacq_gate_m']),
+            reacq_n=int(self.P['gap_reacq_n']),
+            reacq_gap_s=float(self.P['gap_reacq_gap_s']))
+        self._gap_solve_t = -1e9
+        self.coasts = 0                  # watchdog ticks spent on the coast
         self.ilc = None
         self.ilc_log = []
         self.idx_prev = None
@@ -526,7 +541,13 @@ class MPC3Sim:
             self.v_plan0 = float(self.path.v_prof[
                 self.path.nearest(x, y, None, yaw=yaw)])
         v = self.measured_speed() or self.start_speed()
-        fx, fy, fyaw, _ = self.filt.update(t_stamp, x, y, yaw, max(v, 0.4))
+        self.gap.see_pose(t_stamp, self.rate_ctl.values['stale_pose_s'])
+        keep = (self.filt.blend, self.filt.gate)
+        self.filt.blend, self.filt.gate = self.gap.filter_gains(*keep)
+        try:
+            fx, fy, fyaw, _ = self.filt.update(t_stamp, x, y, yaw, max(v, 0.4))
+        finally:
+            self.filt.blend, self.filt.gate = keep
         self.meas = (t_stamp, fx, fy, fyaw)
 
     def enc_alpha(self, nominal):
@@ -579,6 +600,46 @@ class MPC3Sim:
         idx = (i0 + np.arange(n)) % P.n
         return float((P.v_prof[idx] ** 2 * np.abs(P.kappa[idx])).max())
 
+    # -- telemetry-gap degraded mode (mirrors mpc3.MPC3Tracker) -------------
+    def predict_window(self):
+        w = float(self.rate_ctl.values['max_predict_s'])
+        if self.gap.enabled:
+            w = max(w, self.gap.window(
+                float(self.rate_ctl.values['stale_pose_s'])))
+        return w
+
+    def gap_v_cmd(self, v_cmd, t):
+        if not self.gap.enabled or self.meas is None:
+            return v_cmd
+        return self.gap.v_cap(t - self.meas[0],
+                              float(self.rate_ctl.values['stale_pose_s']),
+                              v_cmd)
+
+    def watchdog(self, t):
+        """The node's 20 Hz watchdog: `(steer, throttle)` to publish, or None.
+
+        `run()` calls this on every plant frame when the tracker has one, which
+        is inert unless the pose has actually gone stale -- with no injected
+        drops, the pose age never reaches `stale_pose_s` at any period this
+        harness runs at, so the default path is untouched.
+        """
+        if self.meas is None:
+            return None
+        age = t - self.meas[0]
+        stale = float(self.rate_ctl.values['stale_pose_s'])
+        if age <= stale:
+            return None
+        if self.gap.ride(age, stale):
+            period = max(float(self.rate_ctl.est.period), 0.02)
+            if t - self._gap_solve_t < period:
+                return None
+            self._gap_solve_t = t
+            self.gap.rides += 1
+            return self.update(t)
+        self.coasts += 1
+        self._last = (self._last[0], 0.0)
+        return self._last
+
     # -- one control cycle ---------------------------------------------------
     def update(self, t):
         import time
@@ -596,7 +657,7 @@ class MPC3Sim:
         v_meas = self.measured_speed()
         v0 = max(v_meas if v_meas is not None else self.start_speed(), 0.4)
         g = self.mpc.cfg['yaw_gain']
-        t_now = min(t, ts + self.rate_ctl.values["max_predict_s"])
+        t_now = min(t, ts + self.predict_window())
         x, y, yaw, delta0 = self.act.predict(
             x, y, yaw, ts, t_now, v0,
             kappa_of=lambda d: g * math.tan(d) / vehicle.WHEELBASE)
@@ -633,7 +694,8 @@ class MPC3Sim:
                              corridor_clearance(self.path, i0, e_lat))
         self.v_plan0 = float(self.path.v_prof[i0])
         self.v_cmd = float(info['v_cmd'])
-        th = float(self.thr.command(self.v_cmd, v_meas, 0.0, now=t,
+        th = float(self.thr.command(self.gap_v_cmd(self.v_cmd, t), v_meas,
+                                    0.0, now=t,
                                     kappa=float(self.path.kappa[i0])))
         t_rec = t + float(self.P['pub_lag'])
         self.act.record(self.pickup_time(t_rec, ts)
@@ -911,6 +973,45 @@ def fb_history_at(hist, t):
     return out
 
 
+class FrameDropper:
+    """OPT-IN injection of dropped telemetry frames (`--drop-every/--drop-n`).
+
+    The organisers screen-record the simulator window with OBS and run a rosbag
+    on the same machine, so a short stall of the telemetry WebSocket is a
+    plausible finals fault: every sensor shares that socket, so a stall drops
+    the pose, the encoders, the IMU and the steering feedback together.  `n`
+    consecutive frames are suppressed every `every` seconds.  `block_cmds`
+    additionally stops the bridge LATCHING commands during the stall, which is
+    the bidirectional version of the same fault.
+
+    Default-off and constructed only when `--drop-every` is given, so every
+    existing harness number is unchanged.
+    """
+
+    def __init__(self, every, n, block_cmds=False, t0=None):
+        self.every = float(every)
+        self.n = int(n)
+        self.block_cmds = bool(block_cmds)
+        # Start after the standing start has finished, or the car never gets
+        # going and the run measures the launch, not the fault.
+        self.next_t = float(t0 if t0 is not None else every)
+        self.left = 0
+        self.frames = 0                 # frames actually suppressed
+        self.gaps = 0
+
+    def drop(self, t):
+        """True if THIS telemetry frame is suppressed."""
+        if self.left <= 0:
+            if not (self.every > 0.0 and self.n > 0 and t >= self.next_t):
+                return False
+            self.left = self.n
+            self.gaps += 1
+            self.next_t = t + self.every
+        self.left -= 1
+        self.frames += 1
+        return True
+
+
 def load_checkpoints(map_prefix):
     """Ordered numbered checkpoints of a scene, as the simulator resets to them.
 
@@ -955,7 +1056,7 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         pose_lon_bias=0.0, teleport=None,
         pose_speed_cap=0.0, pose_lag_tau=0.5, pose_lag_kappa=0.2, actuator=None,
         publish=None, pose_age_frames=0.0, pose_age_s=0.0,
-        steer_fb_lag=0.0):
+        steer_fb_lag=0.0, drop=None, watchdog_hz=20.0):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -1022,6 +1123,11 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     pub_jit = float(pb.get('jitter', 0.0))
     pub_on = pub_lat > 0.0 or pub_jit > 0.0
     pub_q = []                     # (t_publish, steer, throttle), in order
+    # OPT-IN dropped telemetry frames; None keeps the perfect sensor stream.
+    dropper = FrameDropper(**drop) if drop else None
+    wd = getattr(tracker, 'watchdog', None)
+    wd_dt = 1.0 / max(float(watchdog_hz), 1.0)
+    next_wd = 0.0
     tp = teleport or {}
     tp_cp = tp.get('cp')
     tp_tau = float(tp.get('reloc_tau', 0.0))
@@ -1061,7 +1167,14 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         tp_events.append((now, float(path.s[j]), plant.x, plant.y))
 
     while t < t_end and lap < laps:
-        if t >= next_frame - 1e-9:
+        if t >= next_frame - 1e-9 and dropper is not None and dropper.drop(t):
+            # The whole telemetry frame is gone: no pose, no encoder, no IMU,
+            # no steering feedback.  The commands still latch unless the stall
+            # is modelled as bidirectional.
+            if not dropper.block_cmds:
+                plant.accept_frame(t, steer_cmd, throttle)
+            next_frame += frame
+        elif t >= next_frame - 1e-9:
             gyro = plant.v * plant.kappa
             sd = math.sqrt(max(1.0 - beta * beta, 1e-9))
             err_lat = beta * err_lat + rng.normal(0, pose_noise * sd)
@@ -1146,6 +1259,15 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                                  + tuple(cmd_now))
                 else:
                     steer_cmd, throttle = cmd_now
+        if wd is not None and t >= next_wd - 1e-9:
+            next_wd += wd_dt
+            out = wd(t)
+            if out is not None:
+                if pub_on:
+                    pub_q.append((publish_time(t, pub_lat, pub_jit, rng),)
+                                 + tuple(out))
+                else:
+                    steer_cmd, throttle = out
         if tracker.rate is not None and t >= next_ctl - 1e-9:
             cmd_now = tracker.update(t)
             if pub_on:
@@ -1216,7 +1338,12 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                         plant.throttle, throttle,
                         enc_v if enc_v is not None else plant.v,
                         log_enc if log_enc is not None else plant.v))
-    return dict(rec=np.array(rec), laps=lap, lap_times=lap_times,
+    gap_stat = dict(
+        frames=(dropper.frames if dropper else 0),
+        gaps=(dropper.gaps if dropper else 0),
+        rides=getattr(getattr(tracker, 'gap', None), 'rides', 0),
+        coasts=getattr(tracker, 'coasts', 0))
+    return dict(gap=gap_stat, rec=np.array(rec), laps=lap, lap_times=lap_times,
                 collisions=collisions, coll_s=coll_s, path_m=path_m,
                 line_m=total_s, tp_events=tp_events, tp_coll=tp_coll,
                 tp_rec=np.array(tp_rec) if tp_rec else np.zeros((0, 6)))
@@ -1509,6 +1636,21 @@ def main():
                          'that misses the tick waits for the next one.')
     ap.add_argument('--publish-jitter', type=float, default=0.0,
                     help='OPT-IN: 1-sigma gaussian jitter on --publish-latency')
+    # --- OPT-IN dropped telemetry frames (see FrameDropper) ---------------
+    ap.add_argument('--drop-every', type=float, default=0.0,
+                    help='OPT-IN, 0=off: inject a telemetry stall every N s '
+                         'of driving (OBS/rosbag on the sim host).  The whole '
+                         'frame goes: pose, encoders, IMU and steering '
+                         'feedback together.')
+    ap.add_argument('--drop-n', type=int, default=1,
+                    help='consecutive frames suppressed per stall')
+    ap.add_argument('--drop-start', type=float, default=0.0,
+                    help='first stall, s (0 = one --drop-every in)')
+    ap.add_argument('--drop-block-cmds', action='store_true',
+                    help='the stall is BIDIRECTIONAL: the bridge latches no '
+                         'command during it either')
+    ap.add_argument('--watchdog-hz', type=float, default=20.0,
+                    help="the node's watchdog rate (mpc3 only)")
     ap.add_argument('--plot', default='')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
@@ -1563,6 +1705,11 @@ def main():
                        tau=args.plant_tau, dead=args.plant_dead,
                        tick_frac=args.plant_tick_frac)
 
+    drop_cfg = (dict(every=args.drop_every, n=args.drop_n,
+                     block_cmds=args.drop_block_cmds,
+                     t0=(args.drop_start or None))
+                if args.drop_every > 0.0 and args.drop_n > 0 else None)
+
     results = {}
     order = {'both': ('mpc', 'mpc2'), 'all': ('mpc', 'mpc2', 'mpc3')}.get(
         args.tracker, (args.tracker,))
@@ -1594,8 +1741,15 @@ def main():
                                or args.publish_jitter > 0.0) else None),
                   servo=(PLANT_REAL if args.plant_realistic else
                          SERVO_CAL if args.servo_cal else None),
-                  actuator=act_cfg)
+                  actuator=act_cfg, drop=drop_cfg,
+                  watchdog_hz=args.watchdog_hz)
         report(which, out, path, lo, hi)
+        if drop_cfg:
+            g = out['gap']
+            print(f"  dropped frames {g['frames']} in {g['gaps']} stalls "
+                  f"({args.drop_n} x {args.frame:.3f} s each); open-loop "
+                  f"gap solves {g['rides']}, watchdog coast ticks "
+                  f"{g['coasts']}")
         if tp_cfg:
             teleport_report(out, args.frame)
         if args.per_lap:

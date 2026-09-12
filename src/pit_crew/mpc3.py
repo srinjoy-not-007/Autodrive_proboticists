@@ -48,7 +48,7 @@ from std_msgs.msg import Float32
 
 from pit_crew import vehicle
 from pit_crew.mpc3_core import (ILC, MPC3, RATE_NOMINAL, RATE_TERMS, Actuator,
-                                PoseFilter, RateControl, RefPath,
+                                GapRider, PoseFilter, RateControl, RefPath,
                                 corridor_clearance, wrap)
 from pit_crew.throttle2 import ServoThrottle
 
@@ -129,6 +129,13 @@ class MPC3Tracker(Node):
             # the publish index to an integer plan knot.  Set 0.0 together with
             # `rate_adaptive`.
             ('apply_floor_steps', 1.0),
+            # OPT-IN, and only meaningful together (see mpc3_core.DEFAULTS):
+            # `rate_terms=...,delay_tick` puts `period + dead_tick_c` on the
+            # actuator's dead time, and `nd_mode:=period` derives the committed
+            # steps from the same number, so `Actuator.predict` and the
+            # rollout's `nd` describe one delay instead of two.
+            ('dead_tick_c', 0.045),
+            ('nd_mode', 'fixed'),
             # --- command smoothing (OPT-IN; 0.0 = the tune that raced) -------
             # The front wheels flutter on straights because the solver's FIRST
             # free step carries no jerk cost and only a small rate cost, so the
@@ -179,6 +186,27 @@ class MPC3Tracker(Node):
             ('track_lost_m', 1.0),
             ('max_predict_s', 0.35),
             ('stale_pose_s', 0.35),
+            # --- telemetry GAP handling (OPT-IN; 0.0 = the coast that ships) --
+            # A dropped telemetry frame is one sensor period of silence and is
+            # harmless; three in a row (0.40 s at 0.104 s, 0.174 s at 0.058 s)
+            # are longer than `stale_pose_s` and hand the car to the watchdog,
+            # which holds the steering and cuts the throttle -- mid-corner that
+            # is a collision.  With `gap_predict_s` > 0 the tracker instead
+            # keeps solving from the last estimate, dead reckoned forward by
+            # the same `Actuator.predict` the delay compensation uses, at the
+            # plan's own timing, with the commanded speed ramped down at
+            # `gap_decel` (never below `gap_v_min`).  Past
+            # `stale_pose_s + gap_predict_s` the old coast takes over.
+            ('gap_predict_s', 0.0),
+            ('gap_decel', 3.0),           # m/s2 off the plan speed per second
+            ('gap_v_min', 1.0),           # m/s floor of that ramp
+            # Re-acquisition: the first pose after a gap comes out of a filter
+            # that dead reckoned through the gap itself, so it can be a snap.
+            # 0.0 = take it whole, which is what ships.
+            ('gap_reacq_blend', 0.0),
+            ('gap_reacq_gate_m', 0.0),    # 0.0 = keep `blend_gate_m`
+            ('gap_reacq_n', 2),           # poses blended after a gap
+            ('gap_reacq_gap_s', 0.0),     # 0.0 = one `stale_pose_s`
             # --- throttle (ServoThrottle) -------------------------------------
             ('servo_gain', 24.6),
             ('servo_k', 18.0),
@@ -372,6 +400,7 @@ class MPC3Tracker(Node):
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             apply_floor_steps=v['apply_floor_steps'],
+            nd_mode=v['nd_mode'], dead_tick_c=v['dead_tick_c'],
             w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],
             cmd_notch=v['cmd_notch'], e_dead=v['e_dead'],
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
@@ -406,7 +435,8 @@ class MPC3Tracker(Node):
             max_predict_s=float(v['max_predict_s']),
             stale_pose_s=float(v['stale_pose_s']),
             enc_alpha=self.speed_est.alpha, pose_blend=float(v['pose_blend']),
-            enc_tau=float(v['thr_enc_tau']))
+            enc_tau=float(v['thr_enc_tau']),
+            dead_tick_c=float(v['dead_tick_c']))
         self._rate_logged = 0.0
 
         self.ilc = None
@@ -490,6 +520,16 @@ class MPC3Tracker(Node):
                 f"{float(v['lead_m0']):+.2f} + {float(v['lead_k']):.2f} v) m "
                 'ahead of the first free step; apply_ahead_s (and '
                 "rate_adaptive's `apply` term) is inert")
+
+        # Telemetry-gap degraded mode (OPT-IN; inert at gap_predict_s 0.0).
+        self.gap = GapRider(
+            predict_s=float(v['gap_predict_s']), decel=float(v['gap_decel']),
+            v_min=float(v['gap_v_min']),
+            reacq_blend=float(v['gap_reacq_blend']),
+            reacq_gate_m=float(v['gap_reacq_gate_m']),
+            reacq_n=int(v['gap_reacq_n']),
+            reacq_gap_s=float(v['gap_reacq_gap_s']))
+        self._gap_solve_t = -1e9
 
         self.pose = None
         self.gyro_z = 0.0
@@ -641,7 +681,16 @@ class MPC3Tracker(Node):
             j = self.path.nearest(mx, my, None, yaw=myaw)
             self.v_plan0 = float(self.path.v_prof[j])
         v = self.measured_speed() or self.start_speed()
-        x, y, yaw = self.filt.update(stamp, mx, my, myaw, max(v, 0.4))[:3]
+        # Re-acquisition guard: after a long gap the arriving pose is blended
+        # against our own propagation for a few frames instead of snapped to.
+        # Identity while `gap_reacq_blend` is 0.0.
+        self.gap.see_pose(stamp, R['stale_pose_s'])
+        keep = (self.filt.blend, self.filt.gate)
+        self.filt.blend, self.filt.gate = self.gap.filter_gains(*keep)
+        try:
+            x, y, yaw = self.filt.update(stamp, mx, my, myaw, max(v, 0.4))[:3]
+        finally:
+            self.filt.blend, self.filt.gate = keep
         self.pose = (x, y, yaw, stamp)
         self._trail.append((stamp, mx, my))
         while self._trail and stamp - self._trail[0][0] > self.P['stuck_seconds']:
@@ -706,11 +755,60 @@ class MPC3Tracker(Node):
         _, x1, y1 = self._trail[-1]
         return math.hypot(x1 - x0, y1 - y0) < self.P['stuck_distance']
 
+    # ------------------------------------------------------------------
+    # telemetry-gap degraded mode (OPT-IN: `gap_predict_s`; see GapRider)
+    # ------------------------------------------------------------------
+    def predict_window(self):
+        """Seconds of dead reckoning allowed from the pose stamp.
+
+        `max_predict_s` normally; while riding a gap, the whole gap window, so
+        that the SAME solve runs on a pose propagated further rather than on a
+        pose frozen at `max_predict_s` ago.  Identity with the feature off.
+        """
+        w = float(self.rate_ctl.values['max_predict_s'])
+        if self.gap.enabled:
+            w = max(w, self.gap.window(
+                float(self.rate_ctl.values['stale_pose_s'])))
+        return w
+
+    def gap_v_cmd(self, v_cmd, now):
+        """The plan speed, ramped down for every second driven blind."""
+        if not self.gap.enabled or self.pose is None:
+            return v_cmd
+        return self.gap.v_cap(now - self.pose[3],
+                              float(self.rate_ctl.values['stale_pose_s']),
+                              v_cmd)
+
+    def gap_ride(self, now, age):
+        """One degraded control cycle, at the sensor's own period.
+
+        The watchdog runs at 20 Hz and a solve is 3-6 ms, but publishing four
+        times per sensor period would also be four `Actuator.record` entries
+        the bridge never latches; keep the plan's own timing.
+        """
+        if not self.gap.ride(age, self.rate_ctl.values['stale_pose_s']):
+            return False
+        period = max(float(self.rate_ctl.est.period), 0.02)
+        if now - self._gap_solve_t < period:
+            return True                  # riding, just not solving this tick
+        self._gap_solve_t = now
+        self.gap.rides += 1
+        if self.gap.rides == 1 or self.gap.rides % 20 == 0:
+            self.get_logger().warn(
+                f'telemetry gap {age:.2f}s — driving the plan open loop '
+                f'(ride {self.gap.rides})')
+        self.control_step()
+        return True
+
     def watchdog(self):
         """Runs whether or not poses arrive; commands LATCH in this simulator."""
         if self.pose is None:
             return
-        if self.now() - self.pose[3] > self.rate_ctl.values['stale_pose_s']:
+        now_wd = self.now()
+        age = now_wd - self.pose[3]
+        if self.gap_ride(now_wd, age):
+            return
+        if age > self.rate_ctl.values['stale_pose_s']:
             # Hold the steering angle (mid-corner, zero steer points at the
             # outside wall) and coast.  Zero throttle is a ~5.8 m/s2 brake here,
             # which is exactly what is wanted when the pose has gone.
@@ -773,7 +871,7 @@ class MPC3Tracker(Node):
         # Pose stamp -> now.  This is ESTIMATION lag only (the scan is stamped,
         # the filter takes ~45 ms): the actuator dead time is not handled here
         # but inside the horizon, as committed steering.
-        t_now = min(now, t + float(self.rate_ctl.values['max_predict_s']))
+        t_now = min(now, t + self.predict_window())
         x, y, yaw, delta0 = self.act.predict(
             x, y, yaw, t, t_now, v0,
             kappa_of=lambda d: (self.P['yaw_gain'] * math.tan(d)
@@ -863,7 +961,8 @@ class MPC3Tracker(Node):
 
         # Throttle: the speed the PLAN wants when this command is in force, fed
         # to the servo-inverting law.  Never negative.
-        th = float(self.thr.command(info['v_cmd'], v_meas, 0.0, now=now,
+        th = float(self.thr.command(self.gap_v_cmd(info['v_cmd'], now),
+                                    v_meas, 0.0, now=now,
                                     kappa=float(self.path.kappa[i0])))
         self.publish(cmd, th)
         self.pub_cte.publish(Float32(data=float(e_lat)))

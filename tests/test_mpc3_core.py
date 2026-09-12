@@ -1038,3 +1038,64 @@ class TestRateInvariantEstimatorConstants:
         assert vehicle.noise_scale_for_dt(0.088) < 1.0 < vehicle.noise_scale_for_dt(0.120)
         assert vehicle.noise_scale_for_dt(0.0) == 1.0
         assert vehicle.noise_scale_for_dt(0.1, 0.0) == 1.0
+
+
+# --------------------------------------------------------------------------
+# the measured dead-time law: `delay_tick` + `nd_mode`
+# --------------------------------------------------------------------------
+
+class TestDeadTimeTickLaw:
+    """`period + c`, the law the live cmd->feedback logs identify.
+
+    Fitted offline on the six race logs carrying both `cmd` and `steering`
+    (slew-limited rack, 3.2 rad/s, per-20 s-segment median): pose-to-rack =
+    period + 0.042 s at 0.058 and + 0.051-0.059 s at 0.094-0.100.
+    """
+
+    def test_delay_tick_scales_with_the_whole_period(self):
+        a = RateAdapter(terms=('delay_tick',), dead_tick_c=0.045)
+        assert a.values(0.058)['cmd_dead_time'] == pytest.approx(0.103)
+        assert a.values(0.100)['cmd_dead_time'] == pytest.approx(0.145)
+        # delay_s follows it by the estimation lag, exactly as `delay` does.
+        assert a.values(0.058)['delay_s'] == pytest.approx(0.103 + 0.045)
+
+    def test_delay_tick_beats_delay_when_both_are_listed(self):
+        a = RateAdapter(terms=('delay', 'delay_tick'))
+        assert a.values(0.058)['cmd_dead_time'] == pytest.approx(0.103)
+
+    def test_default_terms_do_not_touch_the_dead_time(self):
+        a = RateAdapter()                      # shipping terms
+        for p in (0.058, 0.104, 0.140):
+            assert a.values(p)['cmd_dead_time'] == pytest.approx(0.135)
+
+    def test_nd_mode_fixed_is_the_shipping_structure(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400))
+        m = make_mpc(p)
+        assert m.cfg['nd_mode'] == 'fixed' and m.nd == 3
+        for period in (0.058, 0.104):
+            m.period = period
+            assert m.nd == 3                   # period does not enter
+
+    def test_nd_mode_period_follows_the_measured_period(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400))
+        m = make_mpc(p, nd_mode='period', dead_tick_c=0.045)
+        m.period = 0.058
+        assert m.nd == round((0.058 + 0.045) / 0.060)
+        m.period = 0.160
+        assert m.nd == round((0.160 + 0.045) / 0.060)
+
+    def test_nd_and_the_actuator_agree_under_the_pair(self, tmp_path):
+        """`delay_tick` + `nd_mode=period` describe ONE delay, not two."""
+        p = RefPath(circle_path(tmp_path, R=3.0, n=400))
+        m = make_mpc(p, nd_mode='period', dead_tick_c=0.045)
+        act = Actuator(dead_time=0.135)
+        ctl = RateControl(m, act, enabled=True,
+                          terms=('apply', 'thr', 'predict', 'enc', 'pose',
+                                 'delay_tick'), dead_tick_c=0.045)
+        t = 0.0
+        for period in (0.058, 0.075, 0.104):
+            for _ in range(40):
+                t += period
+                ctl.update(t)
+            assert act.dead_time == pytest.approx(period + 0.045, abs=1e-9)
+            assert m.nd == m._nd_for(act.dead_time)

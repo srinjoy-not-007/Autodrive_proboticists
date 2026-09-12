@@ -72,7 +72,7 @@ except ImportError:                                  # running from src/pit_crew
 __all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS',
            'RateEstimator', 'RateAdapter', 'RateControl', 'ILC',
            'corridor_clearance', 'RATE_NOMINAL', 'RATE_TERMS',
-           'RATE_ALL_TERMS']
+           'RATE_ALL_TERMS', 'GapRider']
 
 
 DEFAULTS = dict(
@@ -84,6 +84,28 @@ DEFAULTS = dict(
     steer_rate=vehicle.STEER_RATE,
     delay_s=0.180,            # 0.135 dead time + 0.045 estimation, measured
     apply_ahead_s=0.090,      # which plan point the actuator is handed
+    # --- where `nd` comes from (OPT-IN) -----------------------------------
+    # `nd` is the number of horizon steps whose steering is already in flight.
+    # 'fixed' is the shipping behaviour: `round(delay_s / step_dt)`, a constant
+    # (3 at every period the clamp band admits, 0.052-0.156 s).
+    #
+    # 'period' derives it instead from the MEASURED pose-to-rack delay,
+    # `period + dead_tick_c`, which is the law the live logs identify (see
+    # `dead_tick_c`).  It is NOT the identity at the nominal period -- at
+    # 0.104 s it gives round(0.149 / 0.060) = 2 against the shipping 3 -- so it
+    # is opt-in and has to be driven before it is believed.  `delay_tick` in
+    # `rate_terms` puts the SAME law on `Actuator.dead_time`, so with both on
+    # the rollout's committed steps and the actuator model agree by
+    # construction; with only one on they do not, which is why the pair is the
+    # configuration to test.
+    nd_mode='fixed',
+    # The constant of the measured dead-time law, in seconds.  Fitted offline
+    # (slew-limited rack model, 3.2 rad/s, per-20 s-segment median) on the six
+    # display/Xvfb race logs that carry both `cmd` and `steering`:
+    # pose-stamp-to-rack = period + c with c = 0.042 s at a 0.058 s period and
+    # 0.051-0.059 s at 0.094-0.100 s.  0.045 is the value the closed-loop
+    # timing hunt reported and is kept as the default so the two agree.
+    dead_tick_c=0.045,
     # Floor, in HORIZON STEPS, under which `apply_ahead_s` is not believed.
     # The publish index is `nd + apply_ahead_s/step_dt` and this floors the
     # second term, so at the shipping tune (0.090/0.060 = 1.5 steps) it does
@@ -310,6 +332,10 @@ RATE_NOMINAL = 0.104          # the period mpc3's defaults were validated at
 # Pass `rate_terms=apply,thr,delay,predict,enc,pose` to re-enable it, but
 # isolate it first: `rate_terms=delay` alone against `rate_terms=apply` alone.
 RATE_ALL_TERMS = ('apply', 'thr', 'delay', 'predict', 'enc', 'pose')
+# `delay_tick` is an ALTERNATIVE to `delay`, not an addition -- both write
+# `cmd_dead_time` and `delay_tick` wins when both are listed -- so it is
+# deliberately not in `RATE_ALL_TERMS`.  Ask for it by name:
+# `rate_terms=apply,thr,predict,enc,pose,delay_tick`.
 RATE_TERMS = ('apply', 'thr', 'predict', 'enc', 'pose')
 
 
@@ -371,7 +397,7 @@ class RateAdapter:
     def __init__(self, cmd_dead_time=0.135, delay_s=0.180, apply_ahead_s=0.090,
                  thr_lead_s=0.225, max_predict_s=0.35, stale_pose_s=0.35,
                  enc_alpha=0.35, pose_blend=1.0, enc_tau=0.19,
-                 nominal=RATE_NOMINAL, terms=RATE_TERMS):
+                 dead_tick_c=0.045, nominal=RATE_NOMINAL, terms=RATE_TERMS):
         self.nominal = float(nominal)
         self.terms = tuple(terms)
         self.dead0 = float(cmd_dead_time)
@@ -388,6 +414,8 @@ class RateAdapter:
         # waits at the pickup boundary is taken out.
         self.bridge = self.dead0 - 0.5 * self.nominal
         self.est_lag = self.delay0 - self.dead0
+        # The constant of the `delay_tick` law (see DEFAULTS' `dead_tick_c`).
+        self.dead_c = float(dead_tick_c)
 
     def values(self, period):
         p = float(period)
@@ -396,7 +424,26 @@ class RateAdapter:
                  apply_ahead_s=self.apply0, thr_lead_s=self.thr0,
                  max_predict_s=self.predict0, stale_pose_s=self.stale0,
                  enc_alpha=self.enc0, pose_blend=self.blend0)
-        if 'delay' in self.terms:
+        if 'delay_tick' in self.terms:
+            # ONE-TICK LATCH + a fixed actuator delay, which is what the live
+            # logs identify.  The controller's command is not picked up by the
+            # bridge until the emit at the END of the next telemetry callback,
+            # so the wait is a whole period, not half of one; what is left over
+            # is constant.  Measured (six race logs with both `cmd` and
+            # `steering`, slew-limited rack fit, 20 s segments): pose-to-rack =
+            # period + 0.042 s at 0.058 and + 0.051-0.059 s at 0.094-0.100,
+            # residuals <= 0.010 s against this law and up to 0.026 s against
+            # `bridge + period/2`, which the 0.058 s point rejects.
+            #
+            # Note what this is measured FROM: the pose stamp.  `Actuator`
+            # records its commands at the PUBLISH instant, which is one solve
+            # later, so setting it here charges the controller's own latency
+            # twice.  That is deliberate and bounded (~0.02-0.04 s, i.e. under
+            # one horizon step) -- `dead_tick_c` is the knob to take it back
+            # out -- but it is why this is opt-in and has to be driven.
+            v['cmd_dead_time'] = p + self.dead_c
+            v['delay_s'] = v['cmd_dead_time'] + self.est_lag
+        elif 'delay' in self.terms:
             v['cmd_dead_time'] = self.bridge + 0.5 * p
             v['delay_s'] = v['cmd_dead_time'] + self.est_lag
         if 'apply' in self.terms:
@@ -537,6 +584,104 @@ class RateControl:
         if self.thr is not None:
             self.thr.hold = p
         return v
+
+
+# --------------------------------------------------------------------------
+# degraded mode for a telemetry GAP  (OPT-IN: `gap_predict_s`)
+# --------------------------------------------------------------------------
+
+class GapRider:
+    """What to do while the telemetry has stopped, and on the first pose back.
+
+    The shipping behaviour is a cliff: `stale_pose_s` (0.35 s at the nominal
+    period, and ONE-SIDED under `rate_adaptive`, so 0.195 s at a 0.058 s
+    period) and then the watchdog holds the last steering angle and publishes
+    zero throttle.  Measured in the harness, one dropped frame is harmless and
+    three (0.40 s at 0.104 s) put the car on that coast for long enough to miss
+    a corner entry.
+
+    Nothing here is a new control law.  `ride` says "the pose is old but not
+    yet useless": the tracker keeps solving from the SAME estimate dead
+    reckoned further forward by `Actuator.predict` -- the plan and the actuator
+    model already describe the next second -- at the plan's own timing, and
+    `v_cap` ramps the commanded speed down while it does so, because an
+    open-loop plan deserves less speed the longer it runs blind.  Past
+    `predict_s` the old coast takes over unchanged.
+
+    `blend`/`gate` are the re-acquisition guard: the first pose after a long
+    gap is the output of a filter that has just dead reckoned through the gap
+    itself (`localization.py` clamps its own step to 0.5 s and drops to
+    `_patience` 1), so taking it whole is a snap.  Blending it against our own
+    propagation for a few frames costs nothing when the pose is good.
+
+    Every default is off, and `enabled` is False then, so a node or harness
+    that does not set `gap_predict_s` behaves exactly as before.
+    """
+
+    def __init__(self, predict_s=0.0, decel=3.0, v_min=1.0, reacq_blend=0.0,
+                 reacq_gate_m=0.0, reacq_n=2, reacq_gap_s=0.0):
+        self.predict_s = float(predict_s)
+        self.decel = float(decel)
+        self.v_min = float(v_min)
+        self.reacq_blend = float(reacq_blend)
+        self.reacq_gate_m = float(reacq_gate_m)
+        self.reacq_n = int(reacq_n)
+        # Gap length that arms the guard; 0.0 means "one stale window", which
+        # the caller passes in because only it knows the rate-adapted value.
+        self.reacq_gap_s = float(reacq_gap_s)
+        self._last_stamp = None
+        self._armed = 0
+        self.rides = 0            # solves made on a dead-reckoned pose
+        self.gaps = 0             # gaps long enough to arm the guard
+        self.last_gap = 0.0
+
+    @property
+    def enabled(self):
+        return self.predict_s > 0.0
+
+    # -- while the telemetry is gone ---------------------------------------
+    def ride(self, age, stale_s):
+        """True while a gap of `age` seconds is still worth driving through."""
+        if not self.enabled:
+            return False
+        return stale_s < age <= stale_s + self.predict_s
+
+    def window(self, stale_s):
+        """Seconds of dead reckoning from the pose stamp that `ride` needs."""
+        return stale_s + self.predict_s if self.enabled else 0.0
+
+    def v_cap(self, age, stale_s, v_cmd):
+        """Ramp the commanded speed down while driving on an old pose."""
+        if not self.enabled:
+            return v_cmd
+        over = age - stale_s
+        if over <= 0.0:
+            return v_cmd
+        return min(v_cmd, max(self.v_min, v_cmd - self.decel * over))
+
+    # -- the first pose back ------------------------------------------------
+    def see_pose(self, stamp, stale_s):
+        """Record an accepted pose; arm the guard if it ended a long gap."""
+        prev, self._last_stamp = self._last_stamp, float(stamp)
+        if prev is None:
+            return 0.0
+        gap = float(stamp) - prev
+        self.last_gap = gap
+        if not (self.enabled and self.reacq_blend > 0.0):
+            return gap
+        trig = self.reacq_gap_s if self.reacq_gap_s > 0.0 else stale_s
+        if gap > trig:
+            self.gaps += 1
+            self._armed = max(1, self.reacq_n)
+        return gap
+
+    def filter_gains(self, blend, gate):
+        """(blend, gate) for THIS pose; consumes one armed frame."""
+        if self._armed <= 0:
+            return blend, gate
+        self._armed -= 1
+        g = self.reacq_gate_m if self.reacq_gate_m > 0.0 else gate
+        return min(blend, self.reacq_blend), g
 
 
 # --------------------------------------------------------------------------
@@ -896,7 +1041,10 @@ class MPC3:
         self.cfg = p
         self.N = int(p['horizon'])
         self.dt = float(p['step_dt'])
-        self.nd = max(0, min(self.N - 2, int(round(p['delay_s'] / self.dt))))
+        # `period` is written by `RateControl.update` every pose; the setter
+        # below re-derives `nd` from it when `nd_mode` is 'period'.
+        self._period = float(RATE_NOMINAL)
+        self.nd = self._nd_for(p['delay_s'])
         self.u = np.zeros(self.N)
         self.v_plan = None            # last speed plan, warm start for ds
         self.v_ceiling = None         # the ceiling the throttle is handed
@@ -915,12 +1063,34 @@ class MPC3:
         # rollout models the rack as a lag, where it is the plan command the
         # free steps continue from.
         self.last_cmd_raw = None
-        self.period = float(RATE_NOMINAL)
         self._apply = (0, 0.0)        # publish knot + fraction, set in solve()
         # (command plan, its Jacobian) from the last rollout; None unless
         # `steer_tau` / `model_cmd_tau` put a lag in the chain.
         self._pub = None
 
+
+    # ..................................................................
+    def _nd_for(self, delay):
+        """Committed steps for a delay in seconds, boxed to the horizon."""
+        return max(0, min(self.N - 2, int(round(float(delay) / self.dt))))
+
+    def _refresh_nd(self):
+        """Re-derive `nd` from whichever law `nd_mode` selects."""
+        if str(self.cfg.get('nd_mode', 'fixed')) == 'period':
+            self.nd = self._nd_for(self._period + self.cfg['dead_tick_c'])
+        else:
+            self.nd = self._nd_for(self.cfg['delay_s'])
+
+    @property
+    def period(self):
+        """The measured sensor period, as last seen by `RateControl`."""
+        return self._period
+
+    @period.setter
+    def period(self, p):
+        self._period = float(p)
+        if str(self.cfg.get('nd_mode', 'fixed')) == 'period':
+            self._refresh_nd()
 
     # ..................................................................
     def set_rate(self, delay_s=None, apply_ahead_s=None, thr_lead_s=None):
@@ -933,8 +1103,7 @@ class MPC3:
         """
         if delay_s is not None:
             self.cfg['delay_s'] = float(delay_s)
-            self.nd = max(0, min(self.N - 2,
-                                 int(round(float(delay_s) / self.dt))))
+            self._refresh_nd()
         if apply_ahead_s is not None:
             self.cfg['apply_ahead_s'] = float(apply_ahead_s)
         if thr_lead_s is not None:
