@@ -24,6 +24,14 @@ params took 1 collision (72.69 s), so the smoother steering (w_rate ~2,
 ay_budget at the measured 6.57 limit) is what buys it. 100-lap validation
 running.
 
+100 laps of that candidate: 2 collisions (s 11.2 hairpin entry, laps 40 and
+86), median 7.126, first ten 70.92 (sim timer 70.32), best 6.89. At 2%/lap
+its expected race is no better than the clean 71.63 s config, so it is NOT
+promoted. Found meanwhile: mpc3's numpy solves ran OpenBLAS at ~1030% CPU
+inside the container in every mpc3 run so far; the entrypoint and
+run_stanley.sh now pin OMP/OPENBLAS/MKL threads to 1. Both configs are
+being re-run for 100 laps with the pin.
+
 ## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
 
 **Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.0.csv`
