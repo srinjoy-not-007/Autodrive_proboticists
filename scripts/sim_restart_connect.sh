@@ -50,7 +50,12 @@ docker rm -f autodrive_roboracer_sim 2>/dev/null || true
 # it once per bridge restart), so nothing has to be apt-installed into this
 # throwaway sim container on every single run. Nothing is displayed on any real
 # screen: :99 exists only in memory.
+# The telemetry period is set by ONE CPU-saturated Unity render thread (GPU
+# idle, no vsync on Xvfb), so which cores it lands on decides the rate
+# (0.088-0.106 s per start). SIM_CPUSET pins the container, e.g.
+# SIM_CPUSET=0-7,16-23 (CCD0, fast) or a narrower set to slow it.
 docker run --name autodrive_roboracer_sim --rm -d \
+    ${SIM_CPUSET:+--cpuset-cpus=$SIM_CPUSET} \
     --network=host --ipc=host --privileged --gpus all \
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
     "autodriveecosystem/autodrive_roboracer_sim:${TAG}" \

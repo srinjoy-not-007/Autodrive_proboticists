@@ -84,6 +84,13 @@ landed on 0.104 s instances and are therefore not 11 Hz tests (both clean,
 73.1 s official). `RATE_MAX_DT`/`RATE_MIN_DT` on run_exp/run_stanley now
 restart the sim until the period is in the wanted band; every run must be
 read with its dt_p50 (tools/lap_report.py).
+Cause of the lottery (sim-period agent): the telemetry rate is set by one
+CPU-saturated Unity render thread (~98% of a core, GPU at 19% and idle
+clocks, Xvfb has no refresh so no vsync); ~100 ms of render CPU per tick,
+i.e. a ~17% swing in that thread's per-frame cost between starts. Not GPU
+state, not CCD placement (5.5% clock gap only), not quality (4%). Levers:
+`SIM_CPUSET` on sim_restart_connect (container --cpuset-cpus), locked GPU
+clocks, screen size; the Unity log is now saved per run by stop_run.sh.
 CORRECTION 2 (pose-offset agent): the 0.15 m "forward pose offset" at 11
 Hz is a logging artefact -- the logger writes a one-frame-stale pose, and
 one frame is 0.062 m shorter at 0.088 s. De-staled, the consumed pose is
