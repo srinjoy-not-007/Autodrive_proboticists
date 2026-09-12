@@ -32,8 +32,8 @@ class RaceLogger(Node):
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',
                            'collision_event', 'px', 'py', 'pyaw', 'cte',
-                           'last_lap_time', 'best_lap_time', 'pstamp'])
-        self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0,
+                           'last_lap_time', 'best_lap_time', 'pstamp', 'cmd'])
+        self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0, 'cmd': 0.0,
                       'throttle': 0.0, 'lap_count': 0, 'lap_time': 0.0,
                       'last_lap_time': 0.0, 'best_lap_time': 0.0,
                       'collision_count': 0, 'px': float('nan'),
@@ -48,6 +48,10 @@ class RaceLogger(Node):
         self.create_subscription(JointState, f'{ns}/left_encoder', self.on_enc, qos)
         self.create_subscription(Float32, f'{ns}/steering',
                                  lambda m: self.state.update(steering=m.data), qos)
+        # The published steering COMMAND, next to the sim's actuator feedback
+        # above, so command-vs-response can be read off one log.
+        self.create_subscription(Float32, f'{ns}/steering_command',
+                                 lambda m: self.state.update(cmd=m.data), qos)
         self.create_subscription(Float32, f'{ns}/throttle',
                                  lambda m: self.state.update(throttle=m.data), qos)
         self.create_subscription(Int32, f'{ns}/lap_count',
@@ -125,7 +129,8 @@ class RaceLogger(Node):
                            f"{s['lap_time']:.2f}", s['collision_count'],
                            collision_event, s['px'], s['py'], s['pyaw'], s['cte'],
                            f"{s['last_lap_time']:.3f}",
-                           f"{s['best_lap_time']:.3f}", s['pstamp']])
+                           f"{s['best_lap_time']:.3f}", s['pstamp'],
+                           f"{s['cmd']:.3f}"])
 
     def destroy_node(self):
         self.f.flush()

@@ -150,8 +150,29 @@ AY_KNEE = 0.85              # fraction of AY_MAX where saturation starts
 
 class Plant:
 
+    # --- opt-in steering-actuator laws (`--plant-actuator`) ----------------
+    # 'slew' is what this harness has always simulated: a 3.2 rad/s rate limit
+    # in WALL CLOCK, plus `EXTRA_DEAD` of transport delay.  It is rate
+    # invariant, so it can never show a plant that behaves differently at a
+    # different telemetry period -- which is exactly the hypothesis the
+    # display runs raised.  Two alternatives are available, both default-off:
+    #
+    #   'pole'  first order with `tau`, no rate limit.  This is what the
+    #           staircase log actually identifies (dead 0.12-0.16 s, tau
+    #           0.06-0.08 s, any slew ceiling above ~6 rad/s fits equally
+    #           well; a 3.2 rad/s ceiling fits WORSE, rmse 0.0414 against
+    #           0.0406).  Still wall-clock, so still rate invariant.
+    #   'tick'  the rate-DEPENDENT hypothesis: the actuator advances at most
+    #           `tick_frac` of the remaining error, or `steer_rate * frame`
+    #           rad, once per telemetry tick.  Its effective slew in rad/s is
+    #           then 1/frame, i.e. 1.8x faster at 0.058 s than at 0.104 s.
+    #
+    # Nothing here runs unless a flag asks for it; `slew` with the module
+    # defaults reproduces every earlier number byte for byte.
     def __init__(self, x, y, yaw, v=0.0, ay_max=AY_MAX, servo_k=SERVO_K,
-                 a_accel=SERVO_A, a_brake=SERVO_A, drag=0.0):
+                 a_accel=SERVO_A, a_brake=SERVO_A, drag=0.0,
+                 actuator='slew', steer_rate=None, tau=0.0, dead=None,
+                 frame=FRAME, tick_frac=1.0):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
         self.servo_k = float(servo_k)
@@ -163,17 +184,41 @@ class Plant:
         self.steer_target = 0.0
         self.throttle = 0.0
         self.kappa = 0.0
+        self.actuator = str(actuator)
+        self.steer_rate = (vehicle.STEER_RATE if steer_rate is None
+                           else float(steer_rate))
+        self.tau = float(tau)
+        self.dead = EXTRA_DEAD if dead is None else float(dead)
+        self.frame = float(frame)
+        self.tick_frac = float(tick_frac)
+        self._tick_budget = 0.0          # rad left in this telemetry tick
 
     def accept_frame(self, t, steer_cmd, throttle):
-        """The bridge picks the latched command up; it bites EXTRA_DEAD later."""
-        self.cmd_queue.append((t + EXTRA_DEAD, float(steer_cmd), float(throttle)))
+        """The bridge picks the latched command up; it bites `dead` later."""
+        self.cmd_queue.append((t + self.dead, float(steer_cmd), float(throttle)))
+        if self.actuator == 'tick':
+            # One telemetry tick, one allowance.  The command arrives on the
+            # same wire as the frame, so the allowance is renewed on the frame.
+            self._tick_budget = self.steer_rate * self.frame
 
     def step(self, t):
         while self.cmd_queue and self.cmd_queue[0][0] <= t:
             _, s, th = self.cmd_queue.pop(0)
             self.steer_target, self.throttle = s, th
-        step = vehicle.STEER_RATE * DT
-        self.delta += max(-step, min(step, self.steer_target - self.delta))
+        err = self.steer_target - self.delta
+        if self.actuator == 'pole':
+            move = err * (1.0 - math.exp(-DT / max(self.tau, 1e-6)))
+            lim = self.steer_rate * DT
+            move = max(-lim, min(lim, move))
+        elif self.actuator == 'tick':
+            want = err * self.tick_frac
+            lim = min(self._tick_budget, self.steer_rate * DT * 1e9)
+            move = max(-lim, min(lim, want))
+            self._tick_budget = max(0.0, self._tick_budget - abs(move))
+        else:
+            lim = self.steer_rate * DT
+            move = max(-lim, min(lim, err))
+        self.delta += move
         self.delta = max(-vehicle.MAX_STEER, min(vehicle.MAX_STEER, self.delta))
 
         k_ask = math.tan(self.delta) / vehicle.WHEELBASE
@@ -346,6 +391,7 @@ class MPC3Sim:
                       rate_adaptive=0, rate_nominal=RATE_NOMINAL,
                       rate_window=20, rate_min_change=0.002,
                       rate_terms=','.join(RATE_TERMS),
+                      rate_lo=0.5, rate_hi=1.5,
                       stale_pose_s=0.35, enc_alpha=0.35,
                       # --- ILC (opt-in) ------------------------------------
                       ilc_enable=0, ilc_bin_m=0.25, ilc_k_gain=0.30,
@@ -360,14 +406,17 @@ class MPC3Sim:
                       ilc_v_lo=0.85, ilc_v_hi=1.05, ilc_store='',
                       # --- solve schedule (opt-in; see mpc3.py) ------------
                       control_mode='per_pose', control_hz=20.0,
-                      timer_apply_ahead_s=0.0, timer_sync_dead=1)
+                      timer_apply_ahead_s=0.0, timer_sync_dead=1,
+                      # --- teleport recovery (opt-in; see mpc3.py) ---------
+                      v_pose_gate=0.0, v_pose_min_dt=0.03, reindex_after=0)
         solver_keys = ('horizon', 'step_dt', 'min_step_m', 'iters', 'outer',
                        'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk',
                        'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
                        'yaw_gain', 'ay_deliver', 'sat_knee', 'ay_budget',
                        'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
                        'thr_lead_s', 'thr_lead_mode', 'thr_enc_tau', 'delay_s',
-                       'apply_ahead_s', 'steer_rate')
+                       'apply_ahead_s', 'apply_floor_steps', 'steer_rate',
+                       'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
@@ -386,6 +435,9 @@ class MPC3Sim:
             u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'])
         self.v_plan0 = 0.0
         self._enc_seen = False
+        self._pose_prev = None           # (stamp, x, y) of the last pose
+        self._v_pose = None
+        self._gate_run = 0
         self.meas = None                 # (t_stamp, x, y, yaw); None = no pose
         self._last = (0.0, 0.0)          # last (steer, throttle) published
         self.speed_meas = 0.0
@@ -400,6 +452,8 @@ class MPC3Sim:
             window=int(self.P['rate_window']),
             terms=tuple(str(self.P['rate_terms']).split(',')),
             min_change=float(self.P['rate_min_change']),
+            rate_lo=float(self.P['rate_lo']),
+            rate_hi=float(self.P['rate_hi']),
             cmd_dead_time=self.P['cmd_dead_time'],
             delay_s=self.mpc.cfg['delay_s'],
             apply_ahead_s=self.mpc.cfg['apply_ahead_s'],
@@ -453,6 +507,12 @@ class MPC3Sim:
 
     def on_pose(self, t_now, t_stamp, x, y, yaw):
         self.rate_ctl.update(t_stamp)
+        if self.P['v_pose_gate'] > 0.0:
+            pv = self._pose_prev
+            dt = (t_stamp - pv[0]) if pv is not None else 0.0
+            self._v_pose = (math.hypot(x - pv[1], y - pv[2]) / dt
+                            if dt > self.P['v_pose_min_dt'] else None)
+            self._pose_prev = (t_stamp, x, y)
         if self.v_plan0 <= 0.0:
             self.v_plan0 = float(self.path.v_prof[
                 self.path.nearest(x, y, None, yaw=yaw)])
@@ -489,6 +549,12 @@ class MPC3Sim:
 
     def measured_speed(self):
         v = self.speed_meas
+        gate = self.P['v_pose_gate']
+        if gate > 0.0 and self._v_pose is not None and v > self._v_pose + gate:
+            self._gate_run += 1
+            v = self._v_pose
+        else:
+            self._gate_run = 0
         if v > self.P['v_meas_min']:
             self._enc_seen = True
             return v
@@ -525,7 +591,9 @@ class MPC3Sim:
         x, y, yaw, delta0 = self.act.predict(
             x, y, yaw, ts, t_now, v0,
             kappa_of=lambda d: g * math.tan(d) / vehicle.WHEELBASE)
-        i0 = self.path.nearest(x, y, self.idx, yaw=yaw)
+        ra = int(self.P['reindex_after'])
+        last = None if (ra > 0 and self._gate_run >= ra) else self.idx
+        i0 = self.path.nearest(x, y, last, yaw=yaw)
         self.idx = i0
         pyaw = float(self.path.yaw[i0])
         dx, dy = x - self.path.xy[i0, 0], y - self.path.xy[i0, 1]
@@ -712,6 +780,26 @@ class LegacyMPCSim:
 # the loop
 # ---------------------------------------------------------------------------
 
+def load_checkpoints(map_prefix):
+    """Ordered numbered checkpoints of a scene, as the simulator resets to them.
+
+    `data/maps/<name>_checkpoints.csv` is written by `tools/map_from_mesh.py`
+    straight out of the Unity scene, so these ARE the poses a collision reset
+    uses.  Measured against seven Porto resets in data/logs (Sept 12): the car
+    reappears 0.14-0.16 m short of the last numbered checkpoint it passed, at
+    that checkpoint's yaw and at rest.
+    """
+    import csv as _csv
+    rows = []
+    with open(map_prefix + '_checkpoints.csv') as f:
+        for r in _csv.DictReader(f):
+            if r['kind'] == 'checkpoint' and r['name'].lstrip('-').isdigit():
+                rows.append((int(r['name']), float(r['x']), float(r['y']),
+                             float(r['yaw'])))
+    rows.sort()
+    return np.array([[x, y, yaw] for _n, x, y, yaw in rows], float)
+
+
 def footprint_clear(dist, meta, x, y, yaw, pts=None):
     """Smallest wall distance under the car's four corners plus its sides."""
     res = float(meta['resolution'])
@@ -733,7 +821,8 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         yaw_noise=0.0, noise_tau=0.5, pose_bias_inside=0.0, ay_max=AY_MAX,
         pose_latency=POSE_LATENCY, verbose=True, v_start=None, frame=FRAME,
         enc_alpha=0.0, servo=None, enc_slip=1.0, log_enc_alpha=0.0,
-        pose_lon_bias=0.0):
+        pose_lon_bias=0.0, teleport=None,
+        pose_speed_cap=0.0, pose_lag_tau=0.5, pose_lag_kappa=0.2, actuator=None):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -752,6 +841,12 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     # the sensor period, which is one of the things rate adaptivity has to
     # answer for.  0.0 = off, i.e. the perfect speed the harness used before.
     enc_v = None
+    # Opt-in (default 0.0 = off): the localization motion model's own speed
+    # cap (`localization.max_step_m` / `rate_nominal`, 5.769 m/s by default)
+    # truncates dead reckoning above that speed.  Where the scan cannot
+    # observe along-track motion -- a long straight -- the estimate then falls
+    # behind at (v_true - cap) and only recovers where the corridor curves.
+    pose_lag = 0.0
     # A second, purely DIAGNOSTIC encoder channel: what `src/tools/race_logger.py`
     # would have written in its `speed` column.  Every "live speed lag" number in
     # docs/STATUS.md came from that column, so without modelling it here the
@@ -762,7 +857,8 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     # is not the same test as a flying lap: the encoder has said nothing yet.
     plant = Plant(path.xy[i0, 0], path.xy[i0, 1], float(path.yaw[i0]),
                   v=(float(path.v_prof[i0]) if v_start is None else float(v_start)),
-                  ay_max=ay_max, **(servo or {}))
+                  ay_max=ay_max, frame=frame, **(servo or {}),
+                  **(actuator or {}))
     steer_cmd, throttle = 0.0, 0.0
     t = 0.0
     next_frame = 0.0
@@ -779,6 +875,47 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     path_m = 0.0
     last_xy = (plant.x, plant.y)
     t_end = laps * 30.0 + 20.0
+    # --- opt-in realistic checkpoint teleport (`--teleport`) ---------------
+    # Default None keeps the idealized on-line reset this harness has always
+    # used, so every existing number is unchanged.
+    tp = teleport or {}
+    tp_cp = tp.get('cp')
+    tp_tau = float(tp.get('reloc_tau', 0.0))
+    tp_every = float(tp.get('every', 0.0))
+    tp_ex = tp_ey = 0.0            # pose error injected by the last teleport
+    tp_t = -1e9                    # when it happened
+    tp_next = tp_every if tp_every > 0 else 1e9
+    tp_events = []                 # (t, s, x, y) of each injected teleport
+    tp_rec = []                    # (t, e_lat, v, v_prof) after each teleport
+    tp_coll = []                   # seconds from the last teleport to a collision
+
+    def do_teleport(now, j):
+        """Put the car at the last numbered checkpoint it passed, at rest."""
+        nonlocal tp_ex, tp_ey, tp_t
+        d = np.hypot(tp_cp[:, 0] - plant.x, tp_cp[:, 1] - plant.y)
+        k = int(np.argmin(d))
+        # "Last checkpoint passed" = the nearest one that is BEHIND the car in
+        # its own heading frame; the nearest one otherwise.
+        ahead = ((tp_cp[:, 0] - plant.x) * math.cos(plant.yaw)
+                 + (tp_cp[:, 1] - plant.y) * math.sin(plant.yaw))
+        back = np.where(ahead <= 0.0)[0]
+        if len(back):
+            k = int(back[np.argmin(d[back])])
+        ox, oy = plant.x, plant.y
+        plant.x, plant.y, plant.yaw = (float(tp_cp[k, 0]), float(tp_cp[k, 1]),
+                                       float(tp_cp[k, 2]))
+        plant.v = 0.0
+        # The commands LATCH through a reset and the steering rack does not
+        # move, so `cmd_queue`, `steer_target` and `delta` are deliberately
+        # left alone -- unlike the idealized reset above, which clears them.
+        # The particle filter does not jump: measured on 100 live teleports its
+        # frame-to-frame step is SMALLER than in normal driving (0.23 m against
+        # 0.38 m).  It walks to the checkpoint over ~1.2 s, which is modelled
+        # here as the teleport displacement decaying with `reloc_tau`.
+        tp_ex, tp_ey = ox - plant.x, oy - plant.y
+        tp_t = now
+        tp_events.append((now, float(path.s[j]), plant.x, plant.y))
+
     while t < t_end and lap < laps:
         if t >= next_frame - 1e-9:
             gyro = plant.v * plant.kappa
@@ -801,10 +938,23 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
             # the estimate sits ~0.15 m FURTHER FORWARD at the faster rate.
             # An arc-length error turns the car in early where kappa ramps,
             # which is a corner cut and not a tracking error at all.
+            lon_b = pose_lon_bias
+            if pose_speed_cap > 0.0:
+                pose_lag += max(0.0, plant.v - pose_speed_cap) * frame
+                kr = abs(float(path.kappa[last_i]))
+                if pose_lag_kappa > 0.0 and kr > 0.0:
+                    obs = min(1.0, kr / pose_lag_kappa)
+                    pose_lag *= math.exp(-frame * obs / max(pose_lag_tau, 1e-3))
+                lon_b -= pose_lag
             nx = (plant.x - math.sin(plant.yaw) * (err_lat + bias)
-                  + math.cos(plant.yaw) * pose_lon_bias)
+                  + math.cos(plant.yaw) * lon_b)
             ny = (plant.y + math.cos(plant.yaw) * (err_lat + bias)
-                  + math.sin(plant.yaw) * pose_lon_bias)
+                  + math.sin(plant.yaw) * lon_b)
+            if tp_tau > 0.0 and t - tp_t < 8.0 * tp_tau:
+                # Localization has not caught up with the reset yet.
+                g = math.exp(-(t - tp_t) / tp_tau)
+                nx += tp_ex * g
+                ny += tp_ey * g
             # The bridge publishes IMU, encoders and the steering angle at the
             # frame.  The POSE goes through the particle filter first, so it is
             # stamped with the scan time and delivered `pose_latency` later --
@@ -857,21 +1007,41 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                  + math.cos(pyaw) * (plant.y - path.xy[j, 1]))
             clear = (footprint_clear(dist, meta, plant.x, plant.y, plant.yaw)
                      if dist is not None else 1.0)
+            if tp_cp is not None and tp_every > 0.0 and t >= tp_next:
+                tp_next = t + tp_every
+                do_teleport(t, j)
+                cool = t + 1.0
             if clear <= 0.0 and t > cool:
                 collisions += 1
                 coll_s.append(float(path.s[j]))
+                if tp_events:
+                    tp_coll.append(t - tp_t)     # BEFORE this collision's own
                 cool = t + 1.0
                 # The simulator returns the car to its last checkpoint after a
                 # collision.  Without that, one contact leaves the car grinding
                 # along a wall for the rest of the run and every number after
                 # it is meaningless -- an early version reported "1 collision"
                 # for a run that completed no laps at all.
-                plant.x, plant.y = path.xy[j, 0], path.xy[j, 1]
-                plant.yaw = float(path.yaw[j])
-                plant.v = 0.5 * float(path.v_prof[j])
-                plant.delta = 0.0
-                plant.cmd_queue.clear()
-                plant.steer_target = 0.0
+                if tp_cp is not None:
+                    do_teleport(t, j)
+                else:
+                    plant.x, plant.y = path.xy[j, 0], path.xy[j, 1]
+                    plant.yaw = float(path.yaw[j])
+                    plant.v = 0.5 * float(path.v_prof[j])
+                    plant.delta = 0.0
+                    plant.cmd_queue.clear()
+                    plant.steer_target = 0.0
+            if tp_events and t - tp_t < 6.0:
+                # Global nearest: after a backwards teleport the windowed
+                # search `j` above can still be pointing ahead of the car,
+                # which is one of the things being measured -- it must not
+                # also corrupt the measurement.
+                jg = path.nearest(plant.x, plant.y, None, yaw=plant.yaw)
+                gy = float(path.yaw[jg])
+                eg = (-math.sin(gy) * (plant.x - path.xy[jg, 0])
+                      + math.cos(gy) * (plant.y - path.xy[jg, 1]))
+                tp_rec.append((t - tp_t, eg, plant.v, float(path.v_prof[jg]),
+                               float(clear), len(tp_events)))
             path_m += math.hypot(plant.x - last_xy[0], plant.y - last_xy[1])
             last_xy = (plant.x, plant.y)
             rec.append((t, plant.x, plant.y, plant.yaw, plant.v, plant.delta,
@@ -881,7 +1051,48 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                         log_enc if log_enc is not None else plant.v))
     return dict(rec=np.array(rec), laps=lap, lap_times=lap_times,
                 collisions=collisions, coll_s=coll_s, path_m=path_m,
-                line_m=total_s)
+                line_m=total_s, tp_events=tp_events, tp_coll=tp_coll,
+                tp_rec=np.array(tp_rec) if tp_rec else np.zeros((0, 6)))
+
+
+def teleport_report(out, frame):
+    """Recovery from each injected teleport, in the metrics the logs are read
+    with: time to |e_lat| < 0.15 m, time to 90% of the profile speed, and how
+    often a collision follows within 3 s."""
+    ev, r = out['tp_events'], out['tp_rec']
+    if not len(ev):
+        print('  teleports: none injected')
+        return
+    t_e, t_v, casc, gaps = [], [], 0, []
+    coll = np.array(out['coll_s'])
+    for k in range(1, len(ev) + 1):
+        m = r[r[:, 5] == k]
+        if not len(m):
+            continue
+        ok = np.abs(m[:, 1]) < 0.15
+        t_e.append(float(m[ok, 0].min()) if ok.any() else float('nan'))
+        ok = m[:, 2] >= 0.9 * m[:, 3]
+        t_v.append(float(m[ok, 0].min()) if ok.any() else float('nan'))
+        # a collision inside the 3 s window shows up as clearance <= 0
+
+    gaps = [g for g in out['tp_coll'] if g >= 0.0]
+    casc = sum(1 for g in gaps if g <= 3.0)
+    te = np.array(t_e, float); tv = np.array(t_v, float)
+    fin = np.isfinite(te)
+    print(f'  teleports {len(ev)}  '
+          f't(|e_lat|<0.15 m) p50 {np.nanmedian(te):.2f} s '
+          f'p90 {np.nanpercentile(te, 90):.2f} s '
+          f'(never: {int((~fin).sum())})')
+    print(f'    t(v >= 0.9 v_prof) p50 {np.nanmedian(tv):.2f} s '
+          f'p90 {np.nanpercentile(tv, 90):.2f} s;  '
+          f'cascade (collision within 3 s) {casc}/{len(ev)} '
+          f'({100.0 * casc / len(ev):.0f}%)')
+    if gaps:
+        g = np.array(gaps)
+        print(f'    collisions after a teleport: {len(g)}; gap to the '
+              f'previous teleport p50 {np.median(g):.1f} s '
+              f'min {g.min():.1f} s; <=3 s {int((g <= 3).sum())}, '
+              f'<=6 s {int((g <= 6).sum())}')
 
 
 def report(name, out, path, lo=10.0, hi=14.0, warm=1):
@@ -1057,6 +1268,15 @@ def main():
                     help='localization bias toward the inside of a bend, m')
     ap.add_argument('--v-start', type=float, default=None,
                     help='initial speed; 0 = standing start')
+    ap.add_argument('--pose-speed-cap', type=float, default=0.0,
+                    help='OPT-IN, 0=off: localization motion-model speed cap, '
+                         'm/s. The injected estimate falls behind by '
+                         'int max(0, v-cap) dt and recovers only where the '
+                         'corridor curves (see --pose-lag-tau/--pose-lag-kappa).')
+    ap.add_argument('--pose-lag-tau', type=float, default=0.5,
+                    help='recovery time constant of that lag in a corner, s')
+    ap.add_argument('--pose-lag-kappa', type=float, default=0.2,
+                    help='curvature 1/m at which the lag recovers at full rate')
     ap.add_argument('--pose-noise', type=float, default=0.0)
     ap.add_argument('--yaw-noise', type=float, default=0.0)
     ap.add_argument('--noise-tau', type=float, default=0.5,
@@ -1067,6 +1287,45 @@ def main():
                     help='mpc (legacy) override, key=value')
     ap.add_argument('-r', '--mpc3-param', action='append', default=[],
                     help='mpc3 override, key=value')
+    ap.add_argument('--teleport', action='store_true',
+                    help='opt-in: after a collision put the car at the last '
+                         'numbered CHECKPOINT of --map at rest, with the '
+                         'localization estimate lagging behind it, instead of '
+                         "the harness's idealized on-line reset")
+    ap.add_argument('--teleport-every', type=float, default=0.0,
+                    help='also inject a teleport every N s of driving, so '
+                         'recovery can be measured without waiting for a '
+                         'collision (0 = only on collisions).  Lap COUNTS and '
+                         'lap TIMES are meaningless under this: a teleport '
+                         'across the start line re-crosses it.  Read the '
+                         'collision count and the teleport report instead')
+    ap.add_argument('--teleport-reloc-tau', type=float, default=0.84,
+                    help='time constant of the localization estimate walking '
+                         'to the checkpoint. 0.84 s is fitted to 100 live '
+                         'teleports: |est-truth| 0.63 m at the reset, under '
+                         '0.15 m after 1.20 s (median)')
+    ap.add_argument('--plant-actuator', default='slew',
+                    choices=('slew', 'pole', 'tick'),
+                    help='steering-actuator law in the PLANT (default slew, '
+                         'the 3.2 rad/s wall-clock limiter this harness has '
+                         'always used).  "pole" is the first-order actuator '
+                         'the staircase log identifies; "tick" is the '
+                         'rate-DEPENDENT hypothesis, one allowance per '
+                         'telemetry tick.')
+    ap.add_argument('--plant-steer-rate', type=float, default=None,
+                    help='plant slew, rad/s (default vehicle.STEER_RATE 3.2); '
+                         'with --plant-actuator tick it sets the per-tick '
+                         'allowance, steer_rate * frame rad')
+    ap.add_argument('--plant-tau', type=float, default=0.08,
+                    help='first-order time constant, s, for '
+                         '--plant-actuator pole (identified 0.06-0.08)')
+    ap.add_argument('--plant-dead', type=float, default=None,
+                    help='bridge -> actuator dead time, s (default '
+                         'EXTRA_DEAD 0.090; the staircase identifies '
+                         '0.12-0.16 end to end)')
+    ap.add_argument('--plant-tick-frac', type=float, default=1.0,
+                    help='fraction of the remaining error the actuator takes '
+                         'per telemetry tick with --plant-actuator tick')
     ap.add_argument('--plot', default='')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
@@ -1100,6 +1359,25 @@ def main():
         if log_enc_alpha <= 0.0:
             log_enc_alpha = LOG_ENC_ALPHA
 
+    tp_cfg = None
+    if args.teleport or args.teleport_every > 0.0:
+        if not args.map:
+            raise SystemExit('--teleport needs --map (for the checkpoints)')
+        tp_cfg = dict(cp=load_checkpoints(args.map),
+                      reloc_tau=args.teleport_reloc_tau,
+                      every=args.teleport_every)
+
+    # Opt-in actuator law.  Default 'slew' with no overrides reproduces the
+    # historical plant exactly, so every number already in docs/STATUS.md
+    # stays reproducible without the flag.
+    act_cfg = None
+    if (args.plant_actuator != 'slew' or args.plant_steer_rate is not None
+            or args.plant_dead is not None):
+        act_cfg = dict(actuator=args.plant_actuator,
+                       steer_rate=args.plant_steer_rate,
+                       tau=args.plant_tau, dead=args.plant_dead,
+                       tick_frac=args.plant_tick_frac)
+
     results = {}
     order = {'both': ('mpc', 'mpc2'), 'all': ('mpc', 'mpc2', 'mpc3')}.get(
         args.tracker, (args.tracker,))
@@ -1119,9 +1397,15 @@ def main():
                   frame=args.frame, enc_alpha=enc_alpha, seed=args.seed,
                   enc_slip=enc_slip, log_enc_alpha=log_enc_alpha,
                   pose_lon_bias=args.pose_lon_bias,
+                  pose_speed_cap=args.pose_speed_cap,
+                  pose_lag_tau=args.pose_lag_tau,
+                  pose_lag_kappa=args.pose_lag_kappa, teleport=tp_cfg,
                   servo=(PLANT_REAL if args.plant_realistic else
-                         SERVO_CAL if args.servo_cal else None))
+                         SERVO_CAL if args.servo_cal else None),
+                  actuator=act_cfg)
         report(which, out, path, lo, hi)
+        if tp_cfg:
+            teleport_report(out, args.frame)
         if args.per_lap:
             per_lap(out)
         if args.speed_diag:
