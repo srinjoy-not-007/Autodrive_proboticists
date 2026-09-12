@@ -183,6 +183,15 @@ class SpeedEstimator:
         # TIME, so whoever knows the sensor period re-points it with
         # `reject_max_for_dt`. Identity at RATE_NOMINAL.
         self.reject_max = MAX_CONSEC_REJECT
+        # Largest sample interval still differentiated. Default MAX_ENC_GAP.
+        # It matters on a TELEMETRY STALL: above this the encoder contributes
+        # nothing across the gap, so the filtered speed stays at 100% of its
+        # pre-gap value and whoever dead-reckons with it marches the car
+        # forward through a stall it may have spent standing still. Raising it
+        # makes the sample measure the MEAN speed over the blind window, which
+        # is the correct thing for both stall shapes. Opt-in: localization
+        # leaves it at the constant unless `enc_gap_max` is set.
+        self.max_gap = MAX_ENC_GAP
         self.speed = 0.0            # m/s, filtered
         self._last = {}             # wheel -> (stamp_sec, position_rad)
         self._per = {}              # wheel -> filtered speed for that wheel
@@ -199,7 +208,7 @@ class SpeedEstimator:
         dt = stamp_sec - last[0]
         if dt <= 1e-4:
             return self.speed                    # duplicate / out-of-order
-        if dt >= MAX_ENC_GAP:
+        if dt >= self.max_gap:
             self._last[wheel] = (stamp_sec, position_rad)
             return self.speed                    # too stale to differentiate
         v = WHEEL_RADIUS * (position_rad - last[1]) / dt

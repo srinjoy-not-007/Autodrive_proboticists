@@ -113,6 +113,42 @@ class ParticleFilter(Node):
                                             # phantom speed lasts ~0.4 s)
             ('teleport_reseed', True),      # reseed the cloud at the nearby
                                             # checkpoints (needs checkpoints_csv)
+            # ---- telemetry-gap handling (Sep 12), ALL default-off ----------
+            # A stalled simulator (OBS + rosbag on the organisers' box) stops
+            # physics AND telemetry together, so the car does NOT move while
+            # the filter is blind; a stalled bridge or a delayed socket stops
+            # only the telemetry, and the car keeps driving. The filter cannot
+            # tell them apart from one inflated `dt`, and the shipped answer --
+            # dead-reckon the whole interval at the pre-gap encoder speed, up
+            # to `scan_dt_max` x `max_step_mps` = 4.5 m -- is right for one and
+            # catastrophic for the other. Measured on the real collision bag,
+            # see docs/STATUS.md.
+            ('gap_dt', 0.0),                # s; a scan interval longer than
+                                            # this is a telemetry gap. 0 = off
+                                            # (nothing below is consulted).
+            ('gap_step_cap_m', 0.0),        # m; >0 caps the SINGLE motion step
+                                            # taken across a gap. 0 = uncapped.
+            ('gap_noise_mult', 1.0),        # >1 widens the cloud on the
+                                            # post-gap step instead of trusting
+                                            # dead reckoning; the scan update
+                                            # then pulls the particles in.
+            ('lost_patience_min', 1),       # scans; floor under the count
+                                            # `repoint` derives from the
+                                            # measured period. At dt >= 0.35 s
+                                            # that count is 1, so ONE bad-score
+                                            # scan after a gap declares the
+                                            # filter lost and (with
+                                            # publish_on_reloc false) drops the
+                                            # pose the controller is waiting
+                                            # for.
+            ('scan_dt_max', 0.5),           # s; the motion-step clamp on the
+                                            # measured scan interval.
+            ('enc_gap_max', 0.0),           # s; >0 overrides the encoder's own
+                                            # `MAX_ENC_GAP` 0.5 s ceiling. The
+                                            # two coincide by default, so a gap
+                                            # of 0.5 s or more is dead-reckoned
+                                            # at 100% of the STALE pre-gap
+                                            # speed. Raise BOTH together.
             ('teleport_cp_radius', 2.5),    # m; only checkpoints this close to
                                             # the current estimate are seeded.
                                             # 0 = all of them, which measured
@@ -128,7 +164,10 @@ class ParticleFilter(Node):
          self.throttle_to_mps, self.lidar_offset, self.keep_prior_w,
          self.publish_on_reloc, self.midpoint_heading,
          checkpoints_csv, self.tp_scan_jump, self.tp_imu_g,
-         self.tp_hold_n, self.tp_reseed, self.tp_cp_radius) = [x.value for x in p]
+         self.tp_hold_n, self.tp_reseed,
+         self.gap_dt, self.gap_step_cap_m, self.gap_noise_mult,
+         self.lost_patience_min, self.scan_dt_max, self.enc_gap_max,
+         self.tp_cp_radius) = [x.value for x in p]
         self.speed_cmd = 0.0
         # Teleport handler state. Every one of these is inert while both
         # `teleport_scan_jump` and `teleport_imu_g` are 0.0.
@@ -148,6 +187,8 @@ class ParticleFilter(Node):
         self.imu_received = 0.0
         self._just_relocalized = False
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
+        if self.enc_gap_max > 0.0:
+            self.speed_est.max_gap = float(self.enc_gap_max)
         self.last_t = None
         self.lost_count = 0
         # Both of these are SAMPLE counts the code compares against, derived
@@ -402,7 +443,8 @@ class ParticleFilter(Node):
             return
         if self.last_t is not None and t <= self.last_t:
             return
-        dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
+        dt = 0.0 if self.last_t is None else min(
+            max(t - self.last_t, 0.0), float(self.scan_dt_max))
         self.last_t = t
         # The encoders share the scan's WebSocket frame, so the scan period IS
         # the encoder sample period. Everything per-sample follows it; see
@@ -473,7 +515,11 @@ class ParticleFilter(Node):
         base = (float(self.lost_seconds) if self.lost_seconds > 0.0
                 else self.lost_patience
                 * (self.rate_nominal or vehicle.RATE_NOMINAL))
-        self._patience = max(1, int(round(base / dt)))
+        # ...with a floor in SCANS: at dt >= 0.35 s the derived count is 1, so
+        # a single bad-score scan immediately after a gap -- exactly when one
+        # is most likely -- declares the filter lost.
+        self._patience = max(int(getattr(self, 'lost_patience_min', 1)),
+                             int(round(base / dt)))
 
     def predict(self, dt):
         yaw = self.imu_yaw
@@ -509,11 +555,27 @@ class ParticleFilter(Node):
         # 6.58 m/s the car actually reaches.
         step = 0.0 if jumped else float(
             np.clip(v, -self._v_cap, self._v_cap) * dt)
+        # A telemetry gap: the interval is far longer than a scan period, so
+        # this ONE step carries the whole blind window at the pre-gap encoder
+        # speed. If the SIMULATOR stalled, the car did not move at all and the
+        # step is pure error; if only the telemetry stalled, it is roughly
+        # right. Inert while `gap_dt` is 0.
+        gap = getattr(self, 'gap_dt', 0.0) > 0.0 and dt > self.gap_dt
+        if gap:
+            cap = getattr(self, 'gap_step_cap_m', 0.0)
+            if cap > 0.0:
+                step = float(np.clip(step, -cap, cap))
         # Per-update noise is per-TIME noise only at one rate; scale it so the
         # cloud diffuses at the same m/sqrt(s) whatever the host does.
         ns = (vehicle.noise_scale_for_dt(dt, self.rate_nominal)
               if self.rate_nominal > 0.0 else 1.0)
         noise = self.noise_xy * ns * (4.0 if jumped else 1.0)
+        # ...and a gap is a reason to be LESS certain, not to relocalize: widen
+        # the cloud over the blind window and let the scan update pick the pose
+        # out of it.
+        gm = float(getattr(self, 'gap_noise_mult', 1.0)) if gap else 1.0
+        if gm > 1.0:
+            noise = max(noise, self.noise_xy * ns * gm)
         if jumped:
             self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
         self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
@@ -521,7 +583,7 @@ class ParticleFilter(Node):
         # The heading-offset walk is per-update too, and scaling only the xy
         # one would make the RATIO of translational to rotational diffusion
         # rate-dependent -- worse than either being uniformly wrong.
-        self.pth += np.random.normal(0, self.noise_th * ns, self.n_p)
+        self.pth += np.random.normal(0, self.noise_th * ns * gm, self.n_p)
 
     def update(self, scan: LaserScan):
         r = np.asarray(scan.ranges, dtype=np.float64)
