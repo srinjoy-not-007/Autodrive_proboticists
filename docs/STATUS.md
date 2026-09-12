@@ -336,7 +336,12 @@ shipping the smoothing. Xvfb regression (0.095 s): **32 laps, 0
 collisions, 71.17 s** (vs 70.31 s without smoothing on the same period
 class: -0.09 s/lap for flips 3.8 -> 1.8/s, step p90 0.107 -> 0.040).
 **SHIPPED in the entrypoint's CTRL_ARGS (Sept 12)**: robustness at an
-unknown period outranks 0.9 s of Xvfb race time. Also: drop `delay`
+unknown period outranks 0.9 s of Xvfb race time. Cost on a tight track
+is larger: CDC-TF 2025 safe line 116.7 s with smoothing vs 111.1 s
+without (+0.5 s/lap) -- cmd_tau 0.10 lags the corners; candidates to
+recover it: w_dcmd alone (harness: fastest variant) or steer_tau 0.04
+(harness: buys the tracking back). To A/B on CDC-TF after the display
+chain. Also: drop `delay`
 from rate_terms (dead time does not scale with the period); the logger now records the steering command
 (`cmd` column) next to the actuator feedback (`steering` IS feedback).
 The harness cannot see the display failure (0 collisions at 0.058 with
