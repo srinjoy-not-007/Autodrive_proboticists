@@ -40,7 +40,7 @@ MAP="data/maps/${SLUG}_mesh"
 T0=$(date +%s)
 stage() { echo ""; echo "=== [$(( $(date +%s) - T0 ))s] $* ==="; }
 
-stage "1/4 rasterise the collision mesh out of ${TAG}"
+stage "1/5 rasterise the collision mesh out of ${TAG}"
 # docker create + docker cp against an image that is never started: this cannot
 # disturb a running simulator, and the extracted assets are cached in $TMPDIR.
 .venv/bin/python tools/map_from_mesh.py --tag "$TAG" "$NAME" "$MAP" || {
@@ -53,7 +53,7 @@ stage "1/4 rasterise the collision mesh out of ${TAG}"
     exit 1
 }
 
-stage "2/4 sanity-check the map before anything is built on it"
+stage "2/5 sanity-check the map before anything is built on it"
 # A mesh map that came out wrong is silent: it still writes a .pgm. The two
 # ways it goes wrong are a missing parent transform (every wall 10 by 14 m out
 # of place, so the spawn lands outside the corridor and the flood fill leaves
@@ -78,7 +78,7 @@ assert meta.get('source') == 'mesh', 'map is not stamped source: mesh'
 print(f"  lidar_offset {meta['lidar_offset']}, origin {meta['origin'][:2]}")
 PYEOF
 
-stage "3/4 centerline + swept racing lines (no recon: checkpoints stand in)"
+stage "3/5 centerline + swept racing lines (no recon: checkpoints stand in)"
 # make_track_lines.py sees `source: mesh` in the YAML and switches itself over:
 # no wall dilation (the walls are already closed, so the corridor keeps the
 # 0.15 m the recon repair used to throw away), a trajectory synthesised from
@@ -87,27 +87,60 @@ stage "3/4 centerline + swept racing lines (no recon: checkpoints stand in)"
 # clearance floor. Both centerline methods are built and every candidate is
 # gated on drivability and measured body clearance, exactly as before.
 #
-# LINE_ARGS passes extra flags straight to make_track_lines.py. The set that
-# exists for a TIGHT circuit -- one whose own centerline is tighter than the
-# 1.0 1/m bar the absolute kappa gate applies, which rejects every width-using
-# candidate and silently falls back to the centerline:
+# These flags used to be a paragraph in the runbook that someone had to read
+# and re-type on the day, after reading the 3/5 gate output and noticing that
+# every `raceline` candidate had been REJECTED on kappa. They are the default
+# now, because an unseen circuit tighter than Porto is the case the drill
+# exists for and the fallback (silently shipping the centerline) is a whole
+# second per lap:
 #
-#   LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
-#              --kappa-gate safe' ./scripts/finals_drill_mesh.sh ...
+#   --kappa-gate safe    a raceline may not ask for more curvature than the
+#                        steering lock or than the FALLBACK line already
+#                        demands. The absolute 1.0 1/m bar rejects everything
+#                        on a circuit whose own centerline peaks at 2.10
+#                        (cdctf2025) or 1.63 (icra2025) -- i.e. it rejects the
+#                        EASIER line.
+#   --dkappa-max 1.5     bound the curvature RATE, which is what the tracker
+#                        actually cannot follow.
+#   --kappa-bound 1.0    keep the QP itself off the lock.
+#   --min-halfwidth-ladder
+#                        floor the path-to-wall distance at every generation
+#                        stage, not just in the QP. 0.53 is what absorbs the
+#                        tracker's hairpin cut (CDC-TF: it cuts ~0.4 m inside
+#                        on EVERY lap at the s 39 entry, and 2 collisions in
+#                        32 laps were the 2.2-sigma tail of it); 0.50 is the
+#                        floor both 2025 circuits solve at; 0.45 is the last
+#                        rung before the safe line. The ladder takes the FIRST
+#                        rung that still yields an accepted candidate, and if
+#                        none does, make_track_lines ships `safe` by itself.
 #
-# All four are opt-in and off by default, so the drill's output without
-# LINE_ARGS is byte-identical to what it has always produced. Read the gate
-# output in 3/4 first: reach for them when every `raceline` candidate is
-# REJECTED on kappa and `race.csv` has become the safe line.
+# `LINE_ARGS=` (explicitly empty) restores the old flagless behaviour; setting
+# it to anything else replaces the set wholesale.
+DRILL_LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
+                 --kappa-gate safe --min-halfwidth-ladder 0.53,0.50,0.45'
 # shellcheck disable=SC2086
-.venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" ${LINE_ARGS:-} || exit 1
+.venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" \
+    ${LINE_ARGS-$DRILL_LINE_ARGS} || exit 1
 
-stage "4/4 footprint clearance check on both lines we might race"
+stage "4/5 footprint clearance check on both lines we might race"
 for kind in race safe; do
     echo "--- ${SLUG}_mesh_${kind}.csv"
     .venv/bin/python tools/footprint_analysis.py "$MAP" \
         "data/racelines/${SLUG}_mesh_${kind}.csv"
 done
+
+stage "5/5 the config this line needs (barrier margin and brake lead)"
+# Two of the finals decisions are geometric and were being taken by hand off
+# docs/STATUS.md: how much corridor the MPC's barrier may ask for (a line's
+# feasible cap is its min half-width minus the 0.135 m car half-width, and
+# above that the barrier pushes the car across its own line), and whether the
+# circuit is tight enough for the brake lead to be worth its +0.23..+0.30 s of
+# lap time. `pick_config.py` measures both off this map and this line, writes
+# data/racelines/${SLUG}_mesh_pick.json, and prints the exact
+# PIT_CREW_CONTROLLER_ARGS to race with. The runbook's gate table reads the
+# sidecar; the submission entrypoint has a prepared block that reads it too,
+# so the finals image can carry the pick without an edit.
+.venv/bin/python tools/pick_config.py "${SLUG}_mesh" || exit 1
 
 stage "the exact submission edits for slug '${SLUG}_mesh'"
 # The commonest way to lose a finals is an asset that never made it into the
@@ -126,6 +159,12 @@ submission/autodrive_devkit.sh -- one line; LINE and CENTER follow the slug:
 
 The map itself needs no Dockerfile edit (data/maps/*_mesh.{pgm,yaml} is
 globbed). Verify both with:  .venv/bin/python -m pytest -q tests/test_submission_assets.py
+
+To carry the 5/5 pick into the image instead of typing it on the day, add the
+sidecar to the same COPY list and uncomment the PICK block in
+submission/autodrive_devkit.sh:
+
+     data/racelines/${SLUG}_mesh_pick.json \\
 EOM
 
 stage "DRILL COMPLETE in $(( $(date +%s) - T0 ))s"

@@ -76,11 +76,6 @@ four-track regression is read.
 ```bash
 cd /home/ankit/code/data/simracing
 git status && git checkout -b finals        # never on the promoted commit
-git add -A tools/ && git commit -m "..."    # the tight-circuit line flags are
-                                            # UNCOMMITTED as of Sept 12; commit
-                                            # them (and run check_pipeline.sh)
-                                            # before the drill, or step 3a's
-                                            # flags do not exist
 ./scripts/check_pipeline.sh                 # required for any tools/ change
 uptime                                      # quiet host; no other container
 TAG=<announced tag>                         # pattern: 2026-<venue>-compete
@@ -90,47 +85,66 @@ docker pull autodriveecosystem/autodrive_roboracer_api:$TAG
 ./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
 ```
 
+**That is the whole line-generation step — one command, no flags to decide.**
+The tight-circuit set that used to be a paragraph here is the drill's default
+now (`--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate safe`
+plus `--min-halfwidth-ladder 0.53,0.50,0.45`), and stage 5/5 runs
+`tools/pick_config.py`, which measures the chosen line and prints the
+`PIT_CREW_CONTROLLER_ARGS` to race with. `LINE_ARGS=` (explicitly empty)
+restores the old flagless behaviour if the new one produces something wrong.
+
+Two things the drill does NOT do, on purpose: it never passes `--out-name` (the
+shipping line must be `finals_mesh_race.csv`, the name the entrypoint derives
+from the map slug), and it never decides to RACE the fast line. That decision
+is Gate C and Gate D, not the ideal lap time.
+
 **Gate A — the drill's own output** (step 3a explains each): free fraction
 15-70 %, `source: mesh`, `lidar_offset 0.1933`, and a `race` and a `safe` line
 both reported by `footprint_analysis.py`.
 
-**The line-choice rule.** Read the `3/4` block first:
+**Gate A2 — the drill's pick (stage 5/5).** It writes
+`data/racelines/finals_mesh_pick.json`; read these five numbers out of it
+before anything is driven.
 
-* If at least one `raceline` candidate passed, `race.csv` is that line. Keep it.
-* If **every** `raceline` candidate is `REJECTED: kappa max K above the 1.0`,
-  the circuit is tighter than Porto and the absolute gate is the wrong bar.
-  Re-run the drill with the relative gate — a raceline may not ask for more
-  curvature than the steering lock (1.78 1/m) or than the fallback line already
-  demands, whichever is larger:
+| Number in the sidecar | What it is | Pass |
+|---|---|---|
+| `min_halfwidth` | closest the LINE comes to a wall, marched along the path normal — the way the barrier measures it | >= 0.45 m; below that no barrier margin worth having is feasible |
+| `feasible_margin` | `min_halfwidth - 0.135` (car half-width). Above it the barrier pushes the car ACROSS its own line | >= 0.30 m |
+| `barrier_margin` | 0.40 where `feasible_margin` clears 0.40 + 0.02 slack, else 0.34 | 0.34 or 0.40, never anything else |
+| `thr_brake_lead_s` | 0.05 when the line's tightest kappa > 1.2 **or** the corridor min width < 1.3 m, else 0 | never 0.08 — bit-identical to 0.05 at 0.097 s |
+| `clearance` / `ideal_lap` | worst body-corner clearance and the profile's own lap | clearance >= 0.28 m (the mesh floor); ideal lap is context, not a gate |
 
-  ```bash
-  LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
-             --kappa-gate safe --min-halfwidth 0.48' \
-    ./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
-  ```
+Measured on the circuits we have, for calibration:
 
-  All five flags are off by default and the drill's output without `LINE_ARGS`
-  is byte-identical to what it has always produced. The drill does not pass
-  `--out-name`, so the outputs keep the slug and **`finals_mesh_race.csv` is
-  then the fast line** — exactly the name the entrypoint derives. Never generate the shipping
-  line with `--out-name`: a `finals_fast_race.csv` is not a name the image can
-  find.
-* `--min-halfwidth 0.48` is the one to think about. The fast lines' failure mode
-  is a single pinch (measured 0.427 m at cdctf2025 s 40.8, 0.432 m at icra2025
-  s 42.5), and `barrier_margin 0.34` needs 0.135 + 0.34 = **0.475 m** of
-  half-width or the barrier is infeasible and just biases the car to the
-  centre. So: shipping the barrier and the fast line together requires the
-  floor. The flag is new and **has no live run behind it** — if the drill
-  reports it cost clearance or made the line jagged, drop it and ship `safe`
-  with the barrier rather than a fast line the barrier cannot use.
-* Offline ranking measured on the three non-Porto circuits (432 harness laps per
-  config): **ICRA 2026 → `safe`** (race == safe there), **ICRA 2025 → fast**
-  (-0.7..-1.2 s/lap, 0/288), **CDC-TF → fast is a close call** (-1.1 s/lap but
-  2/288 at its 0.40 m pinch). Driven once on CDC-TF: 32 laps, 1 collision,
-  OFFICIAL 101.9 s against `safe`'s 111.1 s — expected value favours the fast
-  line, but a single collision is +10 s and eleven are a DQ. **The drill still
-  picks `safe` automatically; racing the fast line is a decision, taken on
-  Gate C and Gate D, not on the ideal lap time.**
+| Circuit / line | min half-width | feasible | barrier | lead | clearance | ideal lap |
+|---|---|---|---|---|---|---|
+| Porto `cr_dk0.8` (qualifier) | 0.420 | 0.285 | 0.34 | 0.05 | 0.309 | 7.01 s |
+| CDC-TF 2025, drill pick (= `fast3_m53`) | 0.520 | 0.385 | 0.34 | 0.05 | 0.395 | 9.96 s |
+| SRL 2025 ICRA, drill pick | 0.500 | 0.365 | 0.34 | 0.05 | 0.389 | 14.24 s |
+| ICRA 2026 (`safe`) | 0.720 | 0.585 | 0.40 | 0.05 | 0.608 | 14.40 s |
+
+Porto is the **qualifier exception**: its shipped config runs `barrier_margin`
+0.40 on `cr_dk0.8` (display 32/0 70.13 s, Porto 100/0 Xvfb) even though the
+line's feasible cap is 0.285. Nothing else gets that.
+
+Two known consequences of the rule, so they are not surprises on the day:
+
+* On the two 2025 **safe** lines the measured cap is 0.385, so the rule lands
+  on 0.34 where the entrypoint's `case "$LINE" in *_safe.csv|*cr_dk0.8.csv`
+  line currently gives them 0.40. If the pick is enabled, it wins (last `-p`).
+* On SRL 2025 ICRA the ladder stops at the **0.53** rung, which is a roomier
+  and 0.40 s/lap slower line than the hand-picked `fast2_m50` (0.480 / 13.84 s)
+  that was driven 32/0 there. Rung 0.53 buys 0.041 m of clearance and 0.020 m
+  of feasible margin for that time. If Gate C/D are clean on `fast2_m50`,
+  `LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate
+  safe --min-halfwidth-ladder 0.50'` reproduces it exactly.
+
+**Carrying the pick into the image.** Either paste the printed
+`PIT_CREW_CONTROLLER_ARGS` into the `docker run` on the day, or add
+`data/racelines/finals_mesh_pick.json` to the Dockerfile COPY list and
+uncomment the `PICK_BLOCK` in `submission/autodrive_devkit.sh` (one block, at
+the end of the mpc3 `CTRL_ARGS`). `tests/test_pick_config.py` runs that exact
+block against a fixture sidecar, so enabling it is an uncomment, not a rewrite.
 
 **Gate B — does the finals track outrun the localization speed cap?** The
 shipped cap is `max_step_mps` 9.0 (it was 5.77, and that was a DQ). Check the
@@ -373,28 +387,37 @@ it, and it measured no better than holding.
 It then prints a footprint report for **both** `race` and `safe`, and the exact
 two edits (Dockerfile `COPY` list, entrypoint `MAP` default) for this slug.
 
-`LINE_ARGS` passes extra flags to `make_track_lines.py`; the tight-circuit set is
+Stage 5/5 then runs `tools/pick_config.py <slug>_mesh`, which measures the
+chosen line's min half-width and tightest curvature and prints the
+`PIT_CREW_CONTROLLER_ARGS` for it (Gate A2 in the Sep 16 checklist).
+
+The drill passes the tight-circuit set to `make_track_lines.py` **by default**:
 
 ```
 --dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 --kappa-gate safe
---min-halfwidth 0.48
+--min-halfwidth-ladder 0.53,0.50,0.45
 ```
 
-All five are off by default, so without `LINE_ARGS` the output is byte-identical
-to what the drill has always produced. Reach for them only when the 3/4 output
-shows every `raceline` candidate `REJECTED` on kappa — and read the line-choice
-rule in the Sep 16 checklist before you do. Two things that matter more than
-they look:
+`LINE_ARGS=<anything>` replaces that set wholesale, and `LINE_ARGS=`
+(explicitly empty) restores the old flagless behaviour, whose output is
+byte-identical to what the drill produced before. All of these flags are still
+off by default inside `make_track_lines.py` itself, so `check_pipeline.sh` and
+the recon tracks are untouched. Three things that matter more than they look:
 
 * **`--kappa-gate safe` is the relative gate**: max(steering lock 1.78 1/m, the
   safe line's own curvature peak). The absolute 1.0 bar rejects width-using
   candidates on any circuit whose centerline is itself tighter — cdctf2025
   peaks at 2.10, icra2025 at 1.63 — i.e. it rejects the *easier* line while
   shipping the harder one.
-* **`--min-halfwidth 0.48`** floors the distance from the line to either wall at
-  every stage of the QP. The fast lines' one weakness is a single pinch
-  (0.427 m and 0.432 m measured), and `barrier_margin 0.34` needs 0.475 m. The
-  flag is new and unproven live; if it costs clearance elsewhere, ship `safe`.
+* **`--min-halfwidth-ladder 0.53,0.50,0.45`** floors the distance from the line
+  to either wall at every stage of the QP — not just the QP, which is where
+  the fast lines' single pinch came from (0.427 m and 0.432 m measured). The
+  ladder takes the FIRST rung that still yields an accepted candidate and only
+  descends when the corridor is exhausted; if no rung solves, `make_track_lines`
+  ships `safe` on its own. 0.53 is what absorbs the tracker's hairpin cut on
+  CDC-TF (hairpin clearance p05 0.30 vs 0.25 at 0.50), and the drill's 0.53
+  output there is byte-identical to the hand-built `fast3_m53`. The printed
+  `race line:` line names the rung that won.
 * **Never pass `--out-name` for the shipping line.** The entrypoint derives
   `<slug>_race.csv` from `PIT_CREW_MAP`; a line generated as
   `finals_fast_race.csv` is a line the image cannot find by default.
@@ -403,15 +426,16 @@ they look:
 
 | Stage | Gate | Meaning if it fails |
 |---|---|---|
-| 2/4 free fraction | must be **15-70 %** (every known circuit gives 30-55 %) | The mesh or its parent transform is wrong — e.g. the `Infrastructure` root at Unity (-10, 0, -14) was missed, so the spawn lands outside the corridor and the flood fill leaves everything unknown; or the track mesh carries a floor and rasterised solid. Re-run `map_from_mesh.py` with `--report` and `--list`. |
-| 2/4 `source: mesh` | asserted | The YAML was not stamped by `map_from_mesh.py`. Nothing downstream will take the mesh code path. |
-| 2/4 `lidar_offset` | must print **0.1933** | This is what the entrypoint and the preflight will be checked against. |
-| 3/4 `clearance X.XXX m ideal lap Y.YY s` per candidate | per-candidate report | Informational unless followed by `REJECTED:`. |
-| 3/4 `REJECTED: clearance ... < 0.28 m budget` | `MESH_MIN_CLEARANCE` = 0.28 (0.230 collided on ICRA, 0.292 clean on Porto) | That candidate is too close to a wall for our lateral error. Normal — the sweep rejects several. |
-| 3/4 `REJECTED: kappa max K above the 1.0` | `MESH_RACE_KAPPA_MAX` = 1.0 | The width-using race line is tighter than anything mpc3 has held on Porto (0.83 clean over 100 laps; ICRA 1.36 → 9 collisions in 30 laps). If this fires on **every** candidate, the circuit is tighter than Porto and the absolute bar is wrong for it: re-run with `--kappa-gate safe` (above). If it still fires, the centerline ships — that is an outcome, not a failure. |
-| 3/4 `no solution (corridor exhausted)` | the QP ran out of corridor at that `w_veh` | A fact about the track, not an error. |
-| 3/4 `safe line is not drivable; shipping the opened-corner line instead` | graceful degrade | Accept it, but drive it before trusting it. |
-| 4/4 `footprint_analysis.py` on `finals_mesh_race.csv` | worst-corner body clearance | This is the number that decides step 5's first run. |
+| 2/5 free fraction | must be **15-70 %** (every known circuit gives 30-55 %) | The mesh or its parent transform is wrong — e.g. the `Infrastructure` root at Unity (-10, 0, -14) was missed, so the spawn lands outside the corridor and the flood fill leaves everything unknown; or the track mesh carries a floor and rasterised solid. Re-run `map_from_mesh.py` with `--report` and `--list`. |
+| 2/5 `source: mesh` | asserted | The YAML was not stamped by `map_from_mesh.py`. Nothing downstream will take the mesh code path. |
+| 2/5 `lidar_offset` | must print **0.1933** | This is what the entrypoint and the preflight will be checked against. |
+| 3/5 `clearance X.XXX m ideal lap Y.YY s` per candidate | per-candidate report | Informational unless followed by `REJECTED:`. |
+| 3/5 `REJECTED: clearance ... < 0.28 m budget` | `MESH_MIN_CLEARANCE` = 0.28 (0.230 collided on ICRA, 0.292 clean on Porto) | That candidate is too close to a wall for our lateral error. Normal — the sweep rejects several. |
+| 3/5 `REJECTED: kappa max K above the 1.0` | `MESH_RACE_KAPPA_MAX` = 1.0 | The width-using race line is tighter than anything mpc3 has held on Porto (0.83 clean over 100 laps; ICRA 1.36 → 9 collisions in 30 laps). If this fires on **every** candidate, the circuit is tighter than Porto and the absolute bar is wrong for it: re-run with `--kappa-gate safe` (above). If it still fires, the centerline ships — that is an outcome, not a failure. |
+| 3/5 `no solution (corridor exhausted)` | the QP ran out of corridor at that `w_veh` | A fact about the track, not an error. |
+| 3/5 `safe line is not drivable; shipping the opened-corner line instead` | graceful degrade | Accept it, but drive it before trusting it. |
+| 4/5 `footprint_analysis.py` on `finals_mesh_race.csv` | worst-corner body clearance | This is the number that decides step 5's first run. |
+| 5/5 `pick_config.py` | `min_halfwidth` >= 0.45 m, `feasible_margin` >= 0.30 m, `barrier_margin` in {0.34, 0.40}, `thr_brake_lead_s` in {0, 0.05} | Gate A2. A line whose feasible margin is under 0.30 m cannot carry a barrier worth having — ship `safe` and re-read its sidecar. |
 
 If every raceline candidate is rejected but `safe` survives, `race.csv` will be
 the rejected best; **race `safe`, not `race`** — see step 5.

@@ -401,19 +401,38 @@ def build(track, tag, extra, cfg):
         capture_output=True, text=True).returncode == 0
 
     out = {'centerline': cl}
-    cands = [('safe', ['--centerline-only'], None)]
-    cands += [('raceline', ['--w-veh', str(w)], w) for w in cfg.w_veh]
+    # `rungs` is [None] -- one pass, no wall floor -- unless
+    # --min-halfwidth-ladder was given. With a ladder the whole w_veh sweep is
+    # repeated at each floor, richest first, and the first floor that produces
+    # an ACCEPTED candidate wins: a tighter floor is only reached when the
+    # corridor could not pay for the one above it. Candidates from a rung that
+    # has already been beaten are skipped rather than solved, so a track that
+    # clears 0.53 costs exactly what it did before.
+    rungs = cfg.min_halfwidth_ladder or [None]
+    cands = [('safe', ['--centerline-only'], None, None)]
+    for m in rungs:
+        cands += [('raceline', ['--w-veh', str(w)], w, m) for w in cfg.w_veh]
     if has_opened:
-        cands += [('opened', ['--centerline-only'], None)]
+        cands += [('opened', ['--centerline-only'], None, None)]
 
     best = None
-    for kind, args, w in cands:
+    rung_used = None
+    for kind, args, w, m in cands:
+        if kind == 'raceline' and best is not None and m != rung_used:
+            continue
         args = args + cfg.profile
         if kind == 'raceline':
             args = args + cfg.race_args
+            if m is not None:
+                args = args + ['--min-halfwidth', f'{m:g}',
+                               '--min-halfwidth-map', f'data/maps/{track}']
         suffix = tag if w is None else f'{tag}_w{w:g}'
+        if m is not None:
+            suffix += f'_m{round(m * 100):d}'
         path = f'data/racelines/{stem}_{kind}_{suffix}'
         label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
+        if m is not None:
+            label += f' m{m:.2f}'
         src = (opened if kind == 'opened' else cl) + '.csv'
         if subprocess.run([VENV, 'tools/optimize_raceline.py', src,
                            '--out', path] + args,
@@ -460,13 +479,14 @@ def build(track, tag, extra, cfg):
               f'ideal lap {lap:6.2f} s'
               f'{"   REJECTED: " + why if why else ""}')
         rec = {'path': path, 'clearance': eff, 'lap': lap, 'ok': not why,
-               'w_veh': w}
+               'w_veh': w, 'min_halfwidth': m}
         if kind == 'safe':
             out['safe'] = rec
         elif kind == 'opened':
             out['opened'] = rec
         elif rec['ok'] and (best is None or lap < best['lap']):
             best = rec
+            rung_used = m
         elif best is None:
             out.setdefault('_rejected', rec)   # something to show if all fail
     # Degrade gracefully rather than shipping nothing: the plain centerline is
@@ -549,6 +569,18 @@ def configure(argv=None):
                          'lines\' single pinch lives (cdctf2025 0.427 m at '
                          's 40.8, icra2025 0.432 m at s 42.5). Car half-width '
                          'is 0.135 m.')
+    ap.add_argument('--min-halfwidth-ladder', default=None, metavar='LIST',
+                    help='try these --min-halfwidth values in order and keep '
+                         'the FIRST that still yields an accepted raceline '
+                         'candidate (opt-in; off by default, and mutually '
+                         'exclusive with --min-halfwidth). This is the rule '
+                         'the finals drill applies on an unseen track: 0.53 '
+                         'is what absorbs the tracker\'s hairpin cut on '
+                         'CDC-TF (hairpin clearance p05 0.30 vs 0.25), 0.50 '
+                         'is the floor both 2025 circuits actually solve at, '
+                         'and 0.45 is the last rung before the safe line. '
+                         'Each rung is a separate QP solve, so the cost is '
+                         'one extra w_veh sweep per rung that fails.')
     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
                     help='pass --kappa-bound to the QP for the raceline '
                          'candidates (opt-in; off by default).')
@@ -569,6 +601,12 @@ def configure(argv=None):
     cfg = ap.parse_args(argv)
     if cfg.kappa_gate not in (None, 'lock', 'safe'):
         cfg.kappa_gate = float(cfg.kappa_gate)
+    if cfg.min_halfwidth_ladder is not None:
+        if cfg.min_halfwidth is not None:
+            ap.error('--min-halfwidth-ladder replaces --min-halfwidth; '
+                     'pass one or the other')
+        cfg.min_halfwidth_ladder = [float(x) for x in
+                                    cfg.min_halfwidth_ladder.split(',') if x]
     cfg.mesh = is_mesh(f'data/maps/{cfg.track}')
     cfg.out_name = cfg.out_name or cfg.track
     if cfg.min_clearance is None:
@@ -710,6 +748,8 @@ def main():
         why = f' (beat {", ".join(other)})'
     else:
         why = ' (only candidate that cleared the budget)'
+    if win.get('min_halfwidth') is not None:
+        why += f' [--min-halfwidth {win["min_halfwidth"]:g} rung]'
     print(f'race line: {kind} — ideal {win["lap"]:.2f} s, '
           f'clearance {win["clearance"]:.3f} m' + why)
     wrote = ['centerline', 'safe', 'race'] + (['raceline'] if rl and rl['ok'] else [])

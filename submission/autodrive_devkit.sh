@@ -148,7 +148,48 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # lines 0.385-0.585, the fast2/fast3 lines 0.345), and above it the
     # barrier pushes across the line, so keep 0.34 on fast lines. Enable
     # after the Porto 100-lap Xvfb run at 0.40 (chain6):
-    case "$LINE" in *_safe.csv|*cr_dk0.8.csv) CTRL_ARGS+=(-p barrier_margin:=0.40) ;; esac  # enabled Sept 12: Porto 100/0 Xvfb 71.91 s, display 32/0 70.13 s
+    # 0.40 only on Porto's cr_dk0.8 (validated: display 32/0 70.13 s, Xvfb 100/0
+    # 71.91 s). The 2025 safe lines' feasible cap is 0.385, so they stay at 0.34
+    # until a live regression at 0.40 exists; pick_config.py encodes the rule.
+    case "$LINE" in *cr_dk0.8.csv) CTRL_ARGS+=(-p barrier_margin:=0.40) ;; esac
+    #
+    # --- PREPARED, NOT ENABLED: carry the drill's own pick in the image -----
+    # Both decisions above are GEOMETRIC, and on an unseen circuit they are
+    # decided by the line the drill generates, not by anything known now. The
+    # `case` above pattern-matches a FILENAME; on the finals track the name
+    # that matters (`<slug>_race.csv`) says nothing about how much room the
+    # line has, and 0.40 above a line's feasible cap makes it worse.
+    #
+    # `tools/pick_config.py <slug>` -- stage 5/5 of scripts/finals_drill_mesh.sh
+    # -- measures the shipping line's min half-width (marched along the path
+    # normal, the way the barrier itself measures it) and its tightest
+    # curvature, and writes data/racelines/<slug>_pick.json with both decisions
+    # already taken: `barrier_margin` 0.40 only where the line's feasible cap
+    # (min half-width minus the 0.135 m car half-width) clears it with slack,
+    # else 0.34; `thr_brake_lead_s` 0.05 on a tight circuit (tightest kappa
+    # > 1.2 or corridor min width < 1.3 m), 0 otherwise -- never 0.08, which is
+    # bit-identical to 0.05 at 0.097 s and costs on every other rate.
+    #
+    # Uncommenting the block between the markers lets the FINALS IMAGE carry
+    # that pick as one COPYed asset instead of an edit to this file on the day.
+    # It is appended AFTER the built-ins above, so the sidecar's
+    # `barrier_margin` overrides both the 0.34 default and the `case` line
+    # (last `-p` wins), and BEFORE `EXTRA_CTRL_ARGS`, so a finals-day
+    # `-e PIT_CREW_CONTROLLER_ARGS=...` still wins over all of them. A missing
+    # or unreadable sidecar changes nothing at all. Read the sidecar before
+    # enabling this on a SAFE line: the measured caps there are 0.385-0.585, so
+    # on the two 2025 circuits the rule lands on 0.34 where the `case` line
+    # above is currently giving them 0.40.
+    # tests/test_pick_config.py runs this exact block against a fixture.
+    # PICK_BLOCK_BEGIN
+    # PICK="${PIT_CREW_PICK:-/home/data/racelines/${SLUG}_pick.json}"
+    # if [[ -f "$PICK" ]]; then
+    #     PICK_ARGS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("controller_args",""))' "$PICK" 2>/dev/null || echo "")"
+    #     echo "pick for $SLUG: ${PICK_ARGS:-<none>}" >&2
+    #     # shellcheck disable=SC2206
+    #     CTRL_ARGS+=(${PICK_ARGS})
+    # fi
+    # PICK_BLOCK_END
     #
     # REJECTED, do not resurrect: `-p apply_floor_steps:=0.0 -p rate_terms:=...`
     # (the old "fix 1"). It removed the command-slew saturation at 0.058 s
