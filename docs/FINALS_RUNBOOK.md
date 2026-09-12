@@ -25,10 +25,12 @@ timer**, add **+10 s per collision**, and **more than 10 collisions is a DQ**.
    deliver.** Four real-display runs of earlier shipping configs failed
    identically (10-11 collisions, always the same hairpin entry). As of Sept 12
    the stack is validated clean at **both** ends of the band — 0.058 s on the
-   display and 0.09-0.10 s on Xvfb — **only with `barrier_margin 0.34`**
-   (Xvfb regression on all four tracks running at the time of writing). Every
-   run is evidence only together with its `dt_p50` (step 5A), and a run at one
-   period says nothing about the other.
+   display and 0.09-0.10 s on Xvfb — but **only with the corridor barrier on**
+   (`barrier_margin` 0.34, and 0.40 on Porto's own line). That regression is
+   done: four-track Xvfb 32/0 each and Porto 100/0 at both margins; display
+   32/0 at 0.34 (69.36 s) and at 0.40 (70.13 s). Every run is evidence only
+   together with its `dt_p50` (step 5A), and a run at one period says nothing
+   about the other.
 2. **The line, on a circuit tighter than Porto.** The drill's absolute kappa
    gate (`MESH_RACE_KAPPA_MAX` 1.0) rejects every width-using candidate on a
    track whose own centerline is tighter than 1.0 1/m — both 2025 circuits —
@@ -62,14 +64,16 @@ on a run whose `dt_p50` you have not read.
 |---|---|---|
 | `CTRL_ARGS`, mpc3 branch | `map_prefix`, `rate_adaptive:=true` | Scales `apply_ahead_s` with the measured period. 100 Xvfb laps clean at 0.091-0.098 s; 7 collisions/32 → 2 at a 0.090 s instance. |
 | `CTRL_ARGS`, mpc3 branch | `w_dcmd:=50.0 cmd_tau:=0.10` | Damps the solver's steering limit cycle. Display 0.058 s: flips 5.5 → 2.4/s, command step p90 0.14 → 0.041 rad. Costs ~0.9 s of Xvfb race time and ~0.5 s/lap on a tight circuit — robustness at an unknown period outranks both. |
+| `CTRL_ARGS`, mpc3 branch | `steer_tau:=0.04` | Models the rack's first-order lag in the rollout. Recovers the smoothing's lap cost on a tight circuit (CDC-TF 116.7 → 112.0 s, ICRA 2026 150.4 → 148.3 s). Display 32/0 at 69.36 s with the barrier. Keep at 0.04 — 0.06+ is a plant mismatch that collides. |
+| `CTRL_ARGS`, mpc3 branch | `barrier_margin:=0.34`, and a `case` line raising it to **0.40 on `*cr_dk0.8.csv`** (Porto only) | The only configurations that have ever driven the real display clean: 32/0 at 69.44 / 69.36 s (0.34) and 32/0 at 70.13 s (0.40). 0.40 buys +0.04 m of hairpin margin (0/32 laps below −0.30 m against 13-16/32) for +0.8 s of race. Porto 100/0 Xvfb at both (71.50 / 71.91 s). |
 | `LOC_ARGS` | `max_step_mps:=9.0 publish_on_reloc:=false` | The motion model's 0.6 m/update was a 5.77 m/s cap: SRL 2025 ICRA went 4 laps / 14 collisions (a DQ) with cross-track reading 0.03 m. With the fix, 32 laps / 0 collisions / 148.8 s; Porto and ICRA-2026 unchanged. |
 | Everywhere | `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1` | mpc3's numpy otherwise runs at 1030 % CPU and starves the simulator, which changes the period. Do not remove. |
 
-**Expected to ship, decided on Sep 16-17:** `barrier_margin:=0.34` (step 5D).
-It is the only configuration that has ever produced a clean real-display run
-(32 laps, 0 collisions, OFFICIAL **69.44 s** at 0.059 s). It is prepared as a
-commented line in `CTRL_ARGS` and must be enabled deliberately, after its Xvfb
-four-track regression is read.
+**Decided on Sep 16-17:** which `barrier_margin` the finals line can carry.
+The entrypoint ships 0.34 for every line and 0.40 only for Porto's `cr_dk0.8`;
+`tools/pick_config.py` (Gate A2) measures the finals line's feasible cap
+(min half-width − 0.135 m) and decides between them. Nothing else in the
+controller config is expected to change on the day.
 
 ### Sep 16 — track release (~1.5 h)
 
@@ -123,6 +127,15 @@ Measured on the circuits we have, for calibration:
 | SRL 2025 ICRA, drill pick | 0.500 | 0.365 | 0.34 | 0.05 | 0.389 | 14.24 s |
 | ICRA 2026 (`safe`) | 0.720 | 0.585 | 0.40 | 0.05 | 0.608 | 14.40 s |
 
+**Gate A2b — checkpoint margin.** A width-using line can pass every clearance
+gate and still miss a **checkpoint trigger**, and the rules do not stop the lap
+timer until all checkpoints are passed. Measured: CDC-TF `fast3_m53` drove 32
+laps with 0 collisions at 10.1-10.4 s/lap and still scored 112.089 s instead of
+~102, because one lap crossed the start line twice with no `lap_count`
+increment. Read the minimum checkpoint margin `pick_config.py` reports (and if
+it does not yet report one, check the drill pick's distance to every checkpoint
+extent by hand) before racing a fast line.
+
 Porto is the **qualifier exception**: its shipped config runs `barrier_margin`
 0.40 on `cr_dk0.8` (display 32/0 70.13 s, Porto 100/0 Xvfb) even though the
 line's feasible cap is 0.285. Nothing else gets that.
@@ -130,8 +143,9 @@ line's feasible cap is 0.285. Nothing else gets that.
 Two known consequences of the rule, so they are not surprises on the day:
 
 * On the two 2025 **safe** lines the measured cap is 0.385, so the rule lands
-  on 0.34 where the entrypoint's `case "$LINE" in *_safe.csv|*cr_dk0.8.csv`
-  line currently gives them 0.40. If the pick is enabled, it wins (last `-p`).
+  on 0.34 — which is what the entrypoint already gives them: its `case` line
+  matches `*cr_dk0.8.csv` only, so 0.40 is Porto's alone. If the pick block is
+  enabled it wins anyway (last `-p`).
 * On SRL 2025 ICRA the ladder stops at the **0.53** rung, which is a roomier
   and 0.40 s/lap slower line than the hand-picked `fast2_m50` (0.480 / 13.84 s)
   that was driven 32/0 there. Rung 0.53 buys 0.041 m of clearance and 0.020 m
@@ -183,13 +197,16 @@ circuit makes the planner sit at the ceiling for a long stretch.
 
 ### Sep 17 — validation runs (~4-5 h, quiet host, nothing else running)
 
-Probes first, on Xvfb, to find out which line is even a candidate:
+Probes first, on Xvfb, to find out which line is even a candidate. `run_exp.sh`
+carries **no** controller defaults — only the entrypoint does — so every run
+here appends the shipping set (with the `barrier_margin` Gate A2 chose):
 
 ```bash
+SHIP='-p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 -p barrier_margin:=0.34'
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_race_probe race
+  ./scripts/run_exp.sh finals_race_probe race $SHIP
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_safe_probe safe
+  ./scripts/run_exp.sh finals_safe_probe safe $SHIP
 ```
 
 Read every probe with its period **before** reading its collisions:
@@ -209,7 +226,7 @@ shipped until it is clean at both:
 ./scripts/sim_rate_calibrate.sh 0.097
 SIM_CPUSET=<chosen> RATE_MIN_DT=0.094 RATE_MAX_DT=0.100 SIM_QUALITY=ultra \
   CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
-  ./scripts/run_exp.sh finals_100 <race|safe> -p barrier_margin:=0.34
+  ./scripts/run_exp.sh finals_100 <race|safe> $SHIP
 
 # --- Gate D: the real display, self-clicked, ~0.058 s. VISIBLE=1 puts the
 #     simulator on this host's own display and steals the pointer; the click
@@ -217,7 +234,7 @@ SIM_CPUSET=<chosen> RATE_MIN_DT=0.094 RATE_MAX_DT=0.100 SIM_QUALITY=ultra \
 #     is needed. Do not touch the machine while it runs.
 VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh \
   LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_display <race|safe> -p barrier_margin:=0.34
+  ./scripts/run_exp.sh finals_display <race|safe> $SHIP
 
 # --- the rate-proven fallback, run it too
 SIM_QUALITY=ultra CONTROLLER=mpc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
@@ -508,6 +525,17 @@ collisions. Any run taken under load is contaminated evidence; re-run it.
 points it at `$DISPLAY` instead of `:99`). The organisers run Ultra, and quality
 changes the Xvfb period by ~4 %. Omitting it validates at the wrong setting.
 
+**`run_exp.sh` carries NO controller defaults** — only the entrypoint does. Any
+validation run must pass the shipping set on the command line or it is not
+testing what ships:
+
+```bash
+SHIP='-p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 -p barrier_margin:=0.34'
+```
+
+(substitute the `barrier_margin` Gate A2 chose). Every command below appends
+`$SHIP`.
+
 Order of combos (the checklist's Gates C-F are these runs with their pass
 conditions attached):
 
@@ -516,21 +544,21 @@ laps):
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_race_probe race
+  ./scripts/run_exp.sh finals_race_probe race $SHIP
 ```
 
 **5.2 — otherwise (or if 5.1 collides), mpc3 on the centerline/safe line:**
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_safe_probe safe
+  ./scripts/run_exp.sh finals_safe_probe safe $SHIP
 ```
 
 **5.3 — 100-lap validation of whichever of 5.1/5.2 was clean** (~1 h):
 
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
-  ./scripts/run_exp.sh finals_100 <race|safe>
+  ./scripts/run_exp.sh finals_100 <race|safe> $SHIP
 ```
 
 **5.4 — the real display** (~15 min for 32 laps), which is where every
@@ -543,7 +571,7 @@ ever misses (it waits `MANUAL_WAIT_S`, default 300 s, for a human).
 ```bash
 VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh \
   LIDAR_OFFSET=0.1933 LAPS=32 \
-  ./scripts/run_exp.sh finals_display <race|safe> -p barrier_margin:=0.34
+  ./scripts/run_exp.sh finals_display <race|safe> $SHIP
 ```
 
 **5.5 — the rate-proven fallback, run it too** (~15 min). The legacy tracker on
@@ -728,7 +756,7 @@ metres behind and the car drives into a wall reading cross-track 0.03 m: SRL
 reinit — the centroid of a track-wide particle cloud is not a pose, and it was
 measured 13 m from the car twice.
 
-**The decision of the weekend — `barrier_margin:=0.34` (prepared, commented).**
+**`barrier_margin` — SHIPPING as of Sept 12 (0.34, and 0.40 on `cr_dk0.8`).**
 
 ```
 CTRL_ARGS+=(-p barrier_margin:=0.34)
@@ -744,15 +772,23 @@ feasible on every `safe` line (worst available 0.520 m at the CDC-TF S-kink,
 lap sum -0.02 s, 1 collision in 432 harness laps) and **infeasible on the fast
 lines and on Porto's own line** (0.40-0.42 m), where it degenerates into a bias
 toward the centre. See the `--min-halfwidth` rule in step 3a.
-**Enable when:** its four-track Xvfb regression is clean and Gate D is clean
-with it. Uncomment the one prepared line — nothing else in the script changes.
+Its four-track Xvfb regression is clean (CDC-TF 117.3, ICRA 2025 149.8,
+ICRA 2026 150.4 s, all 32/0; Porto 100/0 at 71.50 s) and Gate D is clean with
+it, so it is an uncommented default. On **Porto's own line** a `case` line
+raises it to 0.40 despite the line's 0.285 m feasible cap — validated
+separately (display 32/0 70.13 s with 0/32 laps below −0.30 m; Xvfb 100/0
+71.91 s), and Porto is the qualifier exception. Nothing else gets 0.40 unless
+`pick_config.py` says its cap clears it.
 
-**Opt-in, committed, not shipped.** Each is one `-e PIT_CREW_*_ARGS` away; none
-has a live run behind it, so each needs its own A/B before it goes in the image:
+**Opt-in, committed, not shipped.** Each is one `-e PIT_CREW_*_ARGS` away. The
+first two have a clean display run behind them but were not worth their cost or
+did not add margin; the rest have harness or replay evidence only. Each needs
+its own A/B on the finals track before it goes in the image:
 
 | Knob | Flags | What it is for | Evidence |
 |---|---|---|---|
-| Tight-track lap cost | `-p steer_tau:=0.04` | Models the rack's first-order lag in the rollout, buying back the tracking `cmd_tau` costs | CDC-TF 112.0 s with the smoothing against 116.7 s without it (4.7 of the 5.5 s back), 32 laps 0 collisions. **Alone** on the display it is no better than the smoothing alone (10 collisions / 30 laps); its display test *with* the barrier is the open question. Must stay at 0.04 — 0.06+ is a mismatch that collides on a pure-slew plant. |
+| Brake-phase throttle lead | `-p thr_brake_lead_s:=0.05` | Removes the commanded corner-entry overspeed (the throttle setpoint exceeds the profile on 18-39 % of a braking approach because of the point lead) | Removes 93-100 % of it at −0.018 s/lap on Porto with \|e\| p95 −24..−38 % (288 harness laps, 0 collisions); display 32/0 at 69.94 s. **But +0.30 s/lap on CDC-TF and +0.23 on ICRA 2025** — not free off Porto, so `pick_config.py` only asks for it on a tight circuit. Never 0.08. |
+| Dead-time pin | `-p rate_terms:=apply,thr,predict,enc,pose,delay_tick -p nd_delay_s:=0.180` | Pins the committed-step count while `delay_tick` corrects the actuator dead time (measured pose-stamp-to-rack = period + 0.052 s) | Display 32/0, OFFICIAL **69.244 s** — the best race measured. But the hairpin margin is *not* improved (16/32 laps below −0.30 m), which is what the barrier is for. |
 | Telemetry gaps (controller) | `-p gap_predict_s:=0.6` | Keeps solving on the dead-reckoned pose with a decel ramp instead of dropping to the coast watchdog | Harness with a stall every 5 s, 72 laps per cell: 3-frame gaps 6 → 1 / 19 → 8 collisions; 5-frame 18 → 3 / 46 → 18. One dropped frame is fine either way; no-gap reports byte-identical. Not driven live — see Gate E. |
 | Telemetry gaps (filter) | `-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5` | Two 0.5 s constants coincide by default, so above a 0.5 s gap the filter dead-reckons at the stale pre-gap speed: 0.9 m of phantom travel for a stalled car, 2.25 m error and 9 relocalizations for a 1 s gap | Replayed on the real collision bag, 25 injected stalls x 6 seeds: worst post-gap error 0.46 m. Widening the cloud works; capping the step throws away real motion. |
 | Teleport detector | `-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0 -p teleport_hold_n:=7 -p teleport_reseed:=false` | A collision reset moves the car ~0.88 m and the filter never notices; the scan branch does | On the real collision bag: **9/9 resets detected within one frame, 0 false positives** for any threshold 0.20-0.525 (clean max 0.194). The IMU branch is unusable (1/9, one frame early once) — keep `teleport_imu_g` 0. Reseed helped on 0/9 and costs 0.06 m; hold-only is better, and the image carries no `checkpoints_csv` anyway. Peak post-reset error 0.65 → 0.30-0.38 m. |

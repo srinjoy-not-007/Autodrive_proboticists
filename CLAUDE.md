@@ -140,6 +140,23 @@ angle in radians).
 
 ## Where things stand
 
+**September 12 takes precedence over everything below.** The shipping stack is
+**mpc3** on `porto_mesh_cr_dk0.8.csv` with `rate_adaptive`, `w_dcmd` 50 +
+`cmd_tau` 0.10, `steer_tau` 0.04 and `barrier_margin` 0.34 (0.40 on Porto's own
+line), over localization with `max_step_mps` 9.0 and `publish_on_reloc` false —
+all uncommented defaults in `submission/autodrive_devkit.sh`, with BLAS pinned
+to one thread. It is the first config validated clean at **both** sensor
+periods: real display at 0.058 s **32 laps / 0 collisions / 70.13 s** (69.36 s
+at margin 0.34) and Xvfb at 0.09-0.10 s **100 laps / 0 collisions / 71.91 s**,
+plus 32/0 on each of ICRA 2026 (148.3 s), SRL 2025 ICRA (140.4 s, fast line) and
+CDC-TF 2025 (101.9 s, fast line, 2 collisions). The controlling variable is the
+**sensor period**, which is a per-start lottery here (0.088-0.106 s on Xvfb,
+0.058 s on a real display, ~0.097 s on the organisers' box) — no run is evidence
+without its `dt_p50`, and the offline harness cannot reproduce the display
+failures, so the display is the gate. Open finals risks, the rejected knobs and
+the opt-in ones are at the top of `docs/STATUS.md`; the day-of procedure is
+`docs/FINALS_RUNBOOK.md`.
+
 **September 10 takes precedence over the historical summaries below.** The
 qualification audit is at the top of `docs/STATUS.md`; packaging and DockerHub
 instructions are in `submission/README.md`. Current profile is ay 4.5 / ax 6.5 /

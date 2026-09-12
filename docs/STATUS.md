@@ -1,780 +1,281 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 13: shipping line w_veh 0.63 / ay 6.75, 100 laps clean)
+## NEXT SESSION — START HERE (September 12: the finals candidate is clean at both sensor periods)
 
-**Shipping: mpc3 defaults on `porto_mesh_mc0.63_ay6.75.csv` (0.309 m mesh
-clearance, ideal 7.02 s), mesh map, single-threaded BLAS: 100 laps, 0
-collisions, 72.16 s (sim timer 71.70), median 7.19, best 6.94.** Chosen
-over `mc0.60_ay6.5` (71.63 / 72.49 s clean centuries, 0.292 m) as the equal
-with more room. Image with the new line raced as shipped: 14 laps, 0
-collisions, 73.75 s sim timer, PASS (the previous image sampled 70.82 s;
-14-lap samples scatter ~1.5 s). w_veh 0.63 at ay 7.0: best lap 6.71 s but
-4 collisions/32 (s 11.3 hairpin entry x3) -- rejected; ay 6.75 is the limit
-for this tracker on this line family.
-**REGRESSION under investigation:** the same image raced as shipped for 42
-laps took 11 collisions in 20 laps (4 in the scored ten; laps 6.8 s where
-the dev runs lap 7.2), all hairpin entries. Localization is fine (lateral
-est-truth p95 0.04). The logger's sample period was 0.088 s in the image run
-against 0.104 s in the clean 100-lap dev runs: mpc3 was validated at ~9.6
-Hz and misbehaves at 11.4 Hz (faster, later braking). Rate adaptivity is
-being built; do not trust a 14-lap image sample either way.
-CONFIRMED in the dev environment: with BLAS pinned the sim runs at 11.05
-Hz and the shipping config took 3 collisions in 10 laps (logger dt 0.091);
-every clean 100-lap mpc3 run logged dt 0.104-0.106 (9.5 Hz: the sim was
-slowed by concurrent load at the time). **mpc3 is clean at ~9.6 Hz and
-collides at ~11 Hz.** The organisers measured 0.097 s. Rate robustness is
-the blocking item; all mpc3 "clean centuries" must be re-read as 9.6 Hz
-results.
-At 11 Hz (dt 0.091) on a quiet host: legacy mpc on the centerline (mesh
-map, a_gain 0.02) 32 laps, 0 collisions, 78.21 s, median 7.815 -- the
-rate-proven fallback; mpc3 on the wide line laps 6.98 but 3 collisions/12.
-Sensor rate by graphics quality on this host (Xvfb): Low 11.05 Hz, Ultra
-10.64 Hz (organisers run Ultra; they measured ~10.4). `SIM_QUALITY=ultra`
-on run_exp/run_stanley now sets Ultra after the sim connects
-(`scripts/sim_set_quality.sh`, cycle Low -> High -> Ultra verified).
-Validate at Ultra from here on.
-Research (measured on our logs): the speed error is 86-96% repeatable and
-61% of it is a pure lag of achieved speed behind the profile (1.45 m /
-0.33 s at 9.6 Hz, 1.15 m at 11.4 Hz); the entry overspeed 0.8 s before a
-corner explains the inside offset (corr -0.82). At 11 Hz the lag shrinks,
-the car is faster and the repeatable lateral error doubles: mpc3 was tuned
-with the lag as a free corner-entry brake. Lateral error is only 41-70%
-repeatable (steering ILC capped at 1.3-1.6x); longitudinal per-arc-length
-learning on the speed ceiling is the valuable learner (Wachter et al.
-2026, F1TENTH, 7.6%). Being implemented with rate-invariant constants and
-a brake-only lead.
-At Ultra on this host the logger period is 0.102-0.105 s (the sim renders
-slower), i.e. the same effective rate as the clean centuries: mpc3 at Ultra
-32 laps, 0 collisions, 72.98 s (median 7.21); legacy at Ultra 32 laps clean,
-78.40 s. The organisers' RTX 4090 at Ultra measured 0.097 s, between the
-clean (0.104) and colliding (0.088-0.091) rates, so rate invariance stays
-mandatory; until then, validate at Ultra (100-lap mpc3 Ultra run queued).
-Rate mechanism found offline: `apply_ahead_s` (the plan time at which the
-published angle is read) was a constant 0.090 s = 0.87 of the 0.104 s
-period it was validated at; scaling it with the measured period (new
-`rate_adaptive`, identity at 0.104) reproduces the 0.104 -> 0.088 lateral
-error rise (p50 0.075 -> 0.093 offline, 0.068 -> 0.093 live) and removes
-it. Committed steps (nd 3) do not change over 0.088-0.104. ILC implemented
-(steering feedforward + speed-ceiling table over 0.25 m bins, opt-in):
-converges by lap 8-10 to p50 0.03 but costs 0.6-0.8 s/lap offline. The
-harness still does not reproduce the live speed lag (0.5 vs 1.45 m), so
-the brake-only lead is unvalidated. Live A/B of rate_adaptive at Low
-quality (11 Hz) queued. **mpc3 at Ultra, 100 laps: 2 collisions (s 28.4
-lap 23, s 11.3 lap 99), median 7.20, first ten 73.39 s** -- at the
-organiser-like rate the shipping mpc3 config is ~2%/lap, not clean; its
-expected race (~75 s) still beats the legacy's clean 78.4 s, but the
-rate-adaptive fix is what has to make it clean.
-CORRECTION (harness agent, measured on the logs): the "1.45 m speed lag"
-was the race_logger's own alpha-0.30 speed filter; ground-truth speed lags
-the profile by only 0.22 m (0.104 s) / 0.07 m (0.088 s), the servo is
-first-order K 18 (RMSE 0.087 m/s) and entry speeds are identical on clean
-and colliding laps. The rate effect is a LONGITUDINAL POSE OFFSET: the
-estimate reads ~0.15 m further forward along the car axis at 0.088 s than
-at 0.104 s (est-truth along-axis -0.21/-0.13 m vs -0.03/-0.07 m at the
-hairpin), so the tracker turns in early where kappa ramps. Injected into
-the harness (`--pose-lon-bias 0.15 --frame 0.088 --plant-realistic`) it
-reproduces 64 collisions/100 laps at s 11.1-11.8 and 0/100 at 0.104. So the
-fix is in the pose/latency chain (stamp-to-now prediction, committed
-steps), i.e. the period-scaled terms, not the throttle.
-The sensor period is a PER-START LOTTERY of the simulator on this host:
-some starts run at 0.088-0.091 s, others at 0.103-0.106 s, stable within a
-run (dt per 2-minute window is flat), independent of graphics quality and
-host load in the quiet case. Two rate-adaptive "A/B" runs (ra_low, ra_low_wide)
-landed on 0.104 s instances and are therefore not 11 Hz tests (both clean,
-73.1 s official). `RATE_MAX_DT`/`RATE_MIN_DT` on run_exp/run_stanley now
-restart the sim until the period is in the wanted band; every run must be
-read with its dt_p50 (tools/lap_report.py).
-ILC prior (tools/ilc_prior.py): steering-feedforward table learned offline
-from 133 clean laps of the shipping line (data/ilc/prior_porto_mesh_mc0.63_ay6.75.npz;
-peaks at s 4-5.5 and 10.5-12 where the car sits 0.10-0.13 m inside, 17/114
-bins at the 0.071 1/m clamp). The offline harness's own error pattern
-correlates only 0.21 with live, so the prior can only be judged live:
-`-p ilc_enable:=true -p ilc_v_enable:=false -p ilc_store:=<copy>/prior`
-(the node overwrites the table each lap; copy the pristine one per run).
-Cause of the lottery (sim-period agent): the telemetry rate is set by one
-CPU-saturated Unity render thread (~98% of a core, GPU at 19% and idle
-clocks, Xvfb has no refresh so no vsync); ~100 ms of render CPU per tick,
-i.e. a ~17% swing in that thread's per-frame cost between starts. Not GPU
-state, not CCD placement (5.5% clock gap only), not quality (4%). Levers:
-`SIM_CPUSET` on sim_restart_connect (container --cpuset-cpus), locked GPU
-clocks, screen size; the Unity log is now saved per run by stop_run.sh.
-CORRECTION 2 (pose-offset agent): the 0.15 m "forward pose offset" at 11
-Hz is a logging artefact -- the logger writes a one-frame-stale pose, and
-one frame is 0.062 m shorter at 0.088 s. De-staled, the consumed pose is
-rate-invariant to 0.007 m median / 0.02 m worst bin, lateral 0.012 m p50
-at both rates, entry speeds identical. The only real rate term is the
-controller's fixed apply_ahead_s 0.090 s (0.87 period at 0.104, 1.02 at
-0.088): 0.054-0.084 m of extra plan lead at hairpin-approach speeds, same
-corner and sign as the collisions -- exactly the term `rate_adaptive`
-scales. Live A/B at a rate-selected 11 Hz instance queued (ra_fast vs
-ctl_fast). **Live at a rate-selected 0.090 s instance: mpc3 defaults -> 32
-laps, 7 collisions, median 6.92 (ctl_fast3).** rate_adaptive at a 0.092 s instance -> 32 laps, **2 collisions** (s 11.3,
-13.4), median 7.05, OFFICIAL 70.59 s: most of the rate failure removed, not
-all. Online steering ILC from zero (prior not visible inside the container)
-at a 0.092 s instance, WITHOUT rate_adaptive -> **32 laps, 0 collisions,
-median 7.10**: it converged within two laps (bin mean |e| 0.119 -> 0.053 m).
-Both together with the prior (ilc_store:=/home/data/ilc/run_prior) at a
-0.090 s instance -> 32 laps, **1 collision** (lap 16, at s ~1.2 just after
-the start line, cte 0.04 -> 0.28 m in six samples; cause under offline
-analysis), median 7.17, OFFICIAL 71.48 s. **100 laps of the same: 7 collisions**,
-spread around the lap (s 0.7, 4.4, 5.1, 7.9, 14.5, 18.1, 18.3; an
-earlier "all at s 0-1.6" reading was wrong: the logger writes one
-already-teleported row BEFORE collision_count increments, so the
-pre-impact sample is row c-2). The clustering is temporal: laps 0-79 at
-0.092-0.096 s took 2, laps 80-100 at 0.108 s (host loaded by an offline
-search) took 5 with |e| p95 0.18 -> 0.27: **a table learned at one period
-goes stale when the period moves**. Offline diagnosis of the 32-lap
-collision: localization innocent (lateral est-truth |p95| 0.034 m), no
-steering saturation (peak 0.37 rad); the ILC table at s 23-25.5 had
-ratcheted to the +0.071 1/m clamp (a sign reversal against the prior's
--0.071), removing 10-21% of turn-in and pushing the car +0.27 m wide by
-the start line (DC gain measured 1.8 m per 1/m). The run_prior file had
-270 laps across three periods baked in. ILC removes only 30-37% of the
-hairpin offset (only ~30% of the offset variance is lap-repeatable; the
-binding clamp is 2*shift_max/shift_len^2 = 0.071, and lifting it costs
-0.08-0.13 s/lap). **Decision: ILC stays opt-in, not shipped** -- the
-organisers' period is unknown and may drift (OBS recording), and the
-cr_dk0.8 + rate_adaptive config is clean without it. If ever re-tested:
-always start from a fresh copy of the pristine prior.
+One day, ~25 experiments. There is now a single shipping config that has driven
+clean on the **real display (0.058 s)** and on **Xvfb (0.09-0.10 s)**, on all
+four tracks. Superseded narratives are at the end under "How we got here
+(Sept 12)" — read them only if a number surprises you.
 
-**Porto line sweep under the shipping tracker (Sept 12, offline):** 76
-candidates (w_veh 0.50-0.80 x ay 6.75-7.5 x dkappa 0.5/0.6/0.8), 342
-harness laps per finalist, zero collisions on all 33 gate-passing lines.
-The line is converged: the best gate-passing candidate
-(fast_dk0.6_w0.63_ay7.0, ideal 6.91, clearance 0.309) beats cr_dk0.8 by
-0.027 s/lap in the harness; ay 7.25+ turns back (error grows, runs wide);
-lines under the 0.28 m gate are the least robust under stress. A/B
-queued live (dk06_w063_ay70, 32 laps). The remaining ~0.5 s to the
-winners is not in the line. Driven: 32 laps / 0 collisions / **69.92 s**
-(best official race so far, 0.092 s instance). Re-ranked under the
-smoothing config (w_dcmd 50 + cmd_tau 0.10, 3168 harness laps, incl. 6
-new below-gate lines w 0.50-0.57 / ay 7.0-7.25): field spans 0.10
-s/lap; under the identified actuator (pole tau 0.06, dead 0.10) cr_dk0.8
-wins outright with 0.090 m min clearance vs 0.025-0.056 for the tight
-lines; ay 7.25 collides. No tighter line is worth a live slot.
+### 1. What ships now
 
-**REAL-DISPLAY RUN (Sept 12) -- the organisers' setup, and a failure.**
-Same shipping config (cr_dk0.8 + rate_adaptive, Ultra), simulator
-windowed on this host's real display (240 Hz monitor) with a human
-clicking Connection (MANUAL_CONNECT=1): telemetry period **0.058 s**
-(Xvfb: 0.088-0.106), **23 laps, 10 collisions**, median 7.105 between
-them, OFFICIAL 72.5 + 30 s. 9 of 10 at the hairpin entry (-1.6,-6.5),
-cte -0.34..-0.37 m at 2.7 m/s, localization error at impact 0.02-0.05 m:
-the rate failure again, now at a period rate_adaptive was never tested
-at (its clamp is 0.5-1.5x nominal). Run-wide est-truth p50 0.133 m vs
-~0.04 on Xvfb (cause unverified). **Every Xvfb lap time so far was
-measured at a period the organisers may not have**; the stack must be
-clean from ~0.055 to ~0.11 s. Offline reproduction and fix in progress;
-the real-display test needs a human click until the click geometry is
-fixed for a small window on a 5120x2880 screen.
-**ROOT CAUSE (offline, same day):** `MPC3.solve` floors the command lead
-at one `step_dt` (0.060 s), so below a 0.069 s period the rate-adapted
-`apply_ahead_s` is discarded and the publish index becomes an exact plan
-knot: successive commands step 3.2*0.060/0.058 = 3.31 rad/s, above the
-rack's 3.2 rad/s. Live: 12-28% of commands through s 13-16 exceed the
-rack rate at 0.058 (0% at 0.094); the car turns in early and drifts
-inside from s 9.7 to the wall at s 11.3-11.7. Localization is innocent
-(de-staled |err| p50 0.037 m at both rates). Fix, opt-in and committed:
-`apply_floor_steps:=0.0` + `rate_terms:=apply,thr,delay,predict,enc,pose`
-(actuator dead time = bridge + p/2). Harness: min clearance 0.035 ->
-0.071 at 0.058, command saturation 0.23 -> 0.00, 0.065/0.075 lap times
-back to the 0.104 value, defaults byte-identical. Live display A/B
-queued (`display_ratefix`). Also: the rate clamp is [0.052, 0.156] s
-(`rate_lo`/`rate_hi` now params) -- a host below 0.052 s silently
-reverts to the 0.104 tune.
-**Driven on the display (self-clicked, 0.058 s): 15 laps, 11 collisions.**
-The fix did what the harness said (command slew saturation 0.078 ->
-0.003, straight-line steering std 0.068 -> 0.055) and it changed nothing
-at the hairpin: identical collision, s 11.3-11.5, cte -0.34..-0.36 inside
-at 2.6-3.0 m/s, every lap. The slew was a symptom. The inside drift at
-the hairpin grows with sensor rate (-0.15..-0.20 m at 0.09-0.10, -0.35 at
-0.058) and the controller-side rate terms do not explain it; the working
-hypothesis is a rate-dependent PLANT (the bridge applies one command per
-tick, so a per-tick actuator limit is 1.7x faster at 0.058). Plant
-identification per rate from the display logs is in progress.
-Repeat with a bag recorded (display_watch, self-clicked, 0.058): 20
-laps / 11 collisions, median 6.96 between them (laps ARE faster at the
-fast rate); the bag (data/bags/exp_display_watch_*) is the first sensor
-recording through real collisions, for the teleport detector's IMU
-branch. Human observer: the wiggle on the approach before the hairpin
-appears to seed the early turn-in; collisions happen on the first pass
-too. **Approach table (display 0.058 vs Xvfb 0.094, medians by s on
-cr_dk0.8):** true speed identical at every bin s 6-10.5 (braking points
-are valid), published steering identical (s 10: -0.141 vs -0.142), but
-lateral offset diverges from s 8.5: -0.08/-0.13/-0.19/-0.24/-0.30 m at s
-8.5-10.5 vs 0.00/-0.03/-0.06/-0.12/-0.18. Same command, same speed, more
-turning: the achieved curvature per command is larger or earlier at
-0.058 s ticks -- a plant (actuator) rate dependence, being identified.
-**Ultra on the real display (display_ultra12, quality click verified by
-the label crop): period still 0.058 s** -- graphics quality does not set
-the rate on this host, the GPU/display does; 9 laps / 10 collisions,
-same hairpin. Four display runs of the shipping config have now failed
-identically; no further display runs until the plant mapping exists.
-Direct measurement at 0.058 s: steering staircase on the -explore floor
-run on the real display (data/logs/sysid_20260912_064145.csv, 2889 rows
-with /steering feedback and IMU yaw rate): 2.0 m/s peak ay 4.61 at 0.40
-rad, 3.0 m/s 6.63 at 0.25, 4.0 m/s 9.35 at 0.20 (tyre peaks as before);
-being fitted for dead time / slew per tick vs per second.
+Everything below is an uncommented default in `submission/autodrive_devkit.sh`.
 
-**UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
-(mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
-ICRA 2026 32 laps / 0 collisions / 150.4 s; SRL 2025 CDC-TF (never
-tuned) 32 / 0 / **111.1 s** (Aug 30 legacy stack: 124.5 s); **SRL 2025
-ICRA (never tuned) 4 laps / 14 collisions = DQ.** CORRECTED cause (the
-first reading had the logger's columns swapped: `x,y` ARE the IPS truth,
-`px,py` the estimate): the encoder is accurate (enc/truth 1.03 at 7-8
-m/s), and it is the **localization estimate that saturates at 5.1 m/s**:
-`max_step_m` 0.6 per update at rate_nominal 0.104 is a 5.77 m/s speed
-cap in the motion model, and this circuit has a 13.9 m stretch above
-that (Porto 3.3 m, ICRA 2026 10.3, CDC-TF 11.7), so the estimate falls
-up to 4 m behind by the corner and the car drives straight into the
-wall with cte reading 0.03. The harness with the cap injected reproduces
-it exactly (14 collisions, same corner) and is clean at cap >= 6.4.
-Physics, floor, materials, spawn height are identical between images.
-Fix: `max_step_mps:=9.0` on localization (parameter exists; zero lap
-cost). Plumbing: run_stanley.sh now takes LOC_ARGS; the entrypoint takes
-PIT_CREW_LOCALIZATION_ARGS. **Driven: SCALE 0.75 (cap not reached) ->
-32 laps / 0 collisions / 191.2 s; full speed with `max_step_mps:=9.0
-publish_on_reloc:=false` -> 32 laps / 0 collisions / 148.8 s** (the DQ
-run was 4 laps / 14 collisions). Promote after a Porto regression run
-Regression: Porto cr_dk0.8 32 laps / 0 / 70.31 s, ICRA 2026 32 / 0 /
-148.9 s (both unchanged or better). **ENABLED in the entrypoint's
-LOC_ARGS (Sept 12).** The finals-day risk this exposed is closed.
+```
+line     Porto slug -> data/racelines/porto_mesh_cr_dk0.8.csv
+         any other slug (mpc3) -> <slug>_race.csv ; legacy mpc -> <slug>_safe.csv
+CTRL_ARGS (mpc3)  -p map_prefix:=$MAP -p rate_adaptive:=true
+                  -p w_dcmd:=50.0 -p cmd_tau:=0.10
+                  -p steer_tau:=0.04 -p barrier_margin:=0.34
+                  case *cr_dk0.8.csv -> -p barrier_margin:=0.40   (last -p wins)
+LOC_ARGS          -p max_step_mps:=9.0 -p publish_on_reloc:=false
+env               OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1
+```
 
-**Tight-circuit lines (Sept 12, offline; live A/B queued):** the drill's
-MESH_RACE_KAPPA_MAX 1.0 gate rejected every raceline on both 2025
-circuits while shipping centerlines that are tighter still (cdctf2025
-safe kappa max 2.10 = a skeleton S-kink in a 1.75 m corridor; icra2025
-1.63 = a genuine 172-degree hairpin, r 0.61 vs lock 0.56). A relative gate
-(kappa <= max(lock 1.78, the safe line's own max)) plus `--dkappa-max 1.5
---dkappa-refine 3 --kappa-bound 1.0` (opt-in flags in make_track_lines.py,
-uncommitted, Porto/ICRA-2026 outputs byte-identical) yields fast lines at
-0.295-0.304 m clearance: cdctf ideal 10.66 -> 9.92, icra2025 14.56 ->
-13.85. Harness (432 laps, 0 collisions): -0.73 and -0.72 s/lap, better
-tracking (|e| p95 0.25 vs 0.37) but driven min clearance 0.07-0.11 m vs
-0.15-0.20 for safe -- the number to watch live. Porto's pick unchanged.
-Driven (cdctf_fast, 0.096 s): **32 laps, 1 collision, median 10.20 vs
-safe 11.13, OFFICIAL 101.9 vs 111.1 s**; the collision was on lap 32 at
-s 15.1 (kappa -0.19, cte +0.40 m outside, est-truth 0.24 m), a single
-event, unattributed. Expected value favours the fast line (-9 s vs ~+3 s
-of expected penalty) but the drill keeps `safe` as the automatic pick
-until a 100-lap run is clean (queued).
+Why each is in: **`rate_adaptive`** scales `apply_ahead_s` (a constant 0.090 s,
+0.87 of the 0.104 s period mpc3 was tuned at) with the measured period — 7
+collisions/32 at a 0.090 s instance became 2, 100 Xvfb laps clean at 0.091-0.098 s.
+**`w_dcmd` 50 + `cmd_tau` 0.10** damp the solver's steering limit cycle (display:
+feedback sign flips 5.5 -> 2.4/s, command step p90 0.14 -> 0.041 rad).
+**`steer_tau` 0.04** models the rack's first-order lag in the rollout and buys back
+the tracking `cmd_tau` costs on tight circuits (CDC-TF 116.7 -> 112.0 s, ICRA 2026
+150.4 -> 148.3 s); keep it at 0.04, 0.06+ is a mismatch that collides.
+**`barrier_margin`** is a corner-ENTRY outward bias: at the hairpin apex 99 % of
+solves already sit at the `ay_limit` cap (0.161 rad) and the barrier is clipped
+out, so it acts 1.5-2.5 m earlier (+0.008 rad at 0.34, always outward).
+**`max_step_mps` 9.0** removes the motion model's 5.77 m/s cap (0.6 m per update at
+`rate_nominal` 0.104), which was a DQ on SRL 2025 ICRA; **`publish_on_reloc:=false`**
+suppresses the one pose after a global reinit (measured 13 m from the car twice).
+**Single-threaded BLAS**: mpc3's numpy otherwise runs at 1030 % CPU and starves the
+simulator, changing the period.
 
-**Collision-reset recovery audit (Sept 12, 100 live collisions across 21
-runs):** the reset is the last numbered checkpoint, 0.51 m p50 off the
-line, backwards along it on 50% of resets (up to 4.5 m). Recovery is
-acceptable: |est-truth| < 0.15 m after 1.20 s p50 (2.6 m), back to plan
-speed after 0.94 s, +0.5 s p50 of lap time beyond the 10 s penalty;
-**9% of collisions cascade within 3 s**. The teleport detector in
-vehicle.SpeedEstimator (needs an encoder sample implying >18 m/s) fired
-on 0 of 97 teleports, so the "stand still and spread" branch and mpc3's
-consume_jump are dead code; the encoder over-reads +1.8 m/s p50 for
-0.2-0.8 s after a reset and marches the cloud forward while the car is
-stopped (estimate ahead on 88% of post-reset samples). Twice the
-relocalization published a track-wide-cloud centroid 13 m from the car
-(publish_on_reloc, default True). Harness (`--teleport` added to
-sim_tracker.py, default-identical): 13.8% of teleports end in a
-collision within 3 s; opt-in mpc3 `v_pose_gate` / `reindex_after`
-tested and NOT established (11.5% vs 13.8%, p 0.46). Recommended:
-`publish_on_reloc:=false` (LOC_ARGS), no new mpc3 parameter; a legal
-teleport detector (scan jump) + checkpoint reseed is being designed.
-Caveat on max_step_mps 9.0: it also lets the cloud dead-reckon further
-forward after a reset (up to 0.89 m worst window) -- pair with a
-sanity bound if shipped.
-Teleport detector built (opt-in, committed): the encoder never drops
-after a reset (wheels keep spinning, +2.1 m/s over-read for 0.4 s), the
-filter never declares itself lost, so detection has to come from a scan
-discontinuity (12% of resets at 1 false trigger per 2980 scans; resets
-move the car only 0.65 m p50, one period of driving is 0.28 m) or the
-IMU (0 false triggers at 15 m/s2; detection rate UNVALIDATED, no bag
-with a collision exists yet). On detection: reseed at checkpoints within
-2.5 m + encoder reset; replay p90 peak error 1.81 -> 0.49 m. Next: one
-BAG=1 run with collisions to validate the IMU branch.
-Validated on the real collision bag (exp_display_watch_120426, 9 resets
-at 0.0585 s): real resets move the car 0.88 m, the scan branch detects
-**9/9 within one frame at 0 false positives** for any threshold
-0.20-0.525 (clean max 0.194; use 0.35); the **IMU branch is unusable**
-(1/9 at 15 m/s2, clean max 9.73, and it fired one frame early once:
-set teleport_imu_g 0). Replay through the real filter: peak post-reset
-error 0.65 -> 0.30-0.38 m p50, recovery time unchanged (p90 1.17 s, the
-scan update already re-finds the pose); checkpoint reseed helped on 0/9
-and costs 0.06 m -- hold-only is better. hold_n is in scans (7 = 0.41 s
-at 0.058). Whether a smaller excursion cuts the 9% cascade rate is a
-live question; opt-in, not shipped.
+**Real display, Ultra, 0.058-0.059 s** (32 laps each, OFFICIAL race = sim lap
+timer + 10 s/collision):
 
-**THE WIGGLE IS A SOLVER LIMIT CYCLE, AND THE PLANT IS NOT RATE-DEPENDENT
-(Sept 12, two agents, offline + the display staircase).** Direct
-measurement: the rack moves exactly 3.2 x period per tick at 0.058 AND
-0.100 s (a wall-clock 3.2 rad/s slew limiter), dead time ~0.07-0.10 s at
-both; actuator-angle -> yaw-rate gain 0.93-0.95 and lag within one
-sample at every rate; throttle servo K 12-16, tau 0 at every rate;
-localization de-staled |err| p50 0.10 m at every rate (the "0.133 vs
-0.04" note was logger staleness); the shipping command law replayed
-open-loop on one trajectory resampled to four tick grids is identical
-to 0.0007 rad. What differs is the CLOSED LOOP: in the harness with
-localization noise set to ZERO the flutter is unchanged, and a
-frame-by-frame dump shows the published command alternating by exactly
-steer_rate*step_dt = 0.192 rad: the first free plan step after the nd
-committed steps has no jerk cost and 0.0022*u^2 of rate cost against
-w_lat 24, so a one-step flick at the slew limit is the cheapest answer
-to any small error, it is never executed before the next solve flicks
-back, period ~2*delay_s (0.35 s at 0.058, aliased to 2 frames at 10 Hz).
-Live: 1.1-1.6 Hz oscillation on the hairpin approach at 0.058, absent at
-0.09-0.10. Opt-in fix committed: `w_dcmd` (residual on published minus
-previous published) + `cmd_tau` (rate-invariant first-order filter on
-the published command); harness w_dcmd 50 + cmd_tau 0.10: command step
-p90 down 4.8-6.6x, rack HF rms down 3.7-6x, min clearance up at every
-frame, 0 collisions in 216 laps, lap -0.12..+0.02 s. Display A/B queued
-(`smooth_d50t10`). **Driven on the display (0.058 s): 27 laps, 10
-collisions, OFFICIAL 69.84 + 10 s; median 6.95 between them; laps 3-11
-a clean stretch.** The observer confirms the car is now smooth; measured
-feedback sign flips on straights 5.5 -> 2.4/s, step p90 0.14 -> 0.041
-rad. Every collision is still the hairpin at s 10.9-11.4, cte -0.34..
--0.37 at 2.5-2.9 m/s -- the limit cycle was part of the hairpin
-failure, not all of it. Xvfb regression queued (`smooth_xvfb`) before
-shipping the smoothing. Xvfb regression (0.095 s): **32 laps, 0
-collisions, 71.17 s** (vs 70.31 s without smoothing on the same period
-class: -0.09 s/lap for flips 3.8 -> 1.8/s, step p90 0.107 -> 0.040).
-**SHIPPED in the entrypoint's CTRL_ARGS (Sept 12)**: robustness at an
-unknown period outranks 0.9 s of Xvfb race time. Cost on a tight track
-is larger: CDC-TF 2025 safe line 116.7 s with smoothing vs 111.1 s
-without (+0.5 s/lap) -- cmd_tau 0.10 lags the corners; candidates to
-recover it: w_dcmd alone (harness: fastest variant) or steer_tau 0.04
-(harness: buys the tracking back). CDC-TF A/B: **w_dcmd 100 alone: 32
-laps / 0 / 111.2 s** -- the lap cost is entirely cmd_tau; **smoothing +
-steer_tau 0.04: 32 / 0 / 112.0 s** -- the rack lag in the rollout buys
-back 4.7 of the 5.5 s (as the harness said). If w_dcmd alone is smooth
-enough on the display it replaces the filter: **it is not -- w_dcmd 100
-alone on the display: 12 laps / 10 collisions** (smoothing 27 / 10).
-The command filter is what matters at 0.058; recover the tight-track
-cost with steer_tau 0.04 (112.0 s on CDC-TF) instead. (For the record,
-w_dcmd 100 alone on Xvfb: 32 laps / 0 / **69.39 s**, the fastest Xvfb
-race so far -- speed without the filter's lag, but not display-safe.) **Full shipping config (smoothing + localization fix) regression,
-Xvfb, 32 laps each, 0 collisions on all four tracks:** Porto 71.17,
-CDC-TF 2025 116.7, ICRA 2025 149.6, ICRA 2026 150.3 s. Also: drop `delay`
-from rate_terms (dead time does not scale with the period); the logger now records the steering command
-(`cmd` column) next to the actuator feedback (`steering` IS feedback).
-The harness cannot see the display failure (0 collisions at 0.058 with
-shipping params) -- do not tune against it for that; the display is the
-gate.
+| Run | Config | Result | Log |
+|---|---|---|---|
+| `disp_bm40` | **exactly the shipping Porto config** (bm 0.40 + steer_tau) | 32 laps, **0 collisions, 70.131 s**, median 7.000; hairpin most-inside p50 -0.261 / worst -0.296, **0/32 laps below -0.30** | `race_20260912_102205.csv` |
+| `disp_bm34_tau` | shipping with bm 0.34 | 32, **0**, **69.357 s**, median 6.948; most-inside p50 -0.297 / worst -0.338 (13/31 below -0.30) | `race_20260912_083832.csv` |
+| `disp_bm34` | bm 0.34, no steer_tau | 32, **0**, 69.444 s — the first ever clean display run | `race_20260912_080935.csv` |
+| `disp_ndpin` | + opt-in `nd_delay_s` | 32, **0**, **69.244 s** (best race of the project); margin NOT improved (16/32 below -0.30) | `race_20260912_101101.csv` |
+| `thr_bl05` | + opt-in `thr_brake_lead_s:=0.05` | 32, **0**, 69.943 s; most-inside p50 -0.290 / worst -0.310 (8/32 below -0.30) | `race_20260912_102857.csv` |
 
-**Period-range audit of the finals candidate (Sept 12, 7128 harness
-laps; note the harness's seeds do nothing without pose/yaw noise):**
-collision-free on all six track/line cells and both plants over
-0.045-0.104 s (1728 laps, 0), and through 0.125 once pose noise is on;
-degrades above 0.125 on the pole plant, collisions on four of six cells
-at 0.150. Mid-run drift (step, ramp, sawtooth): 0 collisions in 432 laps
-vs 17 for the pre-barrier config. On the identified actuator the
-candidate takes 12 collisions per 1296 laps vs 178 pre-barrier.
-Regressions attributed: **steer_tau 0.04 costs Porto clearance at
-0.045-0.075 (0.250 -> 0.050 m at 0.075/slew; the barrier alone improves
-it) and doubles |e| p95 on the icra2025 safe line at 0.097-0.104 (0.138
--> 0.216) for 0.08-0.10 s/lap**; the barrier owns the two knife-edge
-0.125 collisions (gone under noise). Live evidence keeps steer_tau
-shipped (display 69.36 clean, ICRA 2026 -2 s, ICRA 2025 fast line
-clean) but its live hairpin margin cost (~0.01 m) is consistent with
-this; the barrier 0.40 rule on safe lines/Porto is the counterweight.
+The wall sits at about -0.35 m. 0.40 buys +0.04 m of real margin for +0.8 s of
+race; on a pass/fail qualifier and an unknown final that trade is right.
 
-**The hairpin-entry cut is the publish lead, and it is the lap time
-(Sept 12, offline):** from a zero-error state the solver plans NO cut
-(e_min -0.003 m over the horizon at every entry, unchanged by w_lat_T,
-horizon 30/40, e_free 0, yaw_gain 1.0, ay_deliver, w_barrier 0); the
-published angle is read nd + apply steps into a ramping-curvature plan
-and exceeds the line-matching angle by 0.04-0.33 rad. Only the readout
-lead moves the cut (apply_ahead 0: -0.179 -> -0.006 m for +0.39 s/lap;
-nd 2: -0.033 for +0.43). e_free is refuted on the logs (offsets pass
-straight through 0.18 m; it only modulates the speed plan). The
-understeer map is right to 5%. Opt-in `apply_lead_steps` (committed):
-1.0 removes most of the cut at +0.12..+0.31 s/lap with pole-plant
-collisions; 1.2 is lap-neutral and removes 10-15%. Not run live: the cut
-is the clearance-for-lap-time trade; the corner-local lever (inside
-half-width, fast3) remains the right one.
+**Xvfb, Ultra, 0.09-0.10 s** (32 laps unless stated):
 
-**Turn-in timing probe (Sept 12, committed, not yet run live):**
-`ros2 run pit_crew turnin_probe` / `scripts/turnin_probe.sh` measures
-pose-stamp-to-yaw-rate delay INSIDE the race loop (publishes from the
-pose callback like mpc3; ramp pulses of 0.12 rad on Porto's safe-line
-straights at 2.5 m/s; `tools/turnin_fit.py --compare display.csv
-xvfb.csv`). The rate comparison is the robust output (a single-rate
-absolute is tick-quantised plus a sub-tick constant). First two live
-attempts fired 0 pulses: the runner passed max_run_s as an integer to a
-double parameter (fixed); re-queued in chain7 together with the four-arm
-stall test (control / stalls with defaults / + gap_predict_s 0.6 / + the
-localization gap set; stall_inject.sh --dur 0.33 --every 20 --count 8
-on the display) and the first image build + organiser-style image test
-on the real display since today's config changes.
+| Track | Line | Result | Log |
+|---|---|---|---|
+| Porto | `cr_dk0.8`, bm 0.40 + steer_tau | **100 laps, 0 collisions, 71.910 s**, median 7.221 | `race_20260912_103418.csv` |
+| Porto | `cr_dk0.8`, bm 0.34 | **100 laps, 0, 71.496 s** | `race_20260912_091004.csv` |
+| CDC-TF 2025 | `safe`, bm 0.34 | 32, 0, 117.265 s | `race_20260912_084350.csv` |
+| CDC-TF 2025 | `fast2_m50`, bm 0.34 + tau | 32, **2 collisions**, 101.873 s (both at s 39.18) | `race_20260912_093952.csv` |
+| CDC-TF 2025 | `fast3_m53`, bm 0.34 + tau | 32, 0 collisions, but **one missed checkpoint** -> 112.089 s | `race_20260912_104735.csv` |
+| SRL 2025 ICRA | `safe`, bm 0.34 | 32, 0, 149.769 s | `race_20260912_085120.csv` |
+| SRL 2025 ICRA | `fast2_m50`, bm 0.34 + tau | 32, **0, 140.422 s** (-9.4 s/race vs safe) | `race_20260912_094731.csv` |
+| ICRA 2026 | `safe`, bm 0.34 + tau | 32, 0, **148.321 s** (150.434 without tau) | `race_20260912_095621.csv` |
+| Porto | legacy `mpc` on safe, 11 Hz and Ultra | 32, 0, 78.212 / 78.395 s — the rate-proven fallback | `race_20260912_022719.csv`, `..._023408.csv` |
 
-**Longitudinal plant identified (Sept 12, display + Xvfb logs):** the
-4.2-4.7 m/s2 drive ceiling is the sim's speed servo saturating (fit:
-K 15-17, a_max 4.0-5.0, a_min -6.5; ggv.csv's ax_max = 5.0 - 0.273 v),
-not u_max (peak throttle 0.28 of 0.60) and not the feedforward (setpoint
-tracks the plan speed to p50 -0.006 m/s): the profile's ax 6.5 is
-unreachable by ~2 m/s2 and servo_k_p / head_max cannot help (measured
-saturated; it only adds overspeed). Braking is the opposite, a command
-deficit: the plant delivers -4.4..-4.6 when asked but mpc3 hands the
-throttle servo `v_ceiling` (the brake-feasible ceiling), which sits
-ABOVE the profile on the hairpin approach, so the +0.2..+0.4 m/s entry
-overspeed is COMMANDED (setpoint - plan +0.05..+0.12 through s 6.5-9.5,
-achieved -1.7 vs planned -3 m/s2) and the inside offset grows with it.
-Honest-profile candidates (identical geometry): lon_ax45_b40 (ax 4.5,
-ideal 7.275) in the harness is lap-neutral to FASTER (7.47 vs 7.65 on
-the pole plant) with |e| p95 -32..-45% and +0.04 m min clearance --
-the lost ideal time was time the car never had; it does not remove the
-commanded overspeed. The lever that does: `thr_lead_mode:=min` +
-`thr_lead_s 0.45` (brake-only lead): overspeed -0.44..-0.65 m/s, |e| p95
-halved, clearance x2-5, for +0.14..+0.32 s/lap (0.30 is non-monotonic
-and collided: never). **Driven on the display: lon_ax45_b40 32 laps, 1
-collision, 70.62 s (median 7.06 vs the candidate's 6.95 clean) --
-REJECTED**: the honest ax profile is slower live and did not add margin.
-lead45 next. CORRECTION on the overspeed's cause: v_ceiling cannot sit
-above the profile (it is a min of it); the setpoint exceeds the profile
-on 18-39% of a braking approach because of the POINT LEAD. Opt-in
-`thr_brake_lead_s` (committed) extends the throttle lead only where the
-profile brakes, taking the window minimum: 0.05 removes 93-100% of the
-commanded overspeed at -0.018 s/lap with |e| p95 -24..-38% (288 harness
-laps, 0 collisions); 0.08 removes all of it at -0.003 s/lap. thr_source
-profile collides (rejected), min is a no-op. Display: thr_bl05 32/0,
-69.94 s (median 6.99), hairpin most-inside p50 -0.290 / worst -0.310 (8/32
-below -0.30): a small margin gain (bm34+tau: 13/31) for +0.6 s of race;
-not better than barrier 0.40 (0/32 for +0.8 s). Not shipped.
+Baseline for scale: main branch 89.6 s; the published winning Porto lap is
+**6.46 s** (VAUL) for a ~65 s race.
 
-**Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
-the ay_limit steering cap is identical at both rates to 1.6% (the
-encoder filter is already rate-invariant; the LOGGER's speed column
-lags differently per rate: alpha 0.30 per sample), the plant's
-curvature per radian is 0.92-0.97 at both rates, the pin-release
-sequence is identical. What differs: lap-wide the display car is
-0.03-0.12 m further inside at EVERY corner, and cross-correlating the
-|delta_fb|(s) and |kappa|(s) profiles the display turn-in arrives
-0.12 m (feedback) / 0.22 m (curvature) earlier in arc length -- a
-0.03-0.055 s phase shift, matching the one uncompensated rate term:
-delay_s pinned at 0.180 while pose-to-rack is period + 0.045 (0.103 at
-0.058 vs 0.140 at 0.095: over-compensation 0.077 vs 0.040 s). Opt-in
-`nd_delay_s` (committed) pins nd while `delay_tick` corrects the
-actuator dead time; harness: rescues the clearance collapse delay_tick
-alone causes at 0.058, flattens the pole-plant spread by a third, not a
-full fix (the harness baseline spread is under half the live one).
-Display: disp_ndpin (delay_tick + nd_delay_s 0.180) **32 laps, 0
-collisions, OFFICIAL 69.24 s** (best race so far) -- but the hairpin
-margin is NOT improved: most-inside p50 -0.300 / worst -0.333 (16/32
-laps below -0.30) vs bm34+steer_tau -0.297/-0.338 and bm34 alone
--0.287/-0.313. Clean runs with a thin margin, all three; steer_tau costs
-~0.01 m of it. The barrier 0.40 arm targets exactly this margin: **disp_bm40 32/0,
-70.13 s, hairpin most-inside p50 -0.261 / worst -0.296, 0/32 laps below
--0.30** -- +0.04 m of real margin for 0.8 s of race. For a pass/fail
-qualifier and an unknown final that trade is right on the SAFE lines
-(cap 0.385+); on the fast lines (cap 0.345) 0.40 exceeds the feasible
-margin and the harness says it makes them worse, so the candidate rule
-is: barrier 0.40 on Porto (the qualifier) and on safe lines, 0.34 on the
-fast lines. Porto 100-lap Xvfb at 0.40: **100/0, 71.91 s** (0.34: 71.50).
-**ENABLED in the entrypoint (Sept 12): barrier 0.40 on *_safe.csv and
-cr_dk0.8, 0.34 otherwise** (ROS takes the last -p, so the case line
-appends after the 0.34 default).
-lead45 (thr_lead_mode
-min, 0.45 s) on the display: 32/0, 72.87 s (median 7.28: +0.33 s/lap),
-hairpin most-inside p50 -0.278 / worst -0.317 (7/32 below -0.30): +0.02 m
-of margin for 3.3 s of race -- not for Porto; the cheap
-brake-phase lead thr_brake_lead_s 0.05 is the one to try.
+### 2. Finals day
 
-**Lap-time budget on the finals candidate (Sept 12, display log
-083832, 32 laps, median 6.944):** the car beats its own ideal lap
-(7.036) by 0.096 s by driving 0.857 m LESS track (every segment's median
-lateral is inside the line; hairpin -0.45 m of path), while losing
-+0.161 s longitudinally: below plan on every acceleration phase (the
-plant's drive ceiling is ~4.2-4.7 m/s2 against the profile's ax 6.5;
-throttle never negative, setpoint == plan speed) and at the apex
-(driven kappa 1.05 vs planned 0.80 at achieved |ay| p95 7.05: on the
-grip limit on a tighter radius). Braking is weak (-2.4..-3.3 sustained
-vs plan -4.0), so the car carries +0.2..+0.4 m/s into the hairpin
-entry. Rate comparison: the display's 0.1-0.16 s advantage over Xvfb is
-ALL the geo term (path -0.86 vs -0.41 m); the longitudinal loss is
-rate-invariant. Of the plan-side gap to 6.46 s, ~90% is the lateral cap
-(ay 9.0 alone: 7.036 -> 6.352) and ~10% longitudinal; geometry
-contributes nothing (line family spans 0.06 s). Live transfer of ay
-6.75 -> 7.0 measured: 0.017 of the 0.095 s ideal (18%). brake 5-6 is
-worth 0.01 s and unreachable. Levers, all small (estimates): servo_k_p
-1.0 + head_max 0.25 (0.02-0.03 s/lap); the ay 7.0 profile on the
-identical geometry (fast_dk0.6_w0.63_ay7.0, 0.01-0.02); the 0.17 m
-shorter fast_w0.57 (0.02-0.04, but the car already runs to 0.09 m body
-clearance at 0.058). The remaining ~0.4 s is envelope.
+`docs/FINALS_RUNBOOK.md` is the procedure — the Sept 16-19 checklist at the top,
+then steps 0-11, with Gates A/A2/B/C/D/E attached to the runs. Track drops
+**Sep 16**, submission due **Sep 19 AoE**. Line generation is one command:
 
-**Barrier mechanism (Sept 12, offline, 2304 harness laps):** the
-barrier is a corner-ENTRY bias: at the hairpin apex 99% of solves sit at
-the ay_limit steering cap (0.161 rad) and the published command is
-identical for margin 0.24/0.28/0.34/0.40 -- the barrier is clipped out
-there; it acts 1.5-2.5 m earlier (+0.008 rad mean at 0.34, always
-outward), pre-loading an outward offset where the controller still has
-authority. Soft lane-keeping, not a fix of the unmodelled effect. Its
-lookahead is rate-invariant (first step 0.223-0.230 m at all frames);
-the only rate-dependent lookahead is the published knot (+0.064 m from
-0.058 to 0.104). Cost: Porto +0.025/+0.050/+0.086 s/lap at
-0.30/0.34/0.40, lap-time-free on the four tight-circuit lines; above a
-line's feasible cap (min half-width - 0.135: Porto 0.285, fast2_m50
-lines 0.345) the barrier pushes across the line and the fast lines get
-WORSE at 0.40. Rule the data supports: margin = clip(0.34, 0.24, cap +
-0.06) (the +0.06 is fitted to Porto). Period- or error-based rules are
-unsupported. Ship 0.34; 0.40 is the one arm worth a display slot for
-extra hairpin margin (~0.9 s of race).
+```bash
+./scripts/finals_drill_mesh.sh finals $TAG "<track name>"
+```
 
-**Pinch-free fast lines (Sept 12, offline; live A/B queued):**
-`optimize_raceline.py --min-halfwidth M` bounds the path-to-wall
-distance (from the map's distance transform along the normal) at every
-generation stage; the earlier fast lines' pinch came from the smoothing
-and dkappa stages projecting into the corridor without the body sweep.
-M 0.55 is infeasible on both 2025 circuits; M 0.50 gives cdctf
-fast2_m50 ideal 10.03 / clearance 0.364 / min half-width 0.493 and
-icra2025 fast2_m50 13.84 / 0.348 / 0.481 -- the first fast lines on
-which barrier_margin 0.34 is feasible. Harness (144 laps/line, shipping
-+ barrier): CDC-TF fast2_m50 10.68 s, 0 collisions (fast_uni 10.73, 2;
-safe 11.81); ICRA 2025 fast2_m50 14.62, 0 (fast_uni 14.67; safe 15.48).
-Lesson from the m45 family (25 collisions at one corner): easing a
-corner's curvature lets the profile spend it all on speed (2.03 vs
-1.58 m/s minimum) that the tracker cannot deliver at 0.058 -- geometry
-and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
-(52 CSVs). check_pipeline PASSED and the tools flags + lines are COMMITTED (Sept
-12); live: fast2_m50 on both circuits with the finals candidate config
-(chain5). **CDC-TF fast2_m50: 32 laps, 2 collisions (laps 13, 30), OFFICIAL
-101.9 s (clean first ten)** -- both at s 39.18, offset -0.51 m, TRUE
-speed 1.1 m/s with the encoder reading 2.1: the car nearly stops at
-that corner and slides half a metre off the line (wheel slip at low
-speed, a stuck-escape, or a spin: to be attributed). Same race time as
-fast_uni (101.9, 1 collision). ATTRIBUTED: not stuck, not slip (the
-encoder gap is the logger's speed filter lagging a 4.4 m/s2 decel), no
-commanded overspeed; the tracker cuts ~0.4 m inside on EVERY lap at the
-s 39 hairpin entry (a 0.13 -> 1.60 1/m curvature step in 0.4 m; safe
-line is cut by 0.42 too) and fast2_m50 has 0.68 m of inside half-width
-there, so the 2 collisions are the 2.2-sigma tail of the same behaviour
-(clean laps: body clearance p50 0.135, min 0.035). Fix: `--min-halfwidth
-0.53` -> fast3_m53 (ideal 9.96, clearance 0.395, inside half-width 0.72;
-committed, to drive). Do NOT raise the barrier there: the corridor is
-left-tight/right-open and the margin would bias the car further inside.
-Harness matrix (1980 laps): fast3_m53 absorbs the cut (hairpin clearance
-p05 0.30 vs 0.25) at +0.05 s/lap but loses margin on the approach (4
-collisions at 0.058/slew vs 1); thr_brake_lead_s 0.05 removes the
-approach overspeed on both circuits (0 collisions in 396 laps on fast3)
-but costs +0.30 s/lap on CDC-TF and +0.23 on ICRA 2025 (not the free
--0.018 it was on Porto); 0.08 is bit-identical to 0.05 at 0.097 (never
-pay for it). Recommended drill picks: CDC-TF fast3_m53 + lead 0.05 (or
-lead 0 if the live A/B is clean), ICRA 2025 fast2_m50 (+ lead 0.05 as
-margin), safe lines dropped (0.6-0.9 s/lap slower and cut harder).
-**Driven: fast3_m53 32 laps, 0 collisions, laps 10.1-10.4 s -- but ONE
-20.4 s "lap": two start-line crossings with no lap_count increment, i.e.
-a MISSED CHECKPOINT** (rules: the lap timer does not stop until all
-checkpoints are passed). OFFICIAL 112.1 s instead of ~102. No other
-Sept 12 log (40 checked) shows the signature, so it is this line at one
-checkpoint. Finals hazard of the first order: the line generator must
-respect the checkpoint trigger extents (agent on it; pick_config to
-report the minimum checkpoint margin and fail loudly). **ICRA 2025 fast2_m50: 32 laps, 0
-collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
-drill's pick for that circuit under the finals config. **ICRA 2026 with
-steer_tau: 32/0/148.3 s (vs 150.4 without). steer_tau 0.04 SHIPPED in
-the entrypoint (Sept 12).**
+Stage 5/5 runs `tools/pick_config.py`, which measures the chosen line and prints
+the `PIT_CREW_CONTROLLER_ARGS` to race with (`barrier_margin` 0.40 only where the
+line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_lead_s`
+0.05 on a tight circuit, never 0.08). Pass = 0 collisions over 100 Xvfb laps
+(Gate C) **and** 0 over 32 real-display laps at ~0.058 s (Gate D).
 
-**Cross-track config matrix (Sept 12, harness, 432 laps per config on
-the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
-0.34 is geometrically feasible on every safe line (needs 0.475 m
-half-width, worst available 0.520 at the cdctf S-kink) and costs
-nothing (lap sum -0.02 s, 1 vs 0 collisions in 432); it is infeasible
-on the fast_uni lines and Porto's line (0.40-0.42 m) where it just
-biases toward the centre -- which is what Porto has been running.
-**nd_mode:=period is REJECTED for the finals**: +0.5..+2.2 s/lap on the
-tight circuits and 61/432 collisions on ICRA 2025 with the identified
-actuator (58 in 36 laps at 0.097/pole, four different corners):
-systemic dead-time under-compensation; Porto's +0.05 m does not
-generalise. w_dcmd alone: fastest but worst clearance; steer_tau 0.04:
-clean on safe lines, 8/288 on fast lines. Lines under the shipping
-config: ICRA 2026 safe (race == safe), ICRA 2025 fast_uni (-0.7..-1.2
-s/lap, 0/288), CDC-TF fast_uni is the close call (-1.1 s/lap, 2/288 at
-the 0.40 m pinch). Recommended finals config: shipping + barrier_margin
-0.34 (regression on Xvfb queued before enabling).
+### 3. Open, ranked by finals risk
 
-**Telemetry-gap ride-out (Sept 12, opt-in, committed):** the stale window
-is 3.37 periods at every rate (0.195 s at 0.058, 0.35 s at 0.104): three
-dropped frames put the car on the coast watchdog (hold steer, zero
-throttle; a 1.0 s gap = collision). `gap_predict_s:=0.6` keeps solving
-on the dead-reckoned pose with a decel ramp: harness with a stall every
-5 s, 72 laps per cell: 3-frame gaps 6 -> 1 (slew) / 19 -> 8 (pole)
-collisions at 0.104, 5-frame 18 -> 3 / 46 -> 18; one dropped frame 0
-everywhere; no-gap reports byte-identical. Not yet driven live (needs a
-stall injector); localization's own post-gap behaviour: replayed on the real collision
-bag (25 injected stalls per run, 6 seeds): spurious relocalization is
-NOT the failure for gaps <= 0.6 s; the failure is that two 0.5 s
-constants coincide (scan dt clamp, MAX_ENC_GAP), so above 0.5 s the
-filter dead-reckons at the stale speed -- 0.9 m of phantom travel for a
-stalled car, 2.25 m error + 9 relocalizations/run for a 1 s
-telemetry-only gap. Opt-in fix (committed): gap_dt 0.15, gap_noise_mult
-3, lost_patience_min 3, scan_dt_max 1.2, enc_gap_max 1.5 -> worst
-post-gap error 0.46 m (widening the cloud works; capping the step
-throws away real motion). `scripts/stall_inject.sh` (docker pause of
-the sim = the organisers' risk shape; ~0.07 s overhead) is ready; the
-four-arm live test (control / stalls with defaults / + gap_predict_s /
-+ both) is the next sim slot after the barrier regression.
+1. **Missed checkpoint on the CDC-TF `fast3_m53` line.** 32 laps, 0 collisions,
+   laps 10.1-10.4 s — but one 20.4 s "lap": two start-line crossings with no
+   `lap_count` increment. The rules stop the lap timer only when every
+   checkpoint is passed, so OFFICIAL was 112.089 s instead of ~102. No other
+   Sept 12 log (40 checked) shows the signature, so it is this line at one
+   checkpoint. **Finals hazard of the first order**: the line generator must
+   respect the checkpoint trigger extents, and `pick_config.py` must report the
+   minimum checkpoint margin and fail loudly. *An agent is in flight on this.*
+2. **The stall test has never been run live.** `scripts/stall_inject.sh` (docker
+   pause of the sim — the organisers' risk shape, ~0.07 s overhead) is ready;
+   the four-arm test is control / stalls with defaults / + `gap_predict_s:=0.6` /
+   + the localization gap args. Harness evidence only so far (section 5).
+3. **The image has not been rebuilt or raced organiser-style since today's
+   config landed.** The last image test was 14 laps / 0 collisions / 70.82 s on
+   the *old* `mc0.60_ay6.5` line and the pre-Sept-12 controller. Runbook steps
+   6-9. A 14-lap sample scatters ~1.5 s; do not read it as a validation.
+4. **Turn-in timing probe: unrun.** `ros2 run pit_crew turnin_probe` /
+   `scripts/turnin_probe.sh` measures pose-stamp-to-yaw-rate delay inside the
+   race loop; the rate comparison (`tools/turnin_fit.py --compare display.csv
+   xvfb.csv`) is the robust output. It was attempted on the display and produced
+   **0 pulses, and that log was lost.** Re-run `VISIBLE=1 ./scripts/turnin_probe.sh`
+   then the Xvfb one. Lowest risk of the four: nothing ships on its result.
 
-**Dead-time law settled (Sept 12):** command-to-feedback fits on six
-logs give pose-stamp-to-rack delay = **period + 0.052 s** (RMS 0.006 s;
-`bridge + period/2` fits at RMS 0.014 with all the error on the 0.058
-point). Cause in the devkit bridge: the command emit is the LAST
-statement of the telemetry callback, so a command answers the next
-tick. (The staircases publish on a 50 Hz timer asynchronous to the tick
-and cannot separate the laws; one Xvfb run measured a whole frame
-faster, a per-start property.) Opt-in, committed: rate term
-`delay_tick` (cmd_dead_time = period + dead_tick_c 0.045) and
-`nd_mode:=period` (committed steps from that delay: nd 2 instead of 3
-across 0.058-0.104). Harness: nd_mode moves the hairpin most-inside
-offset -0.24 -> -0.18..-0.20 m at every frame, |e| p95 -25%, min
-clearance +0.03-0.05 m, lap +0.05-0.09 s. delay_tick alone steps nd
-2->3->4 across the band: never without nd_mode. Display A/B queued
-(disp_ndperiod, disp_nd_bm34).
+### 4. Rejected today (one line each, with the number that killed it)
 
-**Period-range audit (Sept 12, offline):** shipping config is
-collision-free in the harness over 0.052-0.130 s on both plants (lap flat
-within 0.06 s), marginal below 0.052 on the pole plant, degrades hard
-above 0.14 s. Mid-run drift (0.092->0.110 step, 0.058->0.125 ramp, 2-3 s
-sawtooth) costs at most 1 collision / 36 laps. **Three consecutive
-dropped frames (0.40 s) exceed max_predict/stale_pose 0.35 s and put the
-car on the coast watchdog: 35-40 collisions / 36 laps when repeated** --
-one dropped frame is fine. Mechanics: below 0.069 s the apply term is
-inert (index floored at nd+1 knot), below rate_lo the 0.052 edge tune
-applies (not the 0.104 one), above 0.156 everything freezes; the clamp
-is now logged. Widening rate_lo/rate_hi is not supported by the data;
-opt-in `rate_slew` added, not recommended. With the shipping smoothing
-the command staircase that apply_floor_steps 0 targeted is gone (0.0%
-over-slew commands) and that fix now costs: do not ship it. Also the
-harness artefact: --pose-latency equal to --frame lands the pose on the
-tick boundary and fakes collisions (default 0.045 poisons frame 0.045).
+| Knob | Killed by |
+|---|---|
+| `apply_floor_steps:=0.0` + `rate_terms:=apply,thr,delay,predict,enc,pose` | Display 15 laps, **11 collisions**, same hairpin — it fixed the slew (0.078 -> 0.003) which was a symptom. |
+| `lead_mode:=spatial` | Display **11 collisions in 10 laps** (with steer_tau, 10/10). |
+| `steer_tau:=0.04` alone (no barrier) | Display 10 collisions in 30 laps — no better than smoothing alone. |
+| `w_dcmd:=100` alone, no `cmd_tau` | Fastest anywhere (Xvfb 69.393 s) and **10 collisions in 12 display laps**. |
+| `nd_mode:=period` | +0.5..+2.2 s/lap on the tight circuits, **61/432** harness collisions on ICRA 2025 at four corners. |
+| `control_mode:=timer` (fixed 20 Hz solve) | +0.25 s/lap and 4-6 collisions in 33 laps at *every* period. |
+| ILC (`ilc_*`) | Clean 32/0 at 0.092 s, but **7 collisions in 100 laps** — 5 of them in the 20 laps after the host drifted 0.092 -> 0.108 s. A table learned at one period goes stale when the period moves. |
+| CMA-ES "rate-invariant" parameter set (`rateinv`) | Driven 32/0/70.899 s, but the margin claim did not transfer: \|e\| p95 **0.226 vs 0.182** m, min clearance 0.127 vs 0.179 m. |
+| `lon_ax45_b40` (honest ax 4.5 profile) | Display 32 laps, **1 collision**, 70.619 s, median 7.063 vs the candidate's 6.95 clean. |
+| `thr_lead_mode:=min` + `thr_lead_s:=0.45` (`lead45`) | Display 32/0 but **72.869 s** (+0.33 s/lap) for +0.02 m of margin. |
+| `rate_slew` | The period-range data does not support widening the `rate_lo`/`rate_hi` clamp. |
+| `grip_watchdog` | Costs more race time than it saves in every configuration. |
 
-**Closed-loop timing hunt (Sept 12, offline): NOT reproduced.** Per-lap
-most-inside offset at s 9.5-12 is the discriminating metric: Xvfb
--0.21..-0.23 p50 (3% of laps below -0.30), display -0.30..-0.33 (50-83%
-below -0.30), wall at ~-0.35; the smoothing config is the MOST inside
-despite 4.6x less flutter, so the wiggle is not what puts the car there.
-Five candidates ruled out by sign in the harness (opt-in options
-committed in sim_tracker.py): publish latency / one-tick-late latching
-(makes the car late and WIDE and slow), pose age / rate-scaled transport
-lag (wide at both rates), encoder filter (already per-second), stale
-/steering feedback (0.013 m outward), dead-time mis-compensation
-(slightly more inside). Live cmd->feedback fit: cmd_dead_time = period +
-0.045 s (0.103 at 0.058, 0.142 at 0.100). The harness's inside offset is
-a steep non-monotone function of total loop delay near the operating
-point; live sits on the steep part. Pragmatic lever: barrier_margin 0.24
--> 0.34 moves the hairpin offset outward at both rates (+0.056 m at
-0.058) for +0.07 s/lap. **DRIVEN ON THE DISPLAY (0.059 s): 32 laps, 0
-collisions, OFFICIAL 69.44 s -- the first clean real-display run and the
-best official race time so far.** Hairpin most-inside per lap p50
--0.287, worst -0.313 (wall ~-0.35; 3 of 32 laps below -0.30): thin, so
-the combination with nd_mode:=period (harness +0.05 m) is queued
-(disp_nd_bm34), then regression of barrier_margin 0.34 on the tight
-circuits (a 0.34 m margin in a 1.75 m corridor may not be free).
-**Second clean display run: barrier 0.34 + steer_tau 0.04: 32 laps, 0
-collisions, OFFICIAL 69.36 s** (best race of the project). Finals
-candidate = shipping + barrier_margin 0.34 + steer_tau 0.04 (steer_tau
-also recovers the smoothing's lap cost on tight circuits: CDC-TF 112.0
-vs 116.7). nd_mode display runs dropped (rejected on the tight circuits
-offline). Regression of the barrier on the three circuits + Porto 100
-running; steer_tau + barrier on the circuits to follow. **Barrier
-regression: CDC-TF 117.3, ICRA 2025 149.8, ICRA 2026 150.4 (all 32/0,
-unchanged), Porto 100 laps / 0 / 71.50 s (Xvfb). ENABLED in the
-entrypoint's CTRL_ARGS (Sept 12).**
+### 5. Opt-in, validated, unshipped
 
-**Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
-committed; display A/B queued):** `steer_tau` (first-order rack lag
-after the dead time, exact per-step response, analytic Jacobians),
-`model_cmd_tau`, `lead_mode:=spatial` (publish index as metres ahead:
-lead_m0 0 + lead_k 0.09 * v, floor 0.30 m = the shipping 0.090 s as a
-distance). Harness on the identified pole plant, 4 frames x 36 laps:
-smoothing + steer_tau 0.04 + spatial: min clearance 0.168-0.190 (base
-0.079-0.135, smoothing alone 0.125-0.200), |e| p50 0.047-0.071, lap
-7.30-7.35, 0 collisions; the clearance spread across 0.058-0.104 s drops
-0.056 -> 0.022 m (the rate-invariance term). steer_tau must stay at 0.04:
-on a pure-slew plant a modelled lag of 0.06+ is a mismatch that collides.
-Caveat: the hairpin inside excursion does NOT improve in the harness
-(-0.20 -> -0.27 m most-inside). Do not re-derive: ForzaETH's L1 numbers
-(0.6 v - 0.18, min 0.8 m) are a pure-pursuit lookahead, not a plan knot:
-198/210 collisions as a publish lead. **Driven on the display (0.058):
-steer_tau 0.04 + spatial: 10 collisions / 10 laps; spatial alone:
-11 / 10; steer_tau 0.04 alone: 10 / 30 (median 6.95, same as smoothing
-alone's 10 / 27). REJECTED: the spatial lead makes it worse, the rack
-lag changes nothing at the hairpin.** The harness's hairpin caveat was
-the right signal.
+Each is one `-e PIT_CREW_CONTROLLER_ARGS` / `PIT_CREW_LOCALIZATION_ARGS` away
+(they are appended last and win; `tests/test_entrypoint_args.py` asserts it).
 
-**Why the steering wiggles (research, Sept 12, full report in
-docs/research/steering_smoothness_peer_stacks.md):** every peer stack
-(ForzaETH, TUM, KAIST, Autoware) runs its tracker at a FIXED rate over a
-filtered state estimate and bounds the published steering against the
-previous command; none re-optimises per raw localization update. Ours
-puts a high-gain optimiser (w_lat 24 vs w_rate 0.6: a 0.05 m error, the
-MCL noise floor, is worth 10x a 0.10 rad steering step) directly on
-per-scan MCL output with no plan-to-plan coupling of the published
-command, feeding a per-tick latched rack with 0.135 s dead time -- the
-textbook rate-limit + dead-time limit cycle, whose amplitude grows with
-sensor rate. Ranked remedies (being implemented opt-in): plan-to-plan
-consistency term / clamp on the published command; deadband at the
-noise floor (0.035 m); spatial (distance) publish lead + first-order
-rack lag in the actuator model; command LPF with the same tau in the
-model. Not recommended: move blocking, raising w_rate alone.
+| Knob | Flag | Evidence |
+|---|---|---|
+| Telemetry-gap ride-out (controller) | `-p gap_predict_s:=0.6` | Harness, stall every 5 s, 72 laps/cell: 3-frame gaps 6 -> 1 (slew) / 19 -> 8 (pole); 5-frame 18 -> 3 / 46 -> 18. No-gap reports byte-identical. **Never driven live.** |
+| Telemetry-gap handling (filter) | `-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5` | Two 0.5 s constants coincide by default, so above a 0.5 s gap the filter dead-reckons at the stale speed: 0.9 m of phantom travel for a stalled car, 2.25 m error + 9 relocalizations for a 1 s gap. Fixed: worst post-gap error **0.46 m**. |
+| Teleport detector | `-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0 -p teleport_hold_n:=7 -p teleport_reseed:=false` | On the real collision bag: **9/9 resets detected within one frame, 0 false positives** for any threshold 0.20-0.525 (clean max 0.194). IMU branch unusable (1/9). Peak post-reset error 0.65 -> 0.30-0.38 m; reseed helped on 0/9 and costs 0.06 m. |
+| Brake-phase throttle lead | `-p thr_brake_lead_s:=0.05` | Removes 93-100 % of the commanded entry overspeed, Porto -0.018 s/lap, \|e\| p95 -24..-38 % (288 harness laps, 0 collisions); display 32/0 69.943 s. But **+0.30 s/lap on CDC-TF, +0.23 on ICRA 2025** — not free off Porto. |
+| Dead-time pin | `-p rate_terms:=apply,thr,predict,enc,pose,delay_tick -p nd_delay_s:=0.180` | Display 32/0 **69.244 s**, the best race measured — but the hairpin margin is not improved (16/32 laps below -0.30 m). |
+| `apply_lead_steps` | `-p apply_lead_steps:=1.2` | Lap-neutral, removes 10-15 % of the hairpin cut; 1.0 removes most of it at +0.12..+0.31 s/lap with pole-plant collisions. Not run live. |
+| Faster localization cap | `-p max_step_mps:=12.0` | Only if Gate B says the finals profile asks for more than 9 m/s. Zero lap cost at any cap >= 6.4 in the harness. |
+| SRL 2025 ICRA fast line | `LINE_ARGS='... --min-halfwidth-ladder 0.50'` | `fast2_m50` drove 32/0/140.422 s against the ladder's 0.53 rung; 0.53 buys 0.041 m of clearance for 0.40 s/lap. |
 
-**Rules check (Sept 12, from the 2026 rules page and the organisers'
-repo):** the Porto qualification is a pass/fail GATE only ("Passing the
-qualification session entitles a team for the final race"); ranking is
-"total race time" on ONE unseen competition track released later, penalty
-10 s x collisions, 11+ collisions = DQ, warm-up lap not counted, sim lap
-timer, tie-break on best lap. Past editions confirm no carry-over (ICRA
-2025: the qualification winner finished 9th). The organisers race on a
-real X display (window screen-recorded with OBS), graphics Ultra, i9
-14900K / RTX 4090, no container CPU quota, a human clicks Connection.
-Fastest published Porto lap is now 6.46 s (VAUL, ICRA 2026 qualification).
-Consequence: Porto lap time is a proxy; the unseen-track pipeline
-(finals_drill_mesh.sh) and robustness ARE the score.
+### 6. Standing rules learned today
 
-**Rate-invariant mpc3 set from CMA-ES (Sept 12, offline; live test
-queued as `rateinv`):** 239 evaluations over 15 params, objective summed
-over frames 0.088/0.097/0.104 with rate_adaptive on. Verified on unseen
-seeds (3 x 20 laps per frame): median 7.21-7.23 at every rate (defaults
-7.11-7.21), |e| p50 0.037 (defaults 0.067-0.093), p95 0.12 (0.18-0.21), min
-clearance 0.17-0.20 m (0.00-0.125), 0 collisions (defaults 1 at 0.088).
-Same speed, half the error, twice the margin. Set: w_lat 18, w_yaw 6,
-w_rate 1.8, w_steer 0.33, w_barrier 900, barrier_margin 0.22, e_free 0.105,
-k_e 3.7, apply_ahead_s 0.082, delay_s 0.145, thr_lead_s 0.24, ay_budget
-7.7, horizon 20, step_dt 0.045. delay_s 0.145 (below the measured 0.18) is
-the most likely harness artefact; w_rate, w_barrier and step_dt sit on
-their search bounds. The harness itself is ~10x optimistic on collisions
-at 0.088 (1 per 57 laps vs 7 per 32 live), so these are margin claims.
-**Driven (rateinv, 0.094 s): 32 laps, 0 collisions, 70.90 s, but the
-margin claim did NOT transfer**: |e| p95 0.226 vs 0.182 m, min clearance
-0.127 vs 0.179 m, hairpin offset -0.22 vs -0.18 m against defaults +
-rate_adaptive on the same instance class. Not adopted. The harness ranks
-lines and rate terms usefully; it does not predict absolute tracking
-error, so do not tune cost weights on it.
+* **Queue rules.** A scored run needs a quiet host: `run_exp.sh` refuses above
+  load 12, and a 150-lap re-run of a 0/100 config took **9 collisions** while
+  three build agents computed. Any run taken under load is contaminated — re-run
+  it. Never run an offline search during a live run.
+* **Every run is evidence only together with its `dt_p50`.** The sensor period
+  is a per-start lottery of the simulator on this host (0.088-0.106 s on Xvfb,
+  flat within a run, independent of graphics quality); `RATE_MAX_DT`/`RATE_MIN_DT`
+  on `run_exp.sh`/`run_stanley.sh` restart the sim until the period is in the
+  wanted band. Read it with `tools/lap_report.py`. A run at one period says
+  nothing about another.
+* **Log column semantics.** `x,y` are the IPS **truth**; `px,py` are the
+  **estimate** (a swap produced a wrong root cause today). `steering` is the
+  actuator **feedback**, `cmd` is the published command. The logger writes a
+  **one-frame-stale pose**, so de-stale before comparing rates; its speed column
+  is an alpha-0.30 filter and lags differently at each period. On a collision the
+  logger writes one already-teleported row *before* `collision_count`
+  increments, so the pre-impact sample is **row c-2**. `tools/racelog.py` is the
+  one loader that gets all of this right. Score only with
+  `tools/score_race.py`, quoting the OFFICIAL line.
+* **Harness limits.** It **cannot reproduce the display collisions** (0 at 0.058 s
+  with shipping params) — the display is the gate, never tune against the harness
+  for that. It ranks lines and rate terms usefully but does not predict absolute
+  tracking error (~10x optimistic on collisions at 0.088), so do not tune cost
+  weights on it. Its **seeds do nothing without pose/yaw noise**. And
+  `--pose-latency` equal to `--frame` lands the pose on the tick boundary and
+  **fakes collisions** (the 0.045 default poisons frame 0.045).
+* **Graphics quality does not set the sensor rate** on this host; the display
+  does (Ultra on the real display is still 0.058 s). Validate at Ultra anyway —
+  quality moves the Xvfb period by ~4 %.
+* **Rules of the race** (verified from the 2026 rules page and the organisers'
+  repo): Porto qualification is a pass/fail **gate** only, no carry-over; ranking
+  is total race time on one unseen track, +10 s per collision, **11+ = DQ**,
+  warm-up lap not counted, sim lap timer, tie-break on best lap. Organisers run
+  Ultra, GUI, windowed on a real display (OBS recording), i9 14900K / RTX 4090,
+  a human clicks Connection, and they start the image with no environment — so
+  **anything that must ship, ships as an uncommented line in the script.**
 
-**Curvature-rate-limited lines (Sept 12, offline, not driven):**
-`optimize_raceline.py --dkappa-max` (opt-in, uncommitted until
-check_pipeline runs on an idle host) halves the hairpin-entry curvature
-ramp (0.5 m-window d(kappa)/ds 1.155 -> 0.60-1.00) at identical clearance
-0.309, kappa max 0.83 and ideal lap 7.01; candidates
-data/racelines/porto_mesh_cr_dk{1.0,0.8,0.6}.csv. In the harness they change
-nothing (0/60 collisions everywhere, lap p50 within 0.01 s); under the
-stress that reproduces the live rate failure (frame 0.088, pose-lon-bias
-0.15) collisions go 80 -> 83/75/69 per 120 laps, a ~1.5 sigma trend. The
-rate failure is not a line-shape problem. Driven: **cr_dk0.8 +
-rate_adaptive at a 0.095 s instance -> 32 laps, 0 collisions, median 7.048,
-OFFICIAL 70.75 s**, then **100 laps, 0 collisions, median 7.053, OFFICIAL
-70.52 s** on a 0.091-0.098 s instance (the shipping line with rate_adaptive
-was 2/32 at 0.092, defaults 7/32). The rate failure is closed on the fast
-instances by rate_adaptive + cr_dk0.8. PROMOTED in the entrypoint (mpc3
-default line cr_dk0.8, `-p rate_adaptive:=true` in CTRL_ARGS), pending the
-0.104 s validation (`cr_dk08_ra_slow`, queued) and check_pipeline for the
-`--dkappa-max` tool change before the commit.
+### How we got here (Sept 12)
 
-**Rejected offline (Sept 12): `control_mode:=timer`** (opt-in, committed,
-default byte-identical). A fixed 20 Hz solve halves the rate spread of
-lateral error (0.020 -> 0.011 m p50) but is 0.25 s/lap slower and collides
-at every sensor period (4-6 in 33 laps vs 0) in the realistic-plant
-harness; emulating its staleness in per-pose mode (`--pose-latency` 0.097)
-reproduces the loss exactly, so the cost is estimate freshness. Found on the
-way: **the devkit bridge consumes one command per telemetry tick**; a
-publish off the tick grid is dropped (`timer_sync_dead` models this,
-0.136 -> 0.092 m). Per-pose solving is information-optimal on this bridge.
-Not driven live.
+Kept for provenance; each of these is superseded by the sections above.
+
+* **The rate failure.** mpc3 was validated at ~9.6 Hz (logger dt 0.104-0.106) and
+  collided at ~11 Hz (dt 0.088-0.091): 3 collisions in 10 laps with BLAS pinned,
+  7/32 at a 0.090 s instance (`ctl_fast3`), 2/100 at Ultra. Two wrong causes were
+  chased and retracted: a "1.45 m speed lag" (it was the logger's own speed
+  filter; ground truth lags 0.22 m) and a "0.15 m forward pose offset" (logger
+  staleness; the consumed pose is rate-invariant to 0.007 m median). The real
+  term was the fixed `apply_ahead_s` 0.090 s — 0.87 of the period at 0.104, 1.02
+  at 0.088 — which `rate_adaptive` scales. With it plus the `cr_dk0.8` line:
+  32/0/70.748 s, then **100/0/70.515 s**.
+* **Four failed display runs, one cause.** The shipping config at 0.058 s took 10
+  collisions/23 laps, 11/15, 11/20, 10/9 — always the same hairpin entry
+  (-1.6,-6.5), cte -0.34..-0.37 m at 2.5-3.0 m/s, localization innocent (de-staled
+  \|err\| p50 0.037 m). The `apply_floor_steps` fix removed the command-slew
+  saturation and changed nothing. The approach table (display 0.058 vs Xvfb 0.094)
+  showed identical true speed and identical published steering but lateral offset
+  diverging from s 8.5 (-0.08/-0.13/-0.19/-0.24/-0.30 m vs
+  0.00/-0.03/-0.06/-0.12/-0.18) — which looked like a rate-dependent plant.
+* **It was not a plant.** Direct measurement: the rack moves exactly 3.2 x period
+  per tick at 0.058 *and* 0.100 s (a wall-clock slew limiter), dead time
+  0.07-0.10 s at both, actuator-to-yaw-rate gain 0.93-0.95, throttle servo K
+  12-16 with tau 0. The wiggle was a **solver limit cycle**: the first free plan
+  step after the `nd` committed steps has no jerk cost, so a one-step flick at the
+  slew limit (exactly `steer_rate*step_dt` = 0.192 rad) is the cheapest answer to
+  any small error and is never executed before the next solve flicks back. The
+  peer-stack research (`docs/research/steering_smoothness_peer_stacks.md`) says
+  the same: nobody else re-optimises per raw localization update. `w_dcmd` +
+  `cmd_tau` fixed the flutter (display 27 laps, 10 collisions — still the
+  hairpin), and `barrier_margin` 0.34 fixed the hairpin.
+* **Dead-time law.** Pose-stamp-to-rack delay = **period + 0.052 s** (RMS 0.006 s
+  over six logs); the devkit bridge emits the command as the last statement of
+  the telemetry callback, so a command answers the next tick, and a publish off
+  the tick grid is dropped. Per-pose solving is information-optimal on this bridge.
+* **The line is converged.** 76 Porto candidates (w_veh 0.50-0.80 x ay 6.75-7.5 x
+  dkappa 0.5/0.6/0.8), 342 harness laps per finalist, 0 collisions on all 33
+  gate-passing lines; field spans 0.10 s/lap; ay 7.25+ turns back. Driven,
+  `dk06_w063_ay70` 32/0/**69.916 s**. Under the identified actuator `cr_dk0.8`
+  wins on clearance (0.090 m vs 0.025-0.056). The remaining ~0.5 s to the winners
+  is not in the line: of the plan-side gap to 6.46 s, ~90 % is the lateral cap
+  (ay 9.0 alone takes ideal 7.036 -> 6.352) and ~10 % longitudinal.
+* **Lap-time budget** (display log `race_20260912_083832.csv`, 32 laps, median
+  6.944): the car beats its own ideal lap (7.036) by 0.096 s by driving 0.857 m
+  less track (hairpin -0.45 m of path) while losing +0.161 s longitudinally. The
+  drive ceiling is the sim's speed servo saturating (K 15-17, a_max 4.0-5.0,
+  a_min -6.5) at 4.2-4.7 m/s2 against the profile's ax 6.5 — the profile's extra
+  ideal time is time the car never had.
+* **Tight circuits.** The drill's absolute `MESH_RACE_KAPPA_MAX` 1.0 gate rejected
+  every raceline on both 2025 circuits while shipping centerlines that are tighter
+  still (cdctf safe kappa max 2.10, icra2025 1.63). A relative gate plus
+  `--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0` and
+  `--min-halfwidth` gave the first fast lines on which `barrier_margin` 0.34 is
+  feasible (cdctf `fast2_m50` ideal 10.03 / clearance 0.364 / min half-width
+  0.493; icra2025 13.84 / 0.348 / 0.481). Lesson from the failed m45 family (25
+  collisions at one corner): easing a corner's curvature lets the profile spend it
+  all on speed the tracker cannot deliver — **geometry and speed must be capped
+  together**. Porto and ICRA-2026 outputs stayed byte-identical (52 CSVs);
+  `check_pipeline.sh` passed.
+* **The SRL 2025 ICRA DQ.** 4 laps / 14 collisions with cross-track reading 0.03 m.
+  The first diagnosis blamed the encoder and was wrong (the log's columns were read
+  swapped); the cause was the localization estimate saturating at 5.1 m/s on a
+  13.9 m stretch above the cap. Fixed by `max_step_mps:=9.0`; driven 32/0/148.761 s.
+* **Collision-reset recovery audit** (100 live collisions, 21 runs): the reset is
+  the last numbered checkpoint, 0.51 m p50 off the line, backwards on 50 % of
+  resets (up to 4.5 m); \|est-truth\| < 0.15 m after 1.20 s p50, back to plan speed
+  after 0.94 s, +0.5 s p50 beyond the 10 s penalty, **9 % cascade within 3 s**.
+  The old `SpeedEstimator` teleport detector fired on 0 of 97 teleports, so its
+  "stand still and spread" branch and mpc3's `consume_jump` are dead code.
+* **Period-range audit** (7128 harness laps): the candidate is collision-free on
+  all six track/line cells and both plants over 0.045-0.104 s, and through 0.125
+  once pose noise is on; it degrades above 0.125 and collides on four of six cells
+  at 0.150. Mid-run drift (step, ramp, sawtooth): 0 collisions in 432 laps vs 17
+  for the pre-barrier config. **Three consecutive dropped frames (0.40 s) exceed
+  `max_predict`/`stale_pose` 0.35 s** and put the car on the coast watchdog:
+  35-40 collisions / 36 laps when repeated; one dropped frame is fine.
+  Regression attributed: `steer_tau` 0.04 costs Porto clearance at 0.045-0.075
+  (0.250 -> 0.050 m) and doubles \|e\| p95 on the icra2025 safe line at 0.097-0.104
+  (0.138 -> 0.216) for 0.08-0.10 s/lap — live evidence keeps it, and the barrier
+  is the counterweight.
+* **The hairpin cut is the publish lead.** From a zero-error state the solver plans
+  no cut at all (e_min -0.003 m at every entry, unchanged by `w_lat_T`, horizon
+  30/40, `e_free` 0, `yaw_gain` 1.0, `ay_deliver`, `w_barrier` 0); the published
+  angle is read nd + apply steps into a ramping-curvature plan and exceeds the
+  line-matching angle by 0.04-0.33 rad. `apply_ahead` 0 removes it (-0.179 ->
+  -0.006 m) for +0.39 s/lap; `e_free` is refuted on the logs and the understeer map
+  is right to 5 %. The corner-local lever (inside half-width) is the right one.
+* **Superseded shipping lines**, kept so the history below reads correctly:
+  `mc0.63_ay6.75` (100 laps, 0 collisions, 72.16 s) and `mc0.60_ay6.5` (71.63 /
+  72.49 s) were both shipping earlier; `cr_dk0.8` replaces them. w_veh 0.63 at
+  ay 7.0 gave best lap 6.71 s but 4 collisions/32 — ay 6.75 is the limit for this
+  tracker on this line family.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
