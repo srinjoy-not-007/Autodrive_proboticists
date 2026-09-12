@@ -352,6 +352,22 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Dead-time law settled (Sept 12):** command-to-feedback fits on six
+logs give pose-stamp-to-rack delay = **period + 0.052 s** (RMS 0.006 s;
+`bridge + period/2` fits at RMS 0.014 with all the error on the 0.058
+point). Cause in the devkit bridge: the command emit is the LAST
+statement of the telemetry callback, so a command answers the next
+tick. (The staircases publish on a 50 Hz timer asynchronous to the tick
+and cannot separate the laws; one Xvfb run measured a whole frame
+faster, a per-start property.) Opt-in, committed: rate term
+`delay_tick` (cmd_dead_time = period + dead_tick_c 0.045) and
+`nd_mode:=period` (committed steps from that delay: nd 2 instead of 3
+across 0.058-0.104). Harness: nd_mode moves the hairpin most-inside
+offset -0.24 -> -0.18..-0.20 m at every frame, |e| p95 -25%, min
+clearance +0.03-0.05 m, lap +0.05-0.09 s. delay_tick alone steps nd
+2->3->4 across the band: never without nd_mode. Display A/B queued
+(disp_ndperiod, disp_nd_bm34).
+
 **Period-range audit (Sept 12, offline):** shipping config is
 collision-free in the harness over 0.052-0.130 s on both plants (lap flat
 within 0.06 s), marginal below 0.052 on the pole plant, degrades hard
