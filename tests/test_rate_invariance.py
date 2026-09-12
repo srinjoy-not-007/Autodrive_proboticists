@@ -424,3 +424,65 @@ class TestFollowTheGapSteerFilter:
         a1 = vehicle.alpha_for_lag(NOMINAL, P['steer_tau'])
         a2 = vehicle.alpha_for_lag(2 * NOMINAL, P['steer_tau'])
         assert a2 > a1
+
+
+# --------------------------------------------------------------------------
+# the publish index: `apply_ahead_s` must survive a sub-`step_dt` period
+# --------------------------------------------------------------------------
+class TestApplyFloorSteps:
+    """`MPC3.solve` publishes the plan angle at `nd + apply_ahead_s/step_dt`.
+
+    That second term used to be written `max(step_dt, apply_ahead_s)/step_dt`,
+    a floor of exactly one horizon step.  `rate_adaptive` scales
+    `apply_ahead_s` to 0.87 of the measured period, so below a 0.069 s sensor
+    period the floor discarded the adaptation entirely -- and made the index an
+    exact integer, which publishes a raw plan knot instead of an interpolation
+    and lets successive commands step by a whole plan step (3.31 rad/s at a
+    0.058 s period, above the rack's 3.2 rad/s).  Measured in
+    `tools/sim_tracker.py`: 24.9% of the commands through s 12-17 slew past the
+    rack limit at frame 0.058 and 0.0% at every frame >= 0.065; the same
+    signature is in the live 0.058 s log and absent from the 0.094 s one.
+    """
+
+    @staticmethod
+    def _f(cfg, nd):
+        """The shipped expression, read out of `mpc3_core.MPC3.solve`."""
+        return nd + max(float(cfg['apply_floor_steps']),
+                        float(cfg['apply_ahead_s']) / float(cfg['step_dt']))
+
+    def test_the_default_floor_reproduces_the_old_expression(self):
+        from pit_crew.mpc3_core import DEFAULTS
+        dt = DEFAULTS['step_dt']
+        assert DEFAULTS['apply_floor_steps'] == 1.0
+        for apply_s in (0.020, 0.045, 0.060, 0.0904, 0.150):
+            cfg = dict(DEFAULTS, apply_ahead_s=apply_s)
+            assert self._f(cfg, 3) == 3 + max(dt, apply_s) / dt
+
+    def test_the_shipping_tune_is_untouched(self):
+        from pit_crew.mpc3_core import DEFAULTS
+        assert self._f(DEFAULTS, 3) == pytest.approx(4.5)
+
+    def test_the_old_floor_silently_ate_the_adaptation_below_0_069_s(self):
+        from pit_crew.mpc3_core import DEFAULTS, RateAdapter
+        ad = RateAdapter(apply_ahead_s=DEFAULTS['apply_ahead_s'])
+        dt = DEFAULTS['step_dt']
+        for p in PERIODS:                       # 0.088, 0.097, 0.104
+            asked = ad.values(p)['apply_ahead_s']
+            assert asked > dt, 'the floor must not bind at a validated period'
+        asked = ad.values(0.058)['apply_ahead_s']
+        assert asked == pytest.approx(0.0502, abs=1e-3)
+        assert asked < dt                       # ...but it does at 0.058 s
+        old = dict(DEFAULTS, apply_ahead_s=asked, apply_floor_steps=1.0)
+        new = dict(old, apply_floor_steps=0.0)
+        assert self._f(old, 3) == 4.0           # an exact plan knot
+        assert self._f(new, 3) == pytest.approx(3.837, abs=1e-3)
+
+    def test_the_rate_clamp_keeps_the_index_off_nd_with_no_floor(self):
+        """`apply_floor_steps=0` is only safe because `RateControl` refuses to
+        believe a period below 0.5 x nominal, so the adapted lead can never
+        reach zero and publish the already-committed angle."""
+        from pit_crew.mpc3_core import DEFAULTS, RateAdapter
+        ad = RateAdapter(apply_ahead_s=DEFAULTS['apply_ahead_s'])
+        floor_period = 0.5 * RATE_NOMINAL
+        asked = ad.values(floor_period)['apply_ahead_s']
+        assert asked / DEFAULTS['step_dt'] > 0.7

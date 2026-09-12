@@ -43,10 +43,14 @@ def stub_node(**over):
     node = types.SimpleNamespace(
         speed_est=SpeedEstimator(alpha=0.35),
         P={'v_meas_min': 0.2, 'v_start': 0.5, 'stuck_seconds': 1.5,
-           'stuck_distance': 0.20},
+           'stuck_distance': 0.20,
+           # opt-in teleport recovery; 0.0 / 0 is the shipping default
+           'v_pose_gate': 0.0, 'v_pose_min_dt': 0.03, 'reindex_after': 0},
         _enc_seen=False,
         v_plan0=0.0,
         _trail=[],
+        _v_pose=None,
+        _gate_run=0,
     )
     for k, v in over.items():
         setattr(node, k, v)
@@ -296,3 +300,84 @@ class TestServoThrottle:
         t = self._thr()
         u = t.command(6.0, 6.0, 0.0, now=1.0, kappa=0.0)
         assert u == pytest.approx(6.0 / 24.6, abs=0.01)
+
+
+class TestPoseSpeedGate:
+    """`v_pose_gate`: the wheel encoder does not reset with a checkpoint teleport.
+
+    Measured over 100 collisions in data/logs (Sept 12): the encoder-derived
+    speed reads a median 1.79 m/s (p90 3.50, max 6.01) above the IPS ground
+    speed for a median 0.21 s (p90 0.82 s) after the reset, and
+    `SpeedEstimator.jumped` -- which needs one sample above 18 m/s -- fired on
+    0 of them.  The gate bounds the encoder by the distance the localization
+    estimate itself covered, which needs no teleport detection (the published
+    estimate does NOT jump at a reset: its frame-to-frame step is 0.23 m
+    against 0.38 m in normal driving).
+    """
+
+    def test_default_is_off_and_the_encoder_is_believed(self):
+        f = lift('measured_speed')
+        n = stub_node(v_plan0=6.5)
+        roll(n.speed_est, 'L', 0.0, 4.0)
+        roll(n.speed_est, 'R', 0.0, 4.0)
+        n._v_pose = 0.5                      # the car has really stopped
+        v = f['measured_speed'](n)
+        assert v is not None and v > 3.0     # unchanged: gate off by default
+        assert n._gate_run == 0
+
+    def test_an_over_reading_encoder_is_bounded_by_the_pose(self):
+        f = lift('measured_speed')
+        n = stub_node(v_plan0=6.5)
+        n.P = dict(n.P, v_pose_gate=1.5)
+        roll(n.speed_est, 'L', 0.0, 4.0)
+        roll(n.speed_est, 'R', 0.0, 4.0)
+        assert n.speed_est.speed > 3.0
+        n._v_pose = 0.5
+        assert f['measured_speed'](n) == pytest.approx(0.5)
+        assert n._gate_run == 1
+
+    def test_it_does_not_bind_in_normal_driving(self):
+        f = lift('measured_speed')
+        n = stub_node(v_plan0=6.5)
+        n.P = dict(n.P, v_pose_gate=1.5)
+        roll(n.speed_est, 'L', 0.0, 4.0)
+        roll(n.speed_est, 'R', 0.0, 4.0)
+        n._v_pose = 3.9                      # estimate agrees with the wheels
+        v = f['measured_speed'](n)
+        assert v == pytest.approx(n.speed_est.speed)
+        assert n._gate_run == 0
+
+    def test_the_gate_never_raises_the_speed(self):
+        """One-sided by construction: a pose that reads FASTER than the wheels
+        must not be used to speed the plan up."""
+        f = lift('measured_speed')
+        n = stub_node(v_plan0=6.5)
+        n.P = dict(n.P, v_pose_gate=1.5)
+        roll(n.speed_est, 'L', 0.0, 2.0)
+        roll(n.speed_est, 'R', 0.0, 2.0)
+        n._v_pose = 9.0
+        assert f['measured_speed'](n) == pytest.approx(n.speed_est.speed)
+
+    def test_no_pose_speed_yet_leaves_the_encoder_alone(self):
+        f = lift('measured_speed')
+        n = stub_node(v_plan0=6.5)
+        n.P = dict(n.P, v_pose_gate=1.5)
+        roll(n.speed_est, 'L', 0.0, 4.0)
+        roll(n.speed_est, 'R', 0.0, 4.0)
+        n._v_pose = None
+        assert f['measured_speed'](n) > 3.0
+
+    def test_reindex_is_wired_to_the_gate_and_off_by_default(self):
+        """`reindex_after` only ever widens the reference search, and only
+        while the gate is binding; a checkpoint reset moves the car up to
+        4.5 m BACKWARDS along the line while `track_back` looks 0.3 m back."""
+        src = open(MPC3_PY).read()
+        tree = ast.parse(src)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                   and n.name == 'MPC3Tracker')
+        step = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                    and n.name == '_control_step')
+        body = ast.unparse(step)
+        assert "reindex_after" in body and "_gate_run" in body
+        assert "('reindex_after', 0)" in src        # off unless asked for
+        assert "('v_pose_gate', 0.0)" in src

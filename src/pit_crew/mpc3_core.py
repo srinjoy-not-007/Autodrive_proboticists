@@ -84,6 +84,25 @@ DEFAULTS = dict(
     steer_rate=vehicle.STEER_RATE,
     delay_s=0.180,            # 0.135 dead time + 0.045 estimation, measured
     apply_ahead_s=0.090,      # which plan point the actuator is handed
+    # Floor, in HORIZON STEPS, under which `apply_ahead_s` is not believed.
+    # The publish index is `nd + apply_ahead_s/step_dt` and this floors the
+    # second term, so at the shipping tune (0.090/0.060 = 1.5 steps) it does
+    # nothing at all and 1.0 is exactly the old `max(self.dt, apply)`.
+    #
+    # It matters only BELOW a 0.069 s sensor period, and there it matters a
+    # lot.  `rate_adaptive` scales `apply_ahead_s` to 0.87 of the measured
+    # period, so at the 0.058 s this host's real display produces it asks for
+    # 0.050 s -- under `step_dt`, where the old floor silently discarded it and
+    # left the whole `apply` term (the only one ever swept against the period)
+    # inert.  Worse, the floor makes the publish index an exact INTEGER, so the
+    # published angle is a raw plan knot rather than an interpolation between
+    # two, and successive publications step by a whole plan step: measured in
+    # `tools/sim_tracker.py` at frame 0.058, 24.9% of the commands through
+    # s 12-17 slew faster than the 3.2 rad/s the rack can follow (0.0% at every
+    # frame >= 0.065), and the same signature is in the live 0.058 s log
+    # (12-28% of samples at s 13-16, 0.0% in the 0.094 s 100-lap run).
+    # Set 0.0 with `rate_adaptive` on; the rate clamp keeps the index off `nd`.
+    apply_floor_steps=1.0,
     # measured lateral model ------------------------------------------------
     yaw_gain=0.956,           # measured yaw rate / (v tan(delta)/L)
     ay_deliver=9.5,           # asked curvature above this/v^2 is not delivered
@@ -1128,7 +1147,8 @@ class MPC3:
         # (|u| <= the slew rate), so that is an angle the actuator can reach and
         # hold for the frame.  Handing it d[nd] -- the angle it is already
         # predicted to hold -- would make the command never change.
-        f = nd + max(self.dt, float(c['apply_ahead_s'])) / self.dt
+        f = nd + max(float(c['apply_floor_steps']),
+                     float(c['apply_ahead_s']) / self.dt)
         k = int(f)
         cmd = d[N] if k >= N else d[k] + (f - k) * (d[k + 1] - d[k])
         cmd = float(np.clip(cmd, -cap, cap))

@@ -121,6 +121,14 @@ class MPC3Tracker(Node):
             ('cmd_dead_time', 0.135),     # measured, structural (devkit bridge)
             ('delay_s', 0.180),           # dead time + estimation lag
             ('apply_ahead_s', 0.090),
+            # Floor, in horizon steps, under which `apply_ahead_s` is not
+            # believed (see `mpc3_core.DEFAULTS`).  1.0 reproduces the old
+            # `max(step_dt, apply_ahead_s)` exactly, so the shipping tune is
+            # untouched; it only binds below a 0.069 s sensor period, where it
+            # was silently discarding the whole `apply` rate term AND pinning
+            # the publish index to an integer plan knot.  Set 0.0 together with
+            # `rate_adaptive`.
+            ('apply_floor_steps', 1.0),
             ('use_steer_feedback', True),
             ('steer_fb_age', 0.0),
             # --- steering authority ------------------------------------------
@@ -152,6 +160,45 @@ class MPC3Tracker(Node):
             ('v_meas_min', 0.2),          # below this the encoder says nothing
             ('v_start', 0.5),             # plan speed before the encoder ever
                                           # reports -- see start_speed()
+            # --- collision teleport recovery (OPT-IN, 0.0 = off) --------------
+            # A checkpoint reset stops the car dead, but the wheel encoder does
+            # NOT reset with it: measured over 100 live teleports in
+            # data/logs (Sept 12), the encoder-derived speed reads a median
+            # 1.79 m/s (p90 3.50, max 6.01) ABOVE the IPS ground speed for a
+            # median 0.21 s (p90 0.82 s).  `SpeedEstimator.jumped`, which is
+            # what `measured_speed()` waits for, needs a single sample above
+            # 18 m/s and fired on 0 of those 100 teleports, so none of the
+            # teleport handling below it ever ran.
+            #
+            # The consequence is not cosmetic.  `v0` sets the steering cap,
+            # `atan(L * ay_cap / v^2)`: at a phantom 4 m/s with the car really
+            # doing 1 m/s the cap is ~0.18 rad instead of the 0.52 rad of full
+            # lock, exactly while the tracker has ~0.5 m of lateral error to
+            # remove (measured reset offset from the racing line: p50 0.513 m,
+            # p90 0.599 m).  It also stretches the horizon's arc steps by the
+            # same factor -- the standing-start failure `start_speed()` already
+            # documents, arriving by a different door.
+            #
+            # The fix needs no teleport DETECTION, which is just as well: the
+            # published estimate does not jump at a teleport (its frame-to-
+            # frame step is SMALLER than in normal driving, 0.23 m against
+            # 0.38 m), so there is nothing to trigger on.  Instead bound the
+            # encoder by an independent measurement of the same quantity, the
+            # distance the localization estimate itself covered.  `v_pose_gate`
+            # is how much faster than that the encoder may claim to be before
+            # it is disbelieved; on 80 500 normal live samples a gate of
+            # 1.5 m/s binds on 1.2% of them and 2.0 m/s on 0.6%.
+            ('v_pose_gate', 0.0),         # m/s; 0 = off (shipping default)
+            ('v_pose_min_dt', 0.03),      # s; ignore pose pairs closer than this
+            # When the gate binds for `reindex_after` consecutive poses, also
+            # drop the windowed reference search back to a global one.  The
+            # window only looks `track_back` points (0.3 m) behind, and a
+            # checkpoint reset moves the car up to 4.5 m BACKWARDS along the
+            # line (measured: 50% of resets go backwards, p05 -3.39 m): the
+            # index then stays ahead of the car.  Measured on the same 100
+            # teleports, the windowed search disagrees with a global one by
+            # more than 0.20 m on 12 of them, by more than 1 m on one.
+            ('reindex_after', 0),         # poses; 0 = off (shipping default)
             # --- rate adaptivity (OPT-IN, identity at `rate_nominal`) ---------
             # The sensor period is a property of the MACHINE, not of the
             # tracker: 0.104 s on the dev host, 0.088 s in the submission
@@ -163,6 +210,15 @@ class MPC3Tracker(Node):
             ('rate_window', 20),          # poses in the robust median
             ('rate_min_change', 0.002),   # s; below this, do not re-point
             ('rate_terms', ','.join(RATE_TERMS)),
+            # Trust band on the MEASURED period, as a ratio of `rate_nominal`.
+            # 0.5-1.5 x 0.104 s is [0.052, 0.156]; outside it `RateControl`
+            # falls back to the validated tune rather than extrapolating.  The
+            # brief for the finals is that the organisers' machine may sit
+            # anywhere in 0.05-0.11 s, and 0.050 s is BELOW that floor -- it
+            # would silently race the 0.104 s tune at 20 Hz.  Exposed so the
+            # floor can be moved from the launch line without a rebuild.
+            ('rate_lo', 0.5),
+            ('rate_hi', 1.5),
             # --- iterative learning control (OPT-IN) --------------------------
             ('ilc_enable', False),
             ('ilc_bin_m', 0.25),
@@ -270,6 +326,7 @@ class MPC3Tracker(Node):
             thr_lead_s=v['thr_lead_s'], thr_lead_mode=v['thr_lead_mode'],
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
+            apply_floor_steps=v['apply_floor_steps'],
             steer_rate=v['steer_rate_limit'])
         self.act = Actuator(dead_time=float(v['cmd_dead_time']),
                             rate=float(v['steer_rate_limit']))
@@ -289,6 +346,7 @@ class MPC3Tracker(Node):
             nominal=float(v['rate_nominal']), window=int(v['rate_window']),
             terms=tuple(str(v['rate_terms']).split(',')),
             min_change=float(v['rate_min_change']),
+            rate_lo=float(v['rate_lo']), rate_hi=float(v['rate_hi']),
             cmd_dead_time=float(v['cmd_dead_time']),
             delay_s=float(v['delay_s']),
             apply_ahead_s=float(v['apply_ahead_s']),
@@ -379,6 +437,9 @@ class MPC3Tracker(Node):
         self.steer_fb = None
         self._idx = None
         self._trail = []
+        self._pose_prev = None       # (stamp, x, y) of the last ACCEPTED pose
+        self._v_pose = None          # speed implied by the estimate itself
+        self._gate_run = 0           # consecutive poses with the gate binding
         self._escape_until = None
         self._escape_steer = 0.0
         self._stuck_count = 0
@@ -458,6 +519,14 @@ class MPC3Tracker(Node):
                 ilc.invalidate()        # this lap is not repeatable evidence
             return None
         v = self.speed_est.speed
+        gate = float(self.P['v_pose_gate'])
+        if gate > 0.0 and self._v_pose is not None and v > self._v_pose + gate:
+            # The encoder is claiming more ground speed than the localization
+            # estimate has covered.  Believe the smaller one; see `v_pose_gate`.
+            self._gate_run += 1
+            v = self._v_pose
+        else:
+            self._gate_run = 0
         if v > float(self.P['v_meas_min']):
             self._enc_seen = True
             return v
@@ -500,6 +569,12 @@ class MPC3Tracker(Node):
         # it measure a stream the tracker does not actually control on.
         self.rate_ctl.update(stamp)
         self._pose_ok += 1
+        if float(self.P['v_pose_gate']) > 0.0:
+            pv = self._pose_prev
+            dt = (stamp - pv[0]) if pv is not None else 0.0
+            self._v_pose = (math.hypot(mx - pv[1], my - pv[2]) / dt
+                            if dt > float(self.P['v_pose_min_dt']) else None)
+            self._pose_prev = (stamp, mx, my)
         if self.v_plan0 <= 0.0:
             j = self.path.nearest(mx, my, None, yaw=myaw)
             self.v_plan0 = float(self.path.v_prof[j])
@@ -642,7 +717,11 @@ class MPC3Tracker(Node):
             kappa_of=lambda d: (self.P['yaw_gain'] * math.tan(d)
                                 / vehicle.WHEELBASE))
 
-        i0 = self.path.nearest(x, y, self._idx, int(self.P['track_window']),
+        ra = int(self.P['reindex_after'])
+        last = self._idx
+        if ra > 0 and self._gate_run >= ra:
+            last = None              # search the whole line, not the window
+        i0 = self.path.nearest(x, y, last, int(self.P['track_window']),
                                int(self.P['track_back']), self.P['track_lost_m'],
                                yaw=yaw, yaw_tol=self.P['track_yaw_tol'])
         self._idx = i0
