@@ -86,6 +86,24 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
 0.05 on a tight circuit, never 0.08). Pass = 0 collisions over 100 Xvfb laps
 (Gate C) **and** 0 over 32 real-display laps at ~0.058 s (Gate D).
 
+**Late Sept 12 additions (after the brief was written):**
+- The CDC-TF missed lap was NOT a skipped gate: checkpoint triggers are
+  width x 0.254 x 0.100 m boxes (scene), the car passed every one inside
+  its extent (min margin 0.459 m, same as counted laps), and the sim's
+  own lap_time ran through the crossing -- a sim-side trigger fault, 1 in
+  32, unique among 61 logs. A checkpoint constraint now exists anyway
+  (`--checkpoints`, pick_config reports the margin and exits 2 below
+  0.35 m); fast4_cp == fast3_m53 byte for byte.
+- steer_tau x barrier sweep (7488 harness laps): tau 0.02 keeps 88% of
+  the tight-track gain and 0.03 keeps 95% while Porto's worst clearance
+  goes 0.000 (tau 0.04, bm 0.34) -> 0.075 (0.03, bm 0.40) -> 0.103 (0.02,
+  bm 0.40); tau 0 is dangerous on CDC-TF (26 collisions/144 on the pole
+  plant); barrier 0.40 is free-or-better wherever the cap is >= 0.385
+  (safe lines, fast3_m53) and worse at cap 0.345 (icra2025 fast2_m50).
+  pick_config now takes 0.40 at cap >= 0.385. Display A/B queued: Porto
+  steer_tau 0.02 + 0.40 vs the shipped 0.04 + 0.40 (harness: equal lap,
+  +0.078 m worst clearance).
+
 ### 3. Open, ranked by finals risk
 
 1. **Missed checkpoint on the CDC-TF `fast3_m53` line.** 32 laps, 0 collisions,
