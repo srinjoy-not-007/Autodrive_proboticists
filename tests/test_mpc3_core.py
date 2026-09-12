@@ -994,3 +994,47 @@ class TestCorridorClearance:
         off = corridor_clearance(p, 10, 0.2)
         assert on == pytest.approx(0.6 - 0.5 * vehicle.CAR_WIDTH)
         assert off == pytest.approx(on - 0.2)
+
+
+class TestRateInvariantEstimatorConstants:
+    """`vehicle.alpha_for_lag` / `noise_scale_for_dt`, used by `localization`.
+
+    The localization node cannot be imported on the host (rclpy), so the two
+    formulas live in `vehicle` and are tested here.  The property that makes
+    them safe to ship is that both are the IDENTITY at the period every default
+    was tuned at; what they buy is that the filter's speed lag and its
+    diffusion stop depending on which machine the simulator runs on (measured
+    periods: 0.088 s in the submission image, 0.097 s at the organisers,
+    0.104 s on the dev host).
+    """
+
+    def test_alpha_is_the_identity_at_the_validated_period(self):
+        assert vehicle.alpha_for_lag(vehicle.RATE_NOMINAL,
+                                     vehicle.ENC_TAU) == pytest.approx(0.35, abs=5e-4)
+
+    def test_alpha_holds_the_lag_in_seconds(self):
+        # A first-order per-sample low pass has lag dt*(1-a)/a; that is what is
+        # being held constant, not `a`.
+        for dt in (0.060, 0.088, 0.097, 0.104, 0.140):
+            a = vehicle.alpha_for_lag(dt, vehicle.ENC_TAU)
+            assert 0.0 < a < 1.0
+            assert dt * (1.0 - a) / a == pytest.approx(vehicle.ENC_TAU, rel=1e-9)
+
+    def test_alpha_rises_with_the_period_and_survives_junk(self):
+        assert (vehicle.alpha_for_lag(0.088) < vehicle.alpha_for_lag(0.104)
+                < vehicle.alpha_for_lag(0.140))
+        assert vehicle.alpha_for_lag(0.0) == 1.0      # no dt: no filtering
+        assert vehicle.alpha_for_lag(-1.0) == 1.0
+        assert vehicle.alpha_for_lag(0.1, 0.0) == 1.0
+
+    def test_noise_scale_fixes_diffusion_per_unit_time(self):
+        assert vehicle.noise_scale_for_dt(vehicle.RATE_NOMINAL) == pytest.approx(1.0)
+        # 0.18 m per update at 0.088 s is 9% more diffusive per second than at
+        # 0.104 s; scaling by sqrt(dt) removes exactly that.
+        for dt in (0.060, 0.088, 0.104, 0.140):
+            sigma = 0.18 * vehicle.noise_scale_for_dt(dt)
+            assert sigma / math.sqrt(dt) == pytest.approx(
+                0.18 / math.sqrt(vehicle.RATE_NOMINAL), rel=1e-9)
+        assert vehicle.noise_scale_for_dt(0.088) < 1.0 < vehicle.noise_scale_for_dt(0.120)
+        assert vehicle.noise_scale_for_dt(0.0) == 1.0
+        assert vehicle.noise_scale_for_dt(0.1, 0.0) == 1.0

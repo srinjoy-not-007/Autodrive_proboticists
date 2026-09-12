@@ -107,6 +107,41 @@ def achieved_curvature(delta: float) -> float:
     return understeer_ratio(delta) * math.tan(delta) / WHEELBASE
 
 
+# The sensor period is a property of the MACHINE, not of this stack: measured
+# 0.104 s on the dev host, 0.088 s inside the submission image, 0.097 s by the
+# organisers. Anything tuned PER SAMPLE therefore means something different on
+# each of them, and `SpeedEstimator.alpha` is exactly that -- 0.35 per sample is
+# a 0.193 s lag at 0.104 s and a 0.163 s lag at 0.088 s. The speed that lag
+# distorts is what `localization.predict` dead-reckons with, so the filter's
+# steady-state along-track error becomes rate dependent for no physical reason.
+# Fix the lag in SECONDS and derive alpha from the period instead.
+RATE_NOMINAL = 0.104        # s, the sensor period every default was tuned at
+ENC_TAU = 0.193             # s, == alpha 0.35 at RATE_NOMINAL
+
+
+def alpha_for_lag(dt: float, tau: float = ENC_TAU) -> float:
+    """Per-sample low-pass factor giving a fixed first-order lag `tau`.
+
+    Identity by construction at the period the constant came from:
+    `alpha_for_lag(0.104, 0.193) == 0.35` to three decimals.
+    """
+    if not (dt > 0.0 and tau > 0.0):
+        return 1.0
+    return float(dt / (tau + dt))
+
+
+def noise_scale_for_dt(dt: float, nominal: float = RATE_NOMINAL) -> float:
+    """Scale a PER-UPDATE random walk so its diffusion per unit TIME is fixed.
+
+    0.18 m injected every update is 0.558 m/sqrt(s) at 0.104 s and 0.607 at
+    0.088 s: the same filter is 9% more diffusive on a faster host, which moves
+    the posterior's weight between prior and scan. Identity at `nominal`.
+    """
+    if not (dt > 0.0 and nominal > 0.0):
+        return 1.0
+    return float(math.sqrt(dt / nominal))
+
+
 class SpeedEstimator:
     """Vehicle speed from wheel encoder angles.
 

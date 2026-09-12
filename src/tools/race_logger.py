@@ -32,12 +32,13 @@ class RaceLogger(Node):
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',
                            'collision_event', 'px', 'py', 'pyaw', 'cte',
-                           'last_lap_time', 'best_lap_time'])
+                           'last_lap_time', 'best_lap_time', 'pstamp'])
         self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0,
                       'throttle': 0.0, 'lap_count': 0, 'lap_time': 0.0,
                       'last_lap_time': 0.0, 'best_lap_time': 0.0,
                       'collision_count': 0, 'px': float('nan'),
-                      'py': float('nan'), 'pyaw': float('nan'), 'cte': float('nan')}
+                      'py': float('nan'), 'pyaw': float('nan'),
+                      'pstamp': float('nan'), 'cte': float('nan')}
         self._enc_last = None
         self._col_last = None
 
@@ -96,6 +97,17 @@ class RaceLogger(Node):
         q = msg.pose.orientation
         self.state['px'] = round(msg.pose.position.x, 4)
         self.state['py'] = round(msg.pose.position.y, 4)
+        # WHEN that pose was true, not when it was written. Each row carries the
+        # LAST RECEIVED pose, i.e. about one sensor frame of staleness, so at
+        # 3.9 m/s the logged estimate sits 0.40 m behind the IPS row at a 0.104 s
+        # period and 0.34 m behind at 0.088 s. Without this column that
+        # period-proportional AGE reads as a period-proportional forward BIAS --
+        # it was measured as one (0.15 m at the hairpin) and it is not: de-staled
+        # by one frame the two rates agree to 0.007 m (medians +0.100 / +0.093,
+        # p95 0.201 / 0.197). `t - pstamp` is the age; compare the estimate with
+        # the IPS trajectory interpolated at `pstamp`, never at `t`.
+        self.state['pstamp'] = round(
+            msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9, 4)
         self.state['pyaw'] = round(math.atan2(2 * (q.w * q.z + q.x * q.y),
                                               1 - 2 * (q.y * q.y + q.z * q.z)), 4)
 
@@ -112,7 +124,8 @@ class RaceLogger(Node):
                            f"{s['throttle']:.3f}", s['lap_count'],
                            f"{s['lap_time']:.2f}", s['collision_count'],
                            collision_event, s['px'], s['py'], s['pyaw'], s['cte'],
-                           f"{s['last_lap_time']:.3f}", f"{s['best_lap_time']:.3f}"])
+                           f"{s['last_lap_time']:.3f}",
+                           f"{s['best_lap_time']:.3f}", s['pstamp']])
 
     def destroy_node(self):
         self.f.flush()

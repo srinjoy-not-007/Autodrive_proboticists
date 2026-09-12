@@ -46,13 +46,22 @@ class ParticleFilter(Node):
             ('n_beams', 60),
             ('sigma_hit', 0.06),          # m, likelihood field width
             ('beam_temp', 8.0),           # damping on summed beam log-likelihood
-            ('motion_noise_xy', 0.18),   # m per update
+            ('motion_noise_xy', 0.18),   # m per update AT `rate_nominal`
             ('motion_noise_theta', 0.02), # rad per update
             ('init_x', 0.0),
             ('init_y', 0.0),
             ('init_spread', 0.6),
             ('lost_threshold', 0.22),     # normalized score below = lost
             ('lost_patience', 5),         # consecutive bad scans before reinit
+            # Per-SAMPLE and per-UPDATE constants mean different things at
+            # different sensor rates (0.104 s dev host, 0.088 s in the
+            # image, 0.097 s at the organisers). Both of these are scaled
+            # by the measured scan period so the filter's lag and its
+            # diffusion are fixed in SECONDS; identity at `rate_nominal`,
+            # which is the period every default here was tuned at. Set
+            # `enc_tau` or `rate_nominal` to 0 to get the old behaviour.
+            ('rate_nominal', vehicle.RATE_NOMINAL),
+            ('enc_tau', vehicle.ENC_TAU),   # s; == alpha 0.35 at 0.104 s
             # Velocity input from the calibrated throttle curve (1/0.040).
             # On slow, small Porto a plain random walk is slightly better
             # (0.093 m vs 0.136 m median) and disabling this was tuned to that
@@ -71,6 +80,7 @@ class ParticleFilter(Node):
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
          self.init_spread, self.lost_thresh, self.lost_patience,
+         self.rate_nominal, self.enc_tau,
          self.throttle_to_mps, self.lidar_offset, self.keep_prior_w,
          self.publish_on_reloc, self.midpoint_heading) = [x.value for x in p]
         self.speed_cmd = 0.0
@@ -235,6 +245,11 @@ class ParticleFilter(Node):
             return
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
         self.last_t = t
+        # The encoders share the scan's WebSocket frame, so the scan period IS
+        # the encoder sample period: re-point the low pass at it so its lag stays
+        # 0.193 s on a 9.6 Hz host and on an 11.4 Hz one alike.
+        if self.enc_tau > 0.0 and dt > 0.0:
+            self.speed_est.alpha = vehicle.alpha_for_lag(dt, self.enc_tau)
 
         self.predict(dt)
         self.update(scan)
@@ -267,7 +282,12 @@ class ParticleFilter(Node):
         # Encoder speed when available, throttle estimate as fallback
         v = self.speed_est.speed if self.speed_est.speed > 1e-3 else self.speed_cmd
         step = 0.0 if jumped else float(np.clip(v * dt, -0.6, 0.6))
-        noise = self.noise_xy * (4.0 if jumped else 1.0)
+        # Per-update noise is per-TIME noise only at one rate; scale it so the
+        # cloud diffuses at the same m/sqrt(s) whatever the host does.
+        noise = (self.noise_xy
+                 * (vehicle.noise_scale_for_dt(dt, self.rate_nominal)
+                    if self.rate_nominal > 0.0 else 1.0)
+                 * (4.0 if jumped else 1.0))
         if jumped:
             self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
         self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
