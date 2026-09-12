@@ -148,7 +148,7 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # lines 0.385-0.585, the fast2/fast3 lines 0.345), and above it the
     # barrier pushes across the line, so keep 0.34 on fast lines. Enable
     # after the Porto 100-lap Xvfb run at 0.40 (chain6):
-    # case "$LINE" in *_safe.csv|*cr_dk0.8.csv) CTRL_ARGS+=(-p barrier_margin:=0.40) ;; esac
+    case "$LINE" in *_safe.csv|*cr_dk0.8.csv) CTRL_ARGS+=(-p barrier_margin:=0.40) ;; esac  # enabled Sept 12: Porto 100/0 Xvfb 71.91 s, display 32/0 70.13 s
     #
     # REJECTED, do not resurrect: `-p apply_floor_steps:=0.0 -p rate_terms:=...`
     # (the old "fix 1"). It removed the command-slew saturation at 0.058 s

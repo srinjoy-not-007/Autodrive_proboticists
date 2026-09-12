@@ -446,7 +446,10 @@ qualifier and an unknown final that trade is right on the SAFE lines
 (cap 0.385+); on the fast lines (cap 0.345) 0.40 exceeds the feasible
 margin and the harness says it makes them worse, so the candidate rule
 is: barrier 0.40 on Porto (the qualifier) and on safe lines, 0.34 on the
-fast lines. Porto 100-lap Xvfb regression of 0.40 queued (chain6).
+fast lines. Porto 100-lap Xvfb at 0.40: **100/0, 71.91 s** (0.34: 71.50).
+**ENABLED in the entrypoint (Sept 12): barrier 0.40 on *_safe.csv and
+cr_dk0.8, 0.34 otherwise** (ROS takes the last -p, so the case line
+appends after the 0.34 default).
 lead45 (thr_lead_mode
 min, 0.45 s) on the display: 32/0, 72.87 s (median 7.28: +0.33 s/lap),
 hairpin most-inside p50 -0.278 / worst -0.317 (7/32 below -0.30): +0.02 m
