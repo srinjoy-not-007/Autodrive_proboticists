@@ -33,10 +33,18 @@ def _official_lap_times(rows, laps_wanted):
 
     `lap_count` and `last_lap_time` ride the same ~10 Hz bridge cycle but land
     in separate callbacks, so the latch may be recorded one row either side of
-    the counter step; each lap's search window therefore starts one row early
-    and a value is accepted only once it differs from the previous lap's. A
-    dropped or never-published latch yields None so the caller falls back
-    rather than mis-attributing a lap.
+    the counter step. Each lap's search window therefore starts one row early
+    and prefers the first value that differs from the previous lap's, which
+    pins the crossing however the two callbacks interleave.
+
+    Two consecutive laps can legitimately be identical to the logged
+    millisecond -- laps 5 and 6 of data/logs/race_20260912_035727.csv are both
+    7.167 s -- so when nothing changes across a crossing the value standing at
+    the transition is accepted as that lap's time rather than rejected. That is
+    indistinguishable from the sim having dropped a latch, but a dropped latch
+    would leave the same reading either way, so nothing is gained by refusing
+    it. Only a lap with no finite positive reading at all yields None, and the
+    caller then falls back to the other timing sources.
 
     Before the first crossing the simulator publishes `inf` (no lap completed
     yet), and a row can be blank or `nan` -- those are *absent readings*, not a
@@ -71,6 +79,13 @@ def _official_lap_times(rows, laps_wanted):
                     and values[k] != previous):
                 found = values[k]
                 break
+        if found is None:
+            # The latch never moved across this crossing: take the reading
+            # standing at the transition itself (a genuine repeated lap time).
+            for k in range(first_row_of[lap], max(stop, first_row_of[lap] + 1)):
+                if math.isfinite(values[k]) and values[k] > 0.0:
+                    found = values[k]
+                    break
         if found is None:
             return None
         out.append(found)

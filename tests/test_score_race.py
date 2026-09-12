@@ -42,7 +42,8 @@ class Scoring(unittest.TestCase):
             MODULE.score_rows(fixture() + [dict(t=140, lap_count=0, collision_count=0)])
 
 
-def detailed(latch_offset=0, rows_per_lap=4, drop_latch=None, columns=True):
+def detailed(latch_offset=0, rows_per_lap=4, drop_latch=None, columns=True,
+             duplicate_lap=None):
     """A new-format log: several samples per lap, with the simulator's own
     `last_lap_time` latch landing `latch_offset` rows after the `lap_count`
     step (the two ride the same bridge cycle but separate callbacks).
@@ -52,7 +53,13 @@ def detailed(latch_offset=0, rows_per_lap=4, drop_latch=None, columns=True):
     deliberately runs 0.05 s long per lap so the three sources cannot be
     confused with each other.
     """
-    duration = lambda lap: 10.0 + lap / 10.0
+    def duration(lap):
+        # `duplicate_lap` ties a lap to its predecessor: two consecutive laps
+        # with the same time to the millisecond, as really happens.
+        if duplicate_lap is not None and lap >= duplicate_lap:
+            lap -= 1
+        return 10.0 + lap / 10.0
+
     rows, t, latched, best = [], 0.0, 0.0, 0.0
     for lap in range(0, 14):
         if lap:
@@ -111,11 +118,37 @@ class OfficialLapTimes(unittest.TestCase):
         self.assertEqual(MODULE.score_rows(rows)['official_laps'],
                          self.expected())
 
-    def test_a_dropped_latch_falls_back_instead_of_shifting_laps(self):
+    def test_consecutive_identical_lap_times_are_both_counted(self):
+        """Two laps can be identical to the logged millisecond.
+
+        Mirrors data/logs/race_20260912_035727.csv, where laps 5 and 6 are both
+        7.167 s: the latch simply does not move across that crossing, and the
+        standing value is the honest time for both.
+        """
+        result = MODULE.score_rows(detailed(duplicate_lap=6))
+        expected = [round(10.0 + (lap - (1 if lap >= 6 else 0)) / 10.0, 4)
+                    for lap in range(2, 12)]
+        self.assertEqual(expected[3], expected[4])  # the repeat is really there
+        self.assertEqual(result['official_laps'], expected)
+        self.assertAlmostEqual(result['official_race_time'],
+                               sum(expected) + 10.0)
+
+    def test_a_repeat_at_the_first_scored_lap_is_counted(self):
+        """The warm-up seed must not swallow a scored lap that matches it."""
+        result = MODULE.score_rows(detailed(duplicate_lap=2))
+        self.assertEqual(len(result['official_laps']), 10)
+        self.assertEqual(result['official_laps'][0], 10.1)
+
+    def test_a_dropped_latch_reads_as_a_repeat_not_a_shift(self):
+        """A never-published latch leaves the previous reading standing.
+
+        It is indistinguishable from a genuine repeat, so it is counted as one
+        -- but it must never shift the remaining laps by one place.
+        """
         result = MODULE.score_rows(detailed(drop_latch=5))
-        self.assertIsNone(result['official_laps'])
-        self.assertIsNone(result['official_race_time'])
-        self.assertEqual(len(result['sim_laps']), 10)
+        expected = self.expected()
+        expected[3] = expected[2]  # lap 5's reading never arrived
+        self.assertEqual(result['official_laps'], expected)
 
     def test_old_logs_without_the_column_still_score(self):
         for rows in (detailed(columns=False), fixture()):
@@ -174,6 +207,24 @@ class RealLogs(unittest.TestCase):
         self.assertIsNone(result['official_laps'])
         self.assertEqual(len(result['laps']), 10)
         self.assertEqual(len(result['sim_laps']), 10)
+
+    def _score_file(self, name):
+        import csv
+        path = Path(__file__).resolve().parents[1] / 'data' / 'logs' / name
+        if not path.exists():
+            self.skipTest(f'{name} not present')
+        with open(path) as stream:
+            return MODULE.score_rows(list(csv.DictReader(stream)))
+
+    def test_log_with_two_identical_laps_scores_officially(self):
+        """data/logs/race_20260912_035727.csv: laps 5 and 6 are both 7.167 s."""
+        result = self._score_file('race_20260912_035727.csv')
+        self.assertEqual(result['official_laps'],
+                         [7.098, 7.147, 7.008, 7.167, 7.167,
+                          7.218, 7.083, 7.252, 7.098, 7.052])
+        self.assertAlmostEqual(result['official_race_time'], 71.290, places=3)
+        for official, sampled in zip(result['official_laps'], result['laps']):
+            self.assertAlmostEqual(official, sampled, delta=0.15)
 
     def test_new_format_log_on_disk_scores_officially(self):
         import csv
