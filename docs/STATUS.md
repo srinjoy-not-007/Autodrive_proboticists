@@ -1,6 +1,14 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 13: image as shipped 70.8 s, 100 laps clean twice)
+## NEXT SESSION — START HERE (September 13: shipping line w_veh 0.63 / ay 6.75, 100 laps clean)
+
+**Shipping: mpc3 defaults on `porto_mesh_mc0.63_ay6.75.csv` (0.309 m mesh
+clearance, ideal 7.02 s), mesh map, single-threaded BLAS: 100 laps, 0
+collisions, 72.16 s (sim timer 71.70), median 7.19, best 6.94.** Chosen
+over `mc0.60_ay6.5` (71.63 / 72.49 s clean centuries, 0.292 m) as the equal
+with more room. Image race with the new line pending.
+
+## September 13: image as shipped 70.8 s, 100 laps clean twice
 
 **Shipping: mpc3 defaults on `porto_mesh_mc0.60_ay6.5.csv`, mesh map,
 single-threaded BLAS. 100 laps clean at 71.63 s and again at 72.49 s
