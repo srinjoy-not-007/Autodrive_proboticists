@@ -358,6 +358,28 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Longitudinal plant identified (Sept 12, display + Xvfb logs):** the
+4.2-4.7 m/s2 drive ceiling is the sim's speed servo saturating (fit:
+K 15-17, a_max 4.0-5.0, a_min -6.5; ggv.csv's ax_max = 5.0 - 0.273 v),
+not u_max (peak throttle 0.28 of 0.60) and not the feedforward (setpoint
+tracks the plan speed to p50 -0.006 m/s): the profile's ax 6.5 is
+unreachable by ~2 m/s2 and servo_k_p / head_max cannot help (measured
+saturated; it only adds overspeed). Braking is the opposite, a command
+deficit: the plant delivers -4.4..-4.6 when asked but mpc3 hands the
+throttle servo `v_ceiling` (the brake-feasible ceiling), which sits
+ABOVE the profile on the hairpin approach, so the +0.2..+0.4 m/s entry
+overspeed is COMMANDED (setpoint - plan +0.05..+0.12 through s 6.5-9.5,
+achieved -1.7 vs planned -3 m/s2) and the inside offset grows with it.
+Honest-profile candidates (identical geometry): lon_ax45_b40 (ax 4.5,
+ideal 7.275) in the harness is lap-neutral to FASTER (7.47 vs 7.65 on
+the pole plant) with |e| p95 -32..-45% and +0.04 m min clearance --
+the lost ideal time was time the car never had; it does not remove the
+commanded overspeed. The lever that does: `thr_lead_mode:=min` +
+`thr_lead_s 0.45` (brake-only lead): overspeed -0.44..-0.65 m/s, |e| p95
+halved, clearance x2-5, for +0.14..+0.32 s/lap (0.30 is non-monotonic
+and collided: never). Next display slots: lon_ax45 vs control, then
+lead45.
+
 **Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
 the ay_limit steering cap is identical at both rates to 1.6% (the
 encoder filter is already rate-invariant; the LOGGER's speed column
