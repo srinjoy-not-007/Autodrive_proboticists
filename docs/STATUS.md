@@ -414,8 +414,12 @@ delay_s pinned at 0.180 while pose-to-rack is period + 0.045 (0.103 at
 actuator dead time; harness: rescues the clearance collapse delay_tick
 alone causes at 0.058, flattens the pole-plant spread by a third, not a
 full fix (the harness baseline spread is under half the live one).
-One display slot: disp_ndpin (delay_tick + nd_delay_s 0.180) vs
-delay_tick alone.
+Display: disp_ndpin (delay_tick + nd_delay_s 0.180) **32 laps, 0
+collisions, OFFICIAL 69.24 s** (best race so far) -- but the hairpin
+margin is NOT improved: most-inside p50 -0.300 / worst -0.333 (16/32
+laps below -0.30) vs bm34+steer_tau -0.297/-0.338 and bm34 alone
+-0.287/-0.313. Clean runs with a thin margin, all three; steer_tau costs
+~0.01 m of it. The barrier 0.40 arm targets exactly this margin.
 
 **Lap-time budget on the finals candidate (Sept 12, display log
 083832, 32 laps, median 6.944):** the car beats its own ideal lap
