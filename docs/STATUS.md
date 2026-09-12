@@ -49,6 +49,17 @@ slower), i.e. the same effective rate as the clean centuries: mpc3 at Ultra
 78.40 s. The organisers' RTX 4090 at Ultra measured 0.097 s, between the
 clean (0.104) and colliding (0.088-0.091) rates, so rate invariance stays
 mandatory; until then, validate at Ultra (100-lap mpc3 Ultra run queued).
+Rate mechanism found offline: `apply_ahead_s` (the plan time at which the
+published angle is read) was a constant 0.090 s = 0.87 of the 0.104 s
+period it was validated at; scaling it with the measured period (new
+`rate_adaptive`, identity at 0.104) reproduces the 0.104 -> 0.088 lateral
+error rise (p50 0.075 -> 0.093 offline, 0.068 -> 0.093 live) and removes
+it. Committed steps (nd 3) do not change over 0.088-0.104. ILC implemented
+(steering feedforward + speed-ceiling table over 0.25 m bins, opt-in):
+converges by lap 8-10 to p50 0.03 but costs 0.6-0.8 s/lap offline. The
+harness still does not reproduce the live speed lag (0.5 vs 1.45 m), so
+the brake-only lead is unvalidated. Live A/B of rate_adaptive at Low
+quality (11 Hz) queued.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
