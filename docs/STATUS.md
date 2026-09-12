@@ -456,7 +456,12 @@ corner's curvature lets the profile spend it all on speed (2.03 vs
 and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
 (52 CSVs). check_pipeline PASSED and the tools flags + lines are COMMITTED (Sept
 12); live: fast2_m50 on both circuits with the finals candidate config
-(chain5).
+(chain5). **CDC-TF fast2_m50: 32 laps, 2 collisions (laps 13, 30), OFFICIAL
+101.9 s (clean first ten)** -- both at s 39.18, offset -0.51 m, TRUE
+speed 1.1 m/s with the encoder reading 2.1: the car nearly stops at
+that corner and slides half a metre off the line (wheel slip at low
+speed, a stuck-escape, or a spin: to be attributed). Same race time as
+fast_uni (101.9, 1 collision).
 
 **Cross-track config matrix (Sept 12, harness, 432 laps per config on
 the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
