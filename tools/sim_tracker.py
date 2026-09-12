@@ -408,7 +408,13 @@ class MPC3Sim:
                       control_mode='per_pose', control_hz=20.0,
                       timer_apply_ahead_s=0.0, timer_sync_dead=1,
                       # --- teleport recovery (opt-in; see mpc3.py) ---------
-                      v_pose_gate=0.0, v_pose_min_dt=0.03, reindex_after=0)
+                      v_pose_gate=0.0, v_pose_min_dt=0.03, reindex_after=0,
+                      # --- OPT-IN: publish timing (see `publish_time`) ------
+                      # The node records its own command at `now()`, i.e.
+                      # AFTER the solve, so the actuator model's idea of when
+                      # the command was issued moves with the solve time too.
+                      # 0.0 = the historical "solve is free" schedule.
+                      pub_lag=0.0)
         solver_keys = ('horizon', 'step_dt', 'min_step_m', 'iters', 'outer',
                        'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk',
                        'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
@@ -629,9 +635,10 @@ class MPC3Sim:
         self.v_cmd = float(info['v_cmd'])
         th = float(self.thr.command(self.v_cmd, v_meas, 0.0, now=t,
                                     kappa=float(self.path.kappa[i0])))
-        self.act.record(self.pickup_time(t, ts)
+        t_rec = t + float(self.P['pub_lag'])
+        self.act.record(self.pickup_time(t_rec, ts)
                         if (self.control_mode == 'timer'
-                            and self.P['timer_sync_dead']) else t, cmd)
+                            and self.P['timer_sync_dead']) else t_rec, cmd)
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self._last = (cmd, th)
         return cmd, th
@@ -783,6 +790,127 @@ class LegacyMPCSim:
 # the loop
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# OPT-IN: publish timing (`--publish-latency` / `--publish-jitter`)
+# ---------------------------------------------------------------------------
+# What this harness has always assumed: the solve is instantaneous, so the
+# command computed from the pose of tick k is always sitting on the wire before
+# tick k+1 latches it.  Live that is not free.  The pose reaches the node
+# ~45 ms after the scan, the solve then costs 10-40 ms, and the devkit bridge
+# consumes ONE command per telemetry tick: a publish that lands after the tick
+# is not latched until the next one.  At a 0.104 s period 0.045+0.040 still
+# fits inside the tick; at 0.058 s it does not, so a fraction of commands are
+# applied one whole tick (0.058 s) late and the fraction depends on the jitter.
+# Both default to 0.0, which reproduces the historical schedule exactly.
+
+
+def publish_time(t_solve, latency, jitter, rng):
+    """When a command solved at ``t_solve`` reaches the bridge."""
+    if latency <= 0.0 and jitter <= 0.0:
+        return t_solve
+    j = rng.normal(0.0, jitter) if jitter > 0.0 else 0.0
+    return t_solve + max(0.0, latency + j)
+
+
+def latch(pub_q, t, held):
+    """The command in force at tick ``t``: the newest published before it.
+
+    One per tick, last one wins, and nothing new means the previous command
+    stays latched -- which is what the simulator does.
+    """
+    out = held
+    while pub_q and pub_q[0][0] <= t + 1e-12:
+        out = pub_q.pop(0)[1:]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# OPT-IN: sensor age (`--pose-age-frames` / `--pose-age-s`)
+# ---------------------------------------------------------------------------
+# The harness stamps every pose with the instant the plant state was read, so
+# the controller's `stamp -> now` prediction is exact by construction and the
+# only latency in the loop is transport.  The simulator cannot be that kind:
+# the LiDAR is GPU-raytraced during a render frame and the whole telemetry
+# message is assembled and sent afterwards, so the scan the pose is built from
+# describes the car as it was some part of a RENDER PERIOD earlier than the
+# stamp it carries.  That error is a fixed number of frames, i.e. a number of
+# SECONDS that halves when the sensor rate doubles -- the controller then
+# under-predicts the car's progress by `age * v` metres of arc, always in the
+# same direction, and by 0.046 s x 4.3 m/s = 0.20 m MORE at 0.104 s than at
+# 0.058 s.  Reading the plan late is a late turn-in; reading it less late is an
+# early one, which is the hairpin signature the display runs show.
+# Both default to 0.0, which is the historical exact-stamp pose.
+
+
+class PoseHistory:
+    """Where the car was, kept long enough to sample a stale sensor from."""
+
+    def __init__(self, span=0.60):
+        self.span = float(span)
+        self._q = []                      # (t, x, y, yaw), oldest first
+
+    def push(self, t, x, y, yaw):
+        self._q.append((t, x, y, yaw))
+        cut = t - self.span
+        while len(self._q) > 2 and self._q[0][0] < cut:
+            self._q.pop(0)
+
+    def at(self, t):
+        """Linear interpolation; the oldest sample if the buffer is short."""
+        q = self._q
+        if not q:
+            return None
+        if t <= q[0][0]:
+            return q[0][1:]
+        if t >= q[-1][0]:
+            return q[-1][1:]
+        lo, hi = 0, len(q) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if q[mid][0] <= t:
+                lo = mid
+            else:
+                hi = mid
+        t0, x0, y0, a0 = q[lo]
+        t1, x1, y1, a1 = q[hi]
+        f = (t - t0) / max(t1 - t0, 1e-9)
+        return (x0 + f * (x1 - x0), y0 + f * (y1 - y0),
+                wrap(a0 + f * wrap(a1 - a0)))
+
+
+# ---------------------------------------------------------------------------
+# OPT-IN: steering-feedback staleness (`--steer-fb-lag`)
+# ---------------------------------------------------------------------------
+# `Actuator.snap` anchors the controller's model of the rack on the measured
+# angle, and this harness has always handed it the plant's angle AT the frame
+# instant -- a perfect, zero-age sensor.  The bridge cannot do that: the
+# telemetry message is assembled from the state the simulator had at its last
+# update, which is the same one-frame staleness already measured on the pose
+# (docs/STATUS.md, CORRECTION 2).  An anchor that is one tick old is wrong by
+# however far the rack moved in that tick, which on a corner entry is a
+# systematic UNDER-read of the lock already applied: the solver then asks for
+# more, and the error it is answering is one whole command flick during the
+# solver's limit cycle.  Both the bias and the number of flicks per second
+# scale with the sensor rate.  0.0 = the historical perfect sensor.
+
+
+def fb_history_push(hist, t, delta, keep=0.5):
+    hist.append((t, delta))
+    while len(hist) > 2 and hist[0][0] < t - keep:
+        hist.pop(0)
+
+
+def fb_history_at(hist, t):
+    """Zero-order hold: what the LAST message before ``t`` carried."""
+    out = hist[0][1]
+    for ts, d in hist:
+        if ts <= t + 1e-12:
+            out = d
+        else:
+            break
+    return out
+
+
 def load_checkpoints(map_prefix):
     """Ordered numbered checkpoints of a scene, as the simulator resets to them.
 
@@ -825,7 +953,9 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         pose_latency=POSE_LATENCY, verbose=True, v_start=None, frame=FRAME,
         enc_alpha=0.0, servo=None, enc_slip=1.0, log_enc_alpha=0.0,
         pose_lon_bias=0.0, teleport=None,
-        pose_speed_cap=0.0, pose_lag_tau=0.5, pose_lag_kappa=0.2, actuator=None):
+        pose_speed_cap=0.0, pose_lag_tau=0.5, pose_lag_kappa=0.2, actuator=None,
+        publish=None, pose_age_frames=0.0, pose_age_s=0.0,
+        steer_fb_lag=0.0):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -881,6 +1011,17 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     # --- opt-in realistic checkpoint teleport (`--teleport`) ---------------
     # Default None keeps the idealized on-line reset this harness has always
     # used, so every existing number is unchanged.
+    # OPT-IN sensor age; 0.0 keeps the exact-stamp pose this harness had.
+    pose_age = float(pose_age_frames) * frame + float(pose_age_s)
+    hist = PoseHistory() if pose_age > 0.0 else None
+    # OPT-IN stale steering feedback; 0.0 keeps the perfect sensor.
+    fb_lag = float(steer_fb_lag) * frame
+    fb_hist = [(-1e9, 0.0)] if fb_lag > 0.0 else None
+    pb = publish or {}
+    pub_lat = float(pb.get('latency', 0.0))
+    pub_jit = float(pb.get('jitter', 0.0))
+    pub_on = pub_lat > 0.0 or pub_jit > 0.0
+    pub_q = []                     # (t_publish, steer, throttle), in order
     tp = teleport or {}
     tp_cp = tp.get('cp')
     tp_tau = float(tp.get('reloc_tau', 0.0))
@@ -949,10 +1090,15 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                     obs = min(1.0, kr / pose_lag_kappa)
                     pose_lag *= math.exp(-frame * obs / max(pose_lag_tau, 1e-3))
                 lon_b -= pose_lag
-            nx = (plant.x - math.sin(plant.yaw) * (err_lat + bias)
-                  + math.cos(plant.yaw) * lon_b)
-            ny = (plant.y + math.cos(plant.yaw) * (err_lat + bias)
-                  + math.sin(plant.yaw) * lon_b)
+            sx, sy, syaw = plant.x, plant.y, plant.yaw
+            if hist is not None:
+                aged = hist.at(t - pose_age)
+                if aged is not None:
+                    sx, sy, syaw = aged
+            nx = (sx - math.sin(syaw) * (err_lat + bias)
+                  + math.cos(syaw) * lon_b)
+            ny = (sy + math.cos(syaw) * (err_lat + bias)
+                  + math.sin(syaw) * lon_b)
             if tp_tau > 0.0 and t - tp_t < 8.0 * tp_tau:
                 # Localization has not caught up with the reset yet.
                 g = math.exp(-(t - tp_t) / tp_tau)
@@ -979,19 +1125,37 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                            + log_enc_alpha * max(-LOG_ENC_CLAMP,
                                                  min(LOG_ENC_CLAMP,
                                                      v_wheel - log_enc)))
-            tracker.on_frame(t, gyro, v_rep, plant.delta)
+            fb_delta = plant.delta
+            if fb_hist is not None:
+                fb_history_push(fb_hist, t, plant.delta)
+                fb_delta = fb_history_at(fb_hist, t - fb_lag)
+            tracker.on_frame(t, gyro, v_rep, fb_delta)
             pending.append((t + pose_latency, t, nx, ny,
-                            wrap(plant.yaw + err_yaw)))
+                            wrap(syaw + err_yaw)))
+            if pub_on:
+                steer_cmd, throttle = latch(pub_q, t, (steer_cmd, throttle))
             plant.accept_frame(t, steer_cmd, throttle)
             next_frame += frame
         while pending and pending[0][0] <= t:
             _, ts, nx, ny, nyaw = pending.pop(0)
             tracker.on_pose(t, ts, nx, ny, nyaw)
             if tracker.rate is None:
-                steer_cmd, throttle = tracker.update(t)
+                cmd_now = tracker.update(t)
+                if pub_on:
+                    pub_q.append((publish_time(t, pub_lat, pub_jit, rng),)
+                                 + tuple(cmd_now))
+                else:
+                    steer_cmd, throttle = cmd_now
         if tracker.rate is not None and t >= next_ctl - 1e-9:
-            steer_cmd, throttle = tracker.update(t)
+            cmd_now = tracker.update(t)
+            if pub_on:
+                pub_q.append((publish_time(t, pub_lat, pub_jit, rng),)
+                             + tuple(cmd_now))
+            else:
+                steer_cmd, throttle = cmd_now
             next_ctl += 1.0 / tracker.rate
+        if hist is not None:
+            hist.push(t, plant.x, plant.y, plant.yaw)
         plant.step(t)
         t += DT
 
@@ -1329,6 +1493,22 @@ def main():
     ap.add_argument('--plant-tick-frac', type=float, default=1.0,
                     help='fraction of the remaining error the actuator takes '
                          'per telemetry tick with --plant-actuator tick')
+    ap.add_argument('--steer-fb-lag', type=float, default=0.0,
+                    help='OPT-IN: the /steering feedback describes the rack '
+                         'this many SENSOR PERIODS before the message that '
+                         'carries it (bridge staleness). 0 = perfect sensor.')
+    ap.add_argument('--pose-age-frames', type=float, default=0.0,
+                    help='OPT-IN: the pose is built from the plant state this '
+                         'many SENSOR PERIODS before the stamp it carries '
+                         '(render/raytrace age). Rate-dependent by design.')
+    ap.add_argument('--pose-age-s', type=float, default=0.0,
+                    help='OPT-IN: a fixed-seconds part of the same stamp error')
+    ap.add_argument('--publish-latency', type=float, default=0.0,
+                    help='OPT-IN: seconds from pose-callback entry to the '
+                         'command reaching the bridge (the solve). A publish '
+                         'that misses the tick waits for the next one.')
+    ap.add_argument('--publish-jitter', type=float, default=0.0,
+                    help='OPT-IN: 1-sigma gaussian jitter on --publish-latency')
     ap.add_argument('--plot', default='')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
@@ -1347,6 +1527,8 @@ def main():
         return out
     kw, lkw = parse(args.param), parse(args.legacy_param)
     kw3 = parse(args.mpc3_param)
+    if args.publish_latency > 0.0:
+        kw3.setdefault('pub_lag', args.publish_latency)
 
     # `--plant-realistic` is one switch for the whole measured sensor+plant
     # chain, because the parts are not independent: an identified plant with a
@@ -1403,6 +1585,13 @@ def main():
                   pose_speed_cap=args.pose_speed_cap,
                   pose_lag_tau=args.pose_lag_tau,
                   pose_lag_kappa=args.pose_lag_kappa, teleport=tp_cfg,
+                  steer_fb_lag=args.steer_fb_lag,
+                  pose_age_frames=args.pose_age_frames,
+                  pose_age_s=args.pose_age_s,
+                  publish=(dict(latency=args.publish_latency,
+                                jitter=args.publish_jitter)
+                           if (args.publish_latency > 0.0
+                               or args.publish_jitter > 0.0) else None),
                   servo=(PLANT_REAL if args.plant_realistic else
                          SERVO_CAL if args.servo_cal else None),
                   actuator=act_cfg)
