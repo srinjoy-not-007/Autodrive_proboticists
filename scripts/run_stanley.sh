@@ -11,7 +11,7 @@ INIT=$(head -2 data/maps/${MAP}_traj.csv | tail -1 | cut -d, -f2,3)
 IX=$(echo "$INIT" | cut -d, -f1); IY=$(echo "$INIT" | cut -d, -f2)
 echo "map=$MAP line=$LINE scale=$SCALE $EXTRA"
 ./scripts/sim_restart_connect.sh || exit 1
-R="source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash"
+R="export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 && source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash"
 docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && cd /home/autodrive_devkit && colcon build --packages-select pit_crew --symlink-install 2>&1|tail -1"
 # The LiDAR sits 0.1933 m ahead of the pose point. A map built with that

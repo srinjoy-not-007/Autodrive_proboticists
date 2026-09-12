@@ -1,6 +1,10 @@
 #!/bin/bash
 # Start once per container; additional interactive shells never start a race.
 set -eo pipefail
+# The controller's numpy solves are 20x30 matrices; OpenBLAS spins every core
+# on them (measured: mpc3 at 1030% CPU), starving the simulator and the
+# bridge on the same host. One thread is faster for this size anyway.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 source /opt/ros/humble/setup.bash
 source /home/autodrive_devkit/install/setup.bash
 cd /home/autodrive_devkit
