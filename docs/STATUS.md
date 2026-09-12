@@ -454,8 +454,9 @@ Lesson from the m45 family (25 collisions at one corner): easing a
 corner's curvature lets the profile spend it all on speed (2.03 vs
 1.58 m/s minimum) that the tracker cannot deliver at 0.058 -- geometry
 and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
-(52 CSVs). check_pipeline + commit of the tools flags queued on the next
-idle host slot, then live: fast2_m50 on both circuits.
+(52 CSVs). check_pipeline PASSED and the tools flags + lines are COMMITTED (Sept
+12); live: fast2_m50 on both circuits with the finals candidate config
+(chain5).
 
 **Cross-track config matrix (Sept 12, harness, 432 laps per config on
 the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
