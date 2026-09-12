@@ -70,7 +70,7 @@ from pit_crew.mpc2_core import (Actuator, CurvatureBias, MPC2,   # noqa: E402
                                 PoseFilter, RefPath, wrap)
 from pit_crew.mpc3_core import (ILC, MPC3, GapRider, RateControl,  # noqa: E402
                                 RATE_NOMINAL, RATE_TERMS,
-                                corridor_clearance)
+                                corridor_clearance, gap_feedforward)
 from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
 
 DT = 0.001                  # physics step, s
@@ -410,7 +410,8 @@ class MPC3Sim:
                       # --- teleport recovery (opt-in; see mpc3.py) ---------
                       v_pose_gate=0.0, v_pose_min_dt=0.03, reindex_after=0,
                       # --- telemetry gap (opt-in; see mpc3_core.GapRider) ---
-                      gap_predict_s=0.0, gap_decel=3.0, gap_v_min=1.0,
+                      gap_predict_s=0.0, gap_mode='solve',
+                      gap_decel=3.0, gap_v_min=1.0,
                       gap_reacq_blend=0.0, gap_reacq_gate_m=0.0,
                       gap_reacq_n=2, gap_reacq_gap_s=0.0,
                       # --- OPT-IN: publish timing (see `publish_time`) ------
@@ -485,6 +486,7 @@ class MPC3Sim:
             reacq_n=int(self.P['gap_reacq_n']),
             reacq_gap_s=float(self.P['gap_reacq_gap_s']))
         self._gap_solve_t = -1e9
+        self._gap_ff = str(self.P['gap_mode']).strip().lower() == 'ff'
         self.coasts = 0                  # watchdog ticks spent on the coast
         self.ilc = None
         self.ilc_log = []
@@ -615,6 +617,26 @@ class MPC3Sim:
                               float(self.rate_ctl.values['stale_pose_s']),
                               v_cmd)
 
+    def gap_ff(self, t, age):
+        """`gap_mode` 'ff' -- mirrors mpc3.MPC3Tracker.gap_publish_ff."""
+        stale = float(self.rate_ctl.values['stale_pose_s'])
+        v = self.measured_speed()
+        v0 = max(v if v is not None else self.start_speed(), 0.4)
+        i0 = self.idx if self.idx is not None else 0
+        ds = self.gap.arc_ahead(age, stale, v0)
+        v_cap = self.gap.v_cap(age, stale, v0)
+        j, delta = gap_feedforward(self.path, i0, ds,
+                                   yaw_gain=self.mpc.cfg['yaw_gain'],
+                                   cap=math.atan(
+                                       vehicle.WHEELBASE * self.P['ay_limit']
+                                       / max(v0 * v0, 0.25)))
+        th = float(self.thr.command(min(float(self.path.v_prof[j]), v_cap),
+                                    v, 0.0, now=t,
+                                    kappa=float(self.path.kappa[j])))
+        self.act.record(t + float(self.P['pub_lag']), delta)
+        self._last = (delta, th)
+        return self._last
+
     def watchdog(self, t):
         """The node's 20 Hz watchdog: `(steer, throttle)` to publish, or None.
 
@@ -635,7 +657,7 @@ class MPC3Sim:
                 return None
             self._gap_solve_t = t
             self.gap.rides += 1
-            return self.update(t)
+            return self.gap_ff(t, age) if self._gap_ff else self.update(t)
         self.coasts += 1
         self._last = (self._last[0], 0.0)
         return self._last

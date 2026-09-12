@@ -49,7 +49,7 @@ from std_msgs.msg import Float32
 from pit_crew import vehicle
 from pit_crew.mpc3_core import (ILC, MPC3, RATE_NOMINAL, RATE_TERMS, Actuator,
                                 GapRider, PoseFilter, RateControl, RefPath,
-                                corridor_clearance, wrap)
+                                corridor_clearance, gap_feedforward, wrap)
 from pit_crew.throttle2 import ServoThrottle
 
 
@@ -198,6 +198,11 @@ class MPC3Tracker(Node):
             # `gap_decel` (never below `gap_v_min`).  Past
             # `stale_pose_s + gap_predict_s` the old coast takes over.
             ('gap_predict_s', 0.0),
+            # What to publish while riding: 'solve' keeps the MPC on a
+            # dead-reckoned pose (feedback on an estimate nobody measured);
+            # 'ff' publishes the LINE's own steering angle at the dead-reckoned
+            # arc length and no cross-track term at all.
+            ('gap_mode', 'solve'),
             ('gap_decel', 3.0),           # m/s2 off the plan speed per second
             ('gap_v_min', 1.0),           # m/s floor of that ramp
             # Re-acquisition: the first pose after a gap comes out of a filter
@@ -530,6 +535,7 @@ class MPC3Tracker(Node):
             reacq_n=int(v['gap_reacq_n']),
             reacq_gap_s=float(v['gap_reacq_gap_s']))
         self._gap_solve_t = -1e9
+        self._gap_ff = str(v['gap_mode']).strip().lower() == 'ff'
 
         self.pose = None
         self.gyro_z = 0.0
@@ -793,12 +799,34 @@ class MPC3Tracker(Node):
             return True                  # riding, just not solving this tick
         self._gap_solve_t = now
         self.gap.rides += 1
+        if self._gap_ff:
+            self.gap_publish_ff(now, age)
+            return True
         if self.gap.rides == 1 or self.gap.rides % 20 == 0:
             self.get_logger().warn(
                 f'telemetry gap {age:.2f}s — driving the plan open loop '
                 f'(ride {self.gap.rides})')
         self.control_step()
         return True
+
+    def gap_publish_ff(self, now, age):
+        """`gap_mode` 'ff': the plan's own angle at the dead-reckoned point."""
+        stale = float(self.rate_ctl.values['stale_pose_s'])
+        v = self.measured_speed()
+        v0 = max(v if v is not None else self.start_speed(), 0.4)
+        i0 = self._idx if self._idx is not None else 0
+        ds = self.gap.arc_ahead(age, stale, v0)
+        v_cap = self.gap.v_cap(age, stale, v0)
+        j, delta = gap_feedforward(self.path, i0, ds,
+                                   yaw_gain=float(self.P['yaw_gain']),
+                                   cap=math.atan(
+                                       vehicle.WHEELBASE
+                                       * float(self.P['ay_limit'])
+                                       / max(v0 * v0, 0.25)))
+        th = float(self.thr.command(min(float(self.path.v_prof[j]), v_cap),
+                                    v, 0.0, now=now,
+                                    kappa=float(self.path.kappa[j])))
+        self.publish(delta, th)
 
     def watchdog(self):
         """Runs whether or not poses arrive; commands LATCH in this simulator."""

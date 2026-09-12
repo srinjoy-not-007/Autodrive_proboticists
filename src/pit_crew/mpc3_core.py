@@ -72,7 +72,7 @@ except ImportError:                                  # running from src/pit_crew
 __all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS',
            'RateEstimator', 'RateAdapter', 'RateControl', 'ILC',
            'corridor_clearance', 'RATE_NOMINAL', 'RATE_TERMS',
-           'RATE_ALL_TERMS', 'GapRider']
+           'RATE_ALL_TERMS', 'GapRider', 'gap_feedforward']
 
 
 DEFAULTS = dict(
@@ -675,6 +675,19 @@ class GapRider:
             self._armed = max(1, self.reacq_n)
         return gap
 
+    def arc_ahead(self, age, stale_s, v):
+        """Metres travelled since the pose stamp, under the ramp.
+
+        Plan speed until the pose went stale, then the ramp `v_cap` applies;
+        the average of the two ends is exact for a linear ramp.
+        """
+        if age <= 0.0:
+            return 0.0
+        head = min(age, stale_s)
+        tail = max(age - stale_s, 0.0)
+        v_end = self.v_cap(age, stale_s, v)
+        return v * head + 0.5 * (v + v_end) * tail
+
     def filter_gains(self, blend, gate):
         """(blend, gate) for THIS pose; consumes one armed frame."""
         if self._armed <= 0:
@@ -682,6 +695,22 @@ class GapRider:
         self._armed -= 1
         g = self.reacq_gate_m if self.reacq_gate_m > 0.0 else gate
         return min(blend, self.reacq_blend), g
+
+
+def gap_feedforward(path, i0, ds, yaw_gain=1.0, cap=None):
+    """The LINE's own steering angle `ds` metres past index `i0`.
+
+    The open-loop half of the gap handler (`gap_mode` 'ff'): no cross-track
+    term at all, because with no pose there is no cross-track measurement --
+    only a dead reckoning of one, and the solver answering a dead-reckoned
+    error is what makes a long ride worse than the plan it is riding.  Returns
+    `(index, steering angle)`.
+    """
+    j = int(i0 + round(max(ds, 0.0) / max(path.spacing, 1e-3))) % path.n
+    k = float(path.kappa[j]) / max(float(yaw_gain), 1e-3)
+    d = math.atan(vehicle.WHEELBASE * k)
+    lim = vehicle.MAX_STEER if cap is None else min(vehicle.MAX_STEER, cap)
+    return j, max(-lim, min(lim, d))
 
 
 # --------------------------------------------------------------------------
