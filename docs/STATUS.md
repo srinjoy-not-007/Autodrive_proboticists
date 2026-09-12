@@ -124,6 +124,19 @@ table's behaviour at the lap wrap / per-lap update is the suspect, under
 offline analysis. ILC is NOT promotable until this is explained. ILC alone
 (0/32) remains the cleanest short fast-rate run; n is small.
 
+**Rules check (Sept 12, from the 2026 rules page and the organisers'
+repo):** the Porto qualification is a pass/fail GATE only ("Passing the
+qualification session entitles a team for the final race"); ranking is
+"total race time" on ONE unseen competition track released later, penalty
+10 s x collisions, 11+ collisions = DQ, warm-up lap not counted, sim lap
+timer, tie-break on best lap. Past editions confirm no carry-over (ICRA
+2025: the qualification winner finished 9th). The organisers race on a
+real X display (window screen-recorded with OBS), graphics Ultra, i9
+14900K / RTX 4090, no container CPU quota, a human clicks Connection.
+Fastest published Porto lap is now 6.46 s (VAUL, ICRA 2026 qualification).
+Consequence: Porto lap time is a proxy; the unseen-track pipeline
+(finals_drill_mesh.sh) and robustness ARE the score.
+
 **Rate-invariant mpc3 set from CMA-ES (Sept 12, offline; live test
 queued as `rateinv`):** 239 evaluations over 15 params, objective summed
 over frames 0.088/0.097/0.104 with rate_adaptive on. Verified on unseen
