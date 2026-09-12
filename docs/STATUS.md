@@ -358,6 +358,15 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Turn-in timing probe (Sept 12, committed, not yet run live):**
+`ros2 run pit_crew turnin_probe` / `scripts/turnin_probe.sh` measures
+pose-stamp-to-yaw-rate delay INSIDE the race loop (publishes from the
+pose callback like mpc3; ramp pulses of 0.12 rad on Porto's safe-line
+straights at 2.5 m/s; `tools/turnin_fit.py --compare display.csv
+xvfb.csv`). The rate comparison is the robust output (a single-rate
+absolute is tick-quantised plus a sub-tick constant). Next sim slots:
+VISIBLE=1 ./scripts/turnin_probe.sh, then ./scripts/turnin_probe.sh.
+
 **Longitudinal plant identified (Sept 12, display + Xvfb logs):** the
 4.2-4.7 m/s2 drive ceiling is the sim's speed servo saturating (fit:
 K 15-17, a_max 4.0-5.0, a_min -6.5; ggv.csv's ax_max = 5.0 - 0.273 v),
