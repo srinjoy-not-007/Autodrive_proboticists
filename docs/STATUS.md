@@ -402,7 +402,13 @@ lag (wide at both rates), encoder filter (already per-second), stale
 a steep non-monotone function of total loop delay near the operating
 point; live sits on the steep part. Pragmatic lever: barrier_margin 0.24
 -> 0.34 moves the hairpin offset outward at both rates (+0.056 m at
-0.058) for +0.07 s/lap; display A/B queued (disp_bm34).
+0.058) for +0.07 s/lap. **DRIVEN ON THE DISPLAY (0.059 s): 32 laps, 0
+collisions, OFFICIAL 69.44 s -- the first clean real-display run and the
+best official race time so far.** Hairpin most-inside per lap p50
+-0.287, worst -0.313 (wall ~-0.35; 3 of 32 laps below -0.30): thin, so
+the combination with nd_mode:=period (harness +0.05 m) is queued
+(disp_nd_bm34), then regression of barrier_margin 0.34 on the tight
+circuits (a 0.34 m margin in a 1.75 m corridor may not be free).
 
 **Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
 committed; display A/B queued):** `steer_tau` (first-order rack lag
