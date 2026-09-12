@@ -40,7 +40,7 @@ COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
 # from being driven in the final. A line nobody has cleared should not be
 # reachable inside the submission at all.
 #
-# Every line here has been driven clean: porto_mesh_mc0.60_ay6.0 (the shipping
+# Every line here has been driven clean; the entrypoint picks the shipping one (mc0.63_ay6.75 at the time of writing). mc0.60_ay6.0 (the earlier
 # line, 100 laps / 0 collisions / 73.46 s with mpc3), track_v2_safe (100 laps
 # clean with the legacy mpc), icra2026_mesh_race (60 laps / 0 collisions).
 # ADD THE FINALS LINES HERE after the drill has produced and driven them.
