@@ -185,6 +185,14 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   the extra-shell check passed. First image-as-shipped run since today's
   config; log data/logs/submission_20260912_170708.csv. (The
   submission_..._074832 log is this morning's test at the older config.)
+- **Turn-in probe, both rates (display 0.0583 s vs Xvfb 0.0898, 20
+  pulses each):** the total pose-to-yaw-onset delay is RATE-INVARIANT
+  once the tick ZOH is subtracted: 0.099 vs 0.096 s (d -0.003 s = -0.09
+  x the period change); publish-to-rack moves +0.013 s (+0.42 x the
+  period change, i.e. the tick term), rack-to-yaw compensates. So the
+  plant's transport is "one period + ~0.10 s" and the early turn-in at
+  0.058 is NOT a transport-delay difference; the delay_tick law is
+  confirmed at the plant level.
 - Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
   data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
   0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
