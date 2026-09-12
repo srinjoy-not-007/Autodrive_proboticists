@@ -95,8 +95,18 @@ display_resolve_click_coords() {
             "DISPLAY=${disp} import -window root /tmp/ui.png 2>/dev/null; true"
         docker cp "$container":/tmp/ui.png /tmp/sim_ui.png >/dev/null 2>&1 || true
         UI=$("${repo_dir}/.venv/bin/python" "${repo_dir}/tools/find_sim_ui.py" /tmp/sim_ui.png 2>/dev/null || true)
-        # accept only a settled, full-width canvas (the resize animates)
-        if [ -n "$UI" ] && [ "$(echo "$UI" | cut -d" " -f3)" -ge 1900 ]; then break; fi
+        # Accept a settled canvas that FILLS THE FRAME, not one 1900 px wide.
+        # The old absolute gate assumed the 1920x1080 canvas could always be
+        # had; on a 1920x1080 desktop the window manager's decoration makes
+        # that impossible (measured here: frame 1854x1048), so the gate never
+        # passed, every run fell back to frame-scaling and the Connection click
+        # missed -- "ERROR: could not connect" with the stack perfectly healthy.
+        # The click maths below already scales by the canvas width, so any
+        # settled canvas that fills the frame is usable.
+        if [ -n "$UI" ]; then
+            _cw=$(echo "$UI" | cut -d" " -f3)
+            if [ "$_cw" -ge $(( WW * 9 / 10 )) ] && [ "$_cw" -ge 800 ]; then break; fi
+        fi
         UI=""
     done
     if [ -n "$UI" ]; then

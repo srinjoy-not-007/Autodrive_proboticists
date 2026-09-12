@@ -32,7 +32,15 @@ docker run --name pit_helper --rm -d --network=host --ipc=host \
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "${REPO_DIR}/src:/home/autodrive_devkit/src/pit_crew" \
     -v "${REPO_DIR}/data:/home/data" --privileged \
     "autodriveecosystem/autodrive_roboracer_api:${TAG}" -c "sleep 7200" >/dev/null
-docker exec pit_helper /bin/bash -c "which xdotool >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq xdotool) >/dev/null 2>&1; pip3 install -q 'numpy<2' 'scipy==1.10.1' >/dev/null 2>&1; true"
+# imagemagick as well as xdotool: VISIBLE=1 locates the sim canvas from a
+# screenshot (`import -window root`, via tools/find_sim_ui.py) and the base
+# image ships NEITHER tool. The old guard tested `which xdotool` alone, so a
+# helper that had xdotool skipped the install and `import` was silently absent
+# -- the screenshot was never written, the canvas was never found, and every
+# real-display run fell back to frame coordinates and missed the Connection
+# button ("ERROR: could not connect" with a perfectly healthy stack).
+# run_devkit.sh has always installed both; this path had drifted from it.
+docker exec pit_helper /bin/bash -c "(which xdotool >/dev/null 2>&1 && which import >/dev/null 2>&1) || (apt-get update -qq && apt-get install -y -qq xdotool imagemagick) >/dev/null 2>&1; pip3 install -q 'numpy<2' 'scipy==1.10.1' >/dev/null 2>&1; true"
 
 # Simulator on Xvfb :99 (see sim_restart_connect.sh for why), or on the host's
 # real display under VISIBLE=1, where there is already an X server to join.
@@ -93,11 +101,24 @@ docker exec pit_helper /bin/bash -c "$R && ros2 daemon stop >/dev/null 2>&1; ros
 # second shell must not add a node. (Run AFTER the daemon restart, or the two
 # node lists are not comparable.)
 nodes() { docker exec pit_helper /bin/bash -c "$R && ros2 node list 2>/dev/null | sort | tr '\n' ' '"; }
-# Sample only once the stack is up: the nodes take a variable time to appear
-# in discovery, and a BEFORE taken mid-startup fails the check spuriously.
-for i in $(seq 1 30); do
+# Sample only once the stack is up AND the list has stopped changing. Waiting
+# for the controller alone is not enough: the nodes appear in discovery in no
+# fixed order, and /autodrive_bridge has been seen to register AFTER /mpc3, so
+# a BEFORE taken the instant the controller appeared missed the bridge and the
+# check blamed the second shell for it (observed on a real-display run, Sept 13).
+# Require two consecutive identical samples that contain both the bridge and a
+# controller, so the comparison is against a settled list.
+PREV=""
+for i in $(seq 1 40); do
     BEFORE="$(nodes)"
-    case "$BEFORE" in *mpc*|*follow_the_gap*|*stanley*) break ;; esac
+    case "$BEFORE" in
+        *autodrive_bridge*)
+            case "$BEFORE" in
+                *mpc*|*follow_the_gap*|*stanley*)
+                    [ "$BEFORE" = "$PREV" ] && break ;;
+            esac ;;
+    esac
+    PREV="$BEFORE"
     sleep 2
 done
 docker exec autodrive_roboracer_api bash -lc 'true' >/dev/null 2>&1
