@@ -119,6 +119,17 @@ the start line, cte 0.04 -> 0.28 m in six samples; cause under offline
 analysis), median 7.17, OFFICIAL 71.48 s. 100 laps of the same running.
 ILC alone (0/32) is so far the cleanest fast-rate config; n is small.
 
+**Curvature-rate-limited lines (Sept 12, offline, not driven):**
+`optimize_raceline.py --dkappa-max` (opt-in, uncommitted until
+check_pipeline runs on an idle host) halves the hairpin-entry curvature
+ramp (0.5 m-window d(kappa)/ds 1.155 -> 0.60-1.00) at identical clearance
+0.309, kappa max 0.83 and ideal lap 7.01; candidates
+data/racelines/porto_mesh_cr_dk{1.0,0.8,0.6}.csv. In the harness they change
+nothing (0/60 collisions everywhere, lap p50 within 0.01 s); under the
+stress that reproduces the live rate failure (frame 0.088, pose-lon-bias
+0.15) collisions go 80 -> 83/75/69 per 120 laps, a ~1.5 sigma trend. The
+rate failure is not a line-shape problem. Kept as a free option to drive.
+
 **Rejected offline (Sept 12): `control_mode:=timer`** (opt-in, committed,
 default byte-identical). A fixed 20 Hz solve halves the rate spread of
 lateral error (0.020 -> 0.011 m p50) but is 0.25 s/lap slower and collides
