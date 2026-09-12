@@ -470,7 +470,9 @@ and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
 speed 1.1 m/s with the encoder reading 2.1: the car nearly stops at
 that corner and slides half a metre off the line (wheel slip at low
 speed, a stuck-escape, or a spin: to be attributed). Same race time as
-fast_uni (101.9, 1 collision).
+fast_uni (101.9, 1 collision). **ICRA 2025 fast2_m50: 32 laps, 0
+collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
+drill's pick for that circuit under the finals config.
 
 **Cross-track config matrix (Sept 12, harness, 432 laps per config on
 the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
