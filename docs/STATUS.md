@@ -33,6 +33,16 @@ Sensor rate by graphics quality on this host (Xvfb): Low 11.05 Hz, Ultra
 on run_exp/run_stanley now sets Ultra after the sim connects
 (`scripts/sim_set_quality.sh`, cycle Low -> High -> Ultra verified).
 Validate at Ultra from here on.
+Research (measured on our logs): the speed error is 86-96% repeatable and
+61% of it is a pure lag of achieved speed behind the profile (1.45 m /
+0.33 s at 9.6 Hz, 1.15 m at 11.4 Hz); the entry overspeed 0.8 s before a
+corner explains the inside offset (corr -0.82). At 11 Hz the lag shrinks,
+the car is faster and the repeatable lateral error doubles: mpc3 was tuned
+with the lag as a free corner-entry brake. Lateral error is only 41-70%
+repeatable (steering ILC capped at 1.3-1.6x); longitudinal per-arc-length
+learning on the speed ceiling is the valuable learner (Wachter et al.
+2026, F1TENTH, 7.6%). Being implemented with rate-invariant constants and
+a brake-only lead.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
