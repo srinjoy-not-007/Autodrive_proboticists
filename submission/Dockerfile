@@ -40,14 +40,14 @@ COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
 # from being driven in the final. A line nobody has cleared should not be
 # reachable inside the submission at all.
 #
-# Every line here has been driven clean; the entrypoint picks the shipping one (mc0.63_ay6.75 at the time of writing). mc0.60_ay6.0 (the earlier
+# Every line here has been driven clean; the entrypoint picks the shipping one (cr_dk0.8 at the time of writing: mc0.63_ay6.75 with its hairpin-entry curvature ramp halved, 100 laps / 0 collisions / 70.5 s at the fast sensor rate with rate_adaptive). mc0.60_ay6.0 (the earlier
 # line, 100 laps / 0 collisions / 73.46 s with mpc3), track_v2_safe (100 laps
 # clean with the legacy mpc), icra2026_mesh_race (60 laps / 0 collisions).
 # ADD THE FINALS LINES HERE after the drill has produced and driven them.
 COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
      data/racelines/track_v2_centerline.csv \
      data/racelines/porto_mesh_mc0.60_ay6.0.csv data/racelines/porto_mesh_mc0.60_ay6.5.csv \
-     data/racelines/porto_mesh_mc0.63_ay6.75.csv \
+     data/racelines/porto_mesh_mc0.63_ay6.75.csv data/racelines/porto_mesh_cr_dk0.8.csv \
      data/racelines/icra2026_mesh_centerline.csv \
      data/racelines/icra2026_mesh_safe.csv \
      data/racelines/icra2026_mesh_race.csv \

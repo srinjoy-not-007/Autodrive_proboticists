@@ -21,7 +21,7 @@ LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
 # centerline (track_v2_safe.csv); do not pair mpc with the wide line.
 CONTROLLER="${PIT_CREW_CONTROLLER:-mpc3}"
 if [[ "$CONTROLLER" == mpc3 ]]; then
-    LINE="${PIT_CREW_LINE:-/home/data/racelines/porto_mesh_mc0.63_ay6.75.csv}"
+    LINE="${PIT_CREW_LINE:-/home/data/racelines/porto_mesh_cr_dk0.8.csv}"
 else
     LINE="${PIT_CREW_LINE:-/home/data/racelines/track_v2_safe.csv}"
 fi
@@ -56,7 +56,13 @@ WORKERS=()
 # it from the raceline NAME (the old behaviour) silently disabled the corridor
 # barrier whenever the guess did not resolve.
 CTRL_ARGS=()
-if [[ "$CONTROLLER" == mpc3 || "$CONTROLLER" == mpc2 ]]; then
+if [[ "$CONTROLLER" == mpc3 ]]; then
+    # rate_adaptive scales the timing terms by the measured sensor period
+    # (identity at 0.104 s). Without it mpc3 collided 7/32 laps at the
+    # 0.088-0.092 s instances; with it and the cr_dk0.8 line, 100 laps
+    # clean at 0.091-0.098 s (70.5 s). Sept 12.
+    CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true)
+elif [[ "$CONTROLLER" == mpc2 ]]; then
     CTRL_ARGS=(-p map_prefix:="$MAP")
 fi
 # Extra `-p name:=value` parameters for the finals, without editing this file.

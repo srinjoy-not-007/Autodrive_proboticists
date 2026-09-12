@@ -149,8 +149,13 @@ stress that reproduces the live rate failure (frame 0.088, pose-lon-bias
 0.15) collisions go 80 -> 83/75/69 per 120 laps, a ~1.5 sigma trend. The
 rate failure is not a line-shape problem. Driven: **cr_dk0.8 +
 rate_adaptive at a 0.095 s instance -> 32 laps, 0 collisions, median 7.048,
-OFFICIAL 70.75 s** (best clean fast-rate run so far; the shipping line with
-rate_adaptive was 2/32 at 0.092). 100 laps of the same queued.
+OFFICIAL 70.75 s**, then **100 laps, 0 collisions, median 7.053, OFFICIAL
+70.52 s** on a 0.091-0.098 s instance (the shipping line with rate_adaptive
+was 2/32 at 0.092, defaults 7/32). The rate failure is closed on the fast
+instances by rate_adaptive + cr_dk0.8. PROMOTED in the entrypoint (mpc3
+default line cr_dk0.8, `-p rate_adaptive:=true` in CTRL_ARGS), pending the
+0.104 s validation (`cr_dk08_ra_slow`, queued) and check_pipeline for the
+`--dkappa-max` tool change before the commit.
 
 **Rejected offline (Sept 12): `control_mode:=timer`** (opt-in, committed,
 default byte-identical). A fixed 20 Hz solve halves the rate spread of

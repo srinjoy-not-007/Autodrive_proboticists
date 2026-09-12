@@ -210,6 +210,419 @@ def curvature_of(reftrack, normvec, alpha, stepsize):
     return kap[idx]
 
 
+
+
+def window_steps(ds, w_min, w_max):
+    """Sample offsets whose arc length spans [w_min, w_max] metres.
+
+    The curvature rate is bounded over a BAND of window lengths rather than at
+    the sample spacing, because at the sample spacing it is not a property of
+    the line at all. Measured on Porto: the finished 0.10 m line's raw
+    consecutive-sample rate swings by 1.0 1/m2 when the lateral shift moves
+    0.6 mm -- the analytic curvature of a spline through 0.14 m reference
+    points wobbles at the knot scale and the size-5 median filter turns the
+    wobble into a staircase, so the "max d(kappa)/ds" of a filtered line is
+    mostly an artefact of the filter. Over 0.2-0.5 m it is the real ramp: on
+    the shipping line 1.16 1/m2 at 0.2 m and 0.68 at 0.5 m, both at the hairpin
+    (s 10.2-13.3), which is the corner that produces every collision.
+
+    The upper end is the physical one: the steering command is held ~0.09-0.10 s
+    and the car covers ~0.45 m in that time at hairpin-entry speed, so curvature
+    the line asks for inside half a metre is curvature the actuator has to
+    deliver inside one command.
+    """
+    n1 = max(1, int(round(w_min / max(ds, 1e-6))))
+    n2 = max(n1, int(round(w_max / max(ds, 1e-6))))
+    return list(range(n1, n2 + 1))
+
+
+def rate_metric(kap, ds, steps):
+    """Worst |d(kappa)/ds| over the window band, and which window/sample."""
+    worst, where = 0.0, (steps[0], 0)
+    for n in steps:
+        d = np.abs(np.roll(kap, -n) - kap) / (n * ds)
+        j = int(np.argmax(d))
+        if d[j] > worst:
+            worst, where = float(d[j]), (n, j)
+    return worst, where
+
+def min_curv_matrices(reftrack, normvectors, A):
+    """The min-curvature QP's own matrices, so we can add constraints to it.
+
+    `tph.opt_min_curv.opt_min_curv` builds these internally and then calls
+    quadprog, with no way to pass an extra constraint block. Everything here is
+    lifted verbatim from that function (closed-track branch only) so the cost
+    and the curvature linearization are bit-for-bit the ones the library uses;
+    the only reason it exists is to expose `E_kappa`, the LINEAR map from the
+    lateral shift alpha to the curvature at each reference point:
+
+        kappa(alpha) = E_kappa @ alpha + k_kappa_ref
+
+    which makes a bound on consecutive curvature DIFFERENCES a linear
+    constraint too. See `opt_min_curv_dkappa`.
+    """
+    n = reftrack.shape[0]
+    if n != normvectors.shape[0] or A.shape[0] != n * 4 or A.shape[0] != A.shape[1]:
+        raise RuntimeError('min_curv_matrices: closed-track shapes expected')
+
+    A_ex_b = np.zeros((n, n * 4), dtype=int)
+    A_ex_c = np.zeros((n, n * 4), dtype=int)
+    for i in range(n):
+        A_ex_b[i, i * 4 + 1] = 1
+        A_ex_c[i, i * 4 + 2] = 2
+
+    A_inv = np.linalg.inv(A)
+    T_c = A_ex_c @ A_inv
+
+    M_x = np.zeros((n * 4, n))
+    M_y = np.zeros((n * 4, n))
+    q_x = np.zeros((n * 4, 1))
+    q_y = np.zeros((n * 4, 1))
+    for i in range(n):
+        j = i * 4
+        nxt = (i + 1) % n
+        M_x[j, i] = normvectors[i, 0]
+        M_x[j + 1, nxt] = normvectors[nxt, 0]
+        M_y[j, i] = normvectors[i, 1]
+        M_y[j + 1, nxt] = normvectors[nxt, 1]
+        q_x[j, 0] = reftrack[i, 0]
+        q_x[j + 1, 0] = reftrack[nxt, 0]
+        q_y[j, 0] = reftrack[i, 1]
+        q_y[j + 1, 0] = reftrack[nxt, 1]
+
+    x_prime = np.eye(n) * (A_ex_b @ A_inv @ q_x)
+    y_prime = np.eye(n) * (A_ex_b @ A_inv @ q_y)
+    x_prime_sq = np.power(x_prime, 2)
+    y_prime_sq = np.power(y_prime, 2)
+    x_prime_y_prime = -2 * (x_prime @ y_prime)
+
+    curv_den = np.power(x_prime_sq + y_prime_sq, 1.5)
+    curv_part = np.divide(1, curv_den, out=np.zeros_like(curv_den),
+                          where=curv_den != 0)
+    curv_part_sq = np.power(curv_part, 2)
+
+    P_xx = curv_part_sq @ y_prime_sq
+    P_yy = curv_part_sq @ x_prime_sq
+    P_xy = curv_part_sq @ x_prime_y_prime
+
+    T_nx = T_c @ M_x
+    T_ny = T_c @ M_y
+
+    H = T_nx.T @ P_xx @ T_nx + T_ny.T @ P_xy @ T_nx + T_ny.T @ P_yy @ T_ny
+    H = (H + H.T) / 2
+    f = (2 * (q_x.T @ T_c.T) @ (P_xx @ T_nx)
+         + (q_x.T @ T_c.T) @ (P_xy @ T_ny) + (q_y.T @ T_c.T) @ (P_xy @ T_nx)
+         + 2 * (q_y.T @ T_c.T) @ (P_yy @ T_ny))
+    f = np.squeeze(f)
+
+    Q_x = curv_part @ y_prime
+    Q_y = curv_part @ x_prime
+    E_kappa = Q_y @ T_ny - Q_x @ T_nx
+    k_kappa_ref = np.squeeze(Q_y @ (T_c @ q_y) - Q_x @ (T_c @ q_x))
+    return H, f, E_kappa, k_kappa_ref
+
+
+def opt_min_curv_dkappa(reftrack, normvectors, A, kappa_bound, w_veh,
+                        dk_bound, ds, steps):
+    """Min-curvature QP with a bound on the curvature RATE along the path.
+
+    Why this exists: min-curvature bounds the integral of kappa and the QP is
+    free to spend it wherever it likes, so the solution can and does step from
+    a straight into a hairpin in a couple of points. The car cannot. The
+    steering actuator slews at 3.2 rad/s behind 0.135 s of dead time and holds
+    each command for ~0.09-0.10 s, so at 4.5 m/s it gets one command per 0.45 m
+    of track; a kappa ramp of 0.7 1/m over one metre asks for ~0.22 rad of
+    steering inside ~0.2 s. Every collision measured at the fast sensor rate is
+    at exactly such a ramp (Porto hairpin entry, s ~ 11.3, max d(kappa)/ds
+    1.4-1.7 1/m2).
+
+    `--alpha-smooth` only attacks this indirectly -- it smooths the SHIFT, not
+    the curvature, and a smooth shift on a curved reference still produces a
+    curvature step. This is the direct statement: with
+
+        kappa(alpha) = E_kappa @ alpha + k_kappa_ref     (the QP's own
+                                                          linearization)
+
+    the constraint |kappa_{i+1} - kappa_i| <= dk_bound * ds_i is linear in
+    alpha and goes straight into the same inequality block as the corridor and
+    the kappa bound.
+
+    It is a bound on the LINEARIZED curvature at the ~0.14 m reference points,
+    not on the finished 0.10 m line, so the caller iterates (see the
+    `--dkappa-max` outer loop in main).
+    """
+    import quadprog
+
+    n = reftrack.shape[0]
+    H, f, E_kappa, k_kappa_ref = min_curv_matrices(reftrack, normvectors, A)
+
+    dev_max_right = reftrack[:, 2] - w_veh / 2
+    dev_max_left = reftrack[:, 3] - w_veh / 2
+    if np.any(-dev_max_right > dev_max_left) or np.any(-dev_max_left > dev_max_right):
+        raise RuntimeError('Problem not solvable, track might be too small to '
+                           'run with current safety distance!')
+
+    con_ge = kappa_bound - k_kappa_ref
+    con_le = kappa_bound + k_kappa_ref
+
+    # circular curvature difference over each window in the band, per metre
+    rows, rhs = [np.eye(n), -np.eye(n), E_kappa, -E_kappa], \
+                [dev_max_right, dev_max_left, con_ge, con_le]
+    ds_mean = float(np.mean(ds))
+    for m in steps:
+        S = np.roll(np.eye(n), -m, axis=0) - np.eye(n)
+        E_d = (S @ E_kappa) / (m * ds_mean)
+        k_d = (S @ k_kappa_ref) / (m * ds_mean)
+        rows += [E_d, -E_d]
+        rhs += [dk_bound - k_d, dk_bound + k_d]
+    return quadprog.solve_qp(H, -f, -np.vstack(rows).T,
+                             -np.concatenate(rhs), 0)[0]
+
+
+def smooth_alpha(alpha, win, corridor):
+    """Circular boxcar on the lateral shift, projected back into `corridor`.
+
+    Factored out of main() unchanged so the --dkappa-max outer loop can measure
+    the line the smoothing actually produces. `corridor` is (lo, hi) or None
+    (centerline-only, or the default window, which is left unprojected exactly
+    as before).
+    """
+    kern = np.ones(win) / win
+    alpha = np.convolve(np.concatenate([alpha[-win:], alpha, alpha[:win]]),
+                        kern, mode='same')[win:-win]
+    if win != 5 and corridor is not None:
+        lo, hi = corridor
+        k3 = np.ones(3) / 3.0
+        for _ in range(8):
+            alpha = np.clip(alpha, lo, hi)
+            alpha = np.convolve(np.concatenate([alpha[-3:], alpha, alpha[:3]]),
+                                k3, mode='same')[3:-3]
+        alpha = np.clip(alpha, lo, hi)
+    return alpha
+
+
+def line_kappa(reftrack, normvec, alpha, stepsize):
+    """Curvature of the finished line, exactly as main() computes it.
+
+    Returns (kappa, el_lengths, s, max |d(kappa)/ds|). This is the number the
+    curvature-rate work is judged on: the median-filtered analytic curvature of
+    the 0.10 m resample, not the QP's linearization at the reference points.
+    """
+    raceline, _, cx, cy, inds, tv, s_race, _, el = \
+        tph.create_raceline.create_raceline(
+            refline=reftrack[:, :2], normvectors=normvec, alpha=alpha,
+            stepsize_interp=stepsize)
+    _, kap = tph.calc_head_curv_an.calc_head_curv_an(
+        coeffs_x=cx, coeffs_y=cy, ind_spls=inds, t_spls=tv)
+    kap = ndimage.median_filter(kap, size=5, mode='wrap')
+    dk = np.abs(np.diff(np.append(kap, kap[0]))) / np.maximum(el, 1e-6)
+    return kap, el, s_race[:len(kap)], float(dk.max())
+
+
+def line_rate(reftrack, normvec, alpha, args):
+    """(windowed rate, raw per-sample rate) of the finished line."""
+    kap, el, s, raw = line_kappa(reftrack, normvec, alpha, args.stepsize)
+    ds = float(np.mean(el))
+    steps = window_steps(ds, args.dkappa_window_min, args.dkappa_window)
+    got, _ = rate_metric(kap, ds, steps)
+    return got, raw, kap, el, s, steps, ds
+
+
+def fine_jacobian(E_kappa, n_fine):
+    """dkappa/dalpha at the 0.10 m samples, interpolated from the QP's rows.
+
+    E_kappa is the Jacobian at the ~0.14 m reference points. The finished line
+    is resampled at 0.10 m, and the rate metric lives there, so the refinement
+    needs the same Jacobian on the fine grid. Curvature sensitivity varies
+    smoothly between neighbouring reference points, so linear interpolation of
+    the rows is enough for a Gauss-Newton step whose residual is MEASURED
+    exactly each iteration.
+    """
+    n = E_kappa.shape[0]
+    pos = np.linspace(0.0, n, n_fine, endpoint=False)
+    i0 = np.floor(pos).astype(int) % n
+    w = (pos - np.floor(pos))[:, None]
+    return (1.0 - w) * E_kappa[i0] + w * E_kappa[(i0 + 1) % n]
+
+
+def slew_limit_kappa(kap, ds, lim, rounds=60):
+    """The nearest curvature profile whose rate stays inside `lim`.
+
+    Shares the neighbours' excess equally instead of pushing one of them, so a
+    ramp is spread rather than shifted: the result is the profile the line
+    should have, which is what the refinement least-squares fits towards. It is
+    not itself geometrically realizable -- the corridor and the spline decide
+    how much of it can be reached.
+    """
+    k = np.asarray(kap, dtype=float).copy()
+    n = len(k)
+    for _ in range(rounds):
+        changed = False
+        for i in range(n):
+            j = (i + 1) % n
+            d = k[j] - k[i]
+            if abs(d) > lim * ds:
+                ex = (abs(d) - lim * ds) / 2.0 * np.sign(d)
+                k[i] += ex
+                k[j] -= ex
+                changed = True
+        if not changed:
+            break
+    return k
+
+
+def refine_dkappa(reftrack, normvec, E_kappa, alpha, corridor, target, args):
+    """Bend the FINISHED line towards a rate-limited curvature profile.
+
+    Why a second stage exists: the constraint inside the QP is exact only for
+    the LINEARIZED curvature at the 0.14 m reference points, and the pipeline
+    then resamples the spline at 0.10 m, median-filters it and (at
+    --alpha-smooth 11) moves the shift again. Measured on Porto: asking the QP
+    for 1.0 1/m2 left the finished line at 1.6-2.1, and tightening the in-QP
+    bound reaches infeasibility long before the line is smooth.
+
+    Two things were tried here. Asking for the minimum-norm correction that
+    satisfies the rate as an INEQUALITY does not work: the Jacobian from
+    curvature to lateral shift is stiff (a 0.6 mm shift moves the measured rate
+    by 1.0 1/m2), so the QP returns a high-frequency correction that the spline
+    cannot express and the true metric wanders instead of falling.
+
+    What works is fitting a TARGET: slew-limit the measured curvature, then ask
+    for the smoothest corridor-legal shift whose linearized curvature change
+    moves towards it, and accept a scaled step only if the MEASURED rate
+    actually improves. Measured on Porto's w_veh 0.63 line, windowed rate
+    1.155 -> 1.00 / 0.78 / 0.60 for targets 1.0 / 0.8 / 0.6, peak |kappa|
+    unchanged at 0.83 and lateral shifts of a few millimetres. Below ~0.6 the
+    corridor stops it (target 0.45 floors at 0.61).
+    """
+    import quadprog
+
+    lo, hi = corridor
+    n = len(alpha)
+    tr = args.dkappa_step
+    D2 = (np.roll(np.eye(n), -1, axis=0) - 2 * np.eye(n)
+          + np.roll(np.eye(n), 1, axis=0))
+    reg = args.dkappa_reg * np.eye(n) + args.dkappa_smooth_reg * (D2.T @ D2)
+    best = None
+    for it in range(max(1, args.dkappa_refine)):
+        got, raw, kap, el, s, steps, ds = line_rate(reftrack, normvec, alpha,
+                                                    args)
+        if best is None or got < best[0]:
+            best = (got, alpha.copy(), raw)
+        if got <= target * 1.02:
+            break
+        # aim slightly under the target: the fit only ever gets part of the way
+        k_t = slew_limit_kappa(kap, ds, target * 0.9)
+        E_f = fine_jacobian(E_kappa, len(kap))
+        H = E_f.T @ E_f + reg
+        f = E_f.T @ (k_t - kap)
+        G = np.vstack((np.eye(n), -np.eye(n)))
+        h = np.concatenate((np.minimum(hi - alpha, tr),
+                            np.minimum(alpha - lo, tr)))
+        try:
+            da = quadprog.solve_qp(H, f, -G.T, -h, 0)[0]
+        except ValueError as e:
+            print(f'  dkappa refine {it + 1}: step QP failed ({e})')
+            break
+        step_best = None
+        for sc in (0.25, 0.5, 1.0, 1.5, 2.0):
+            cand = np.clip(alpha + sc * da, lo, hi)
+            g2 = line_rate(reftrack, normvec, cand, args)[0]
+            if step_best is None or g2 < step_best[0]:
+                step_best = (g2, cand)
+        if step_best[0] >= got - 1e-4:
+            break                      # the corridor, not the solver, is the wall
+        alpha = step_best[1]
+    got, raw, *_ = line_rate(reftrack, normvec, alpha, args)
+    if got < best[0]:
+        best = (got, alpha.copy(), raw)
+    return best[1], best[0], best[2]
+
+
+def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
+    """Optimize / measure body sweep / shrink the corridor / re-optimize.
+
+    One pass with a constant w_veh cannot express this because the sweep
+    depends on the solution's own curvature.
+    """
+    work = reftrack.copy()
+    alpha = None
+    ds = np.linalg.norm(np.diff(np.vstack([reftrack[:, :2],
+                                           reftrack[:1, :2]]), axis=0), axis=1)
+    for it in range(args.sweep_iters):
+        if dk_bound is None:
+            alpha = tph.opt_min_curv.opt_min_curv(
+                reftrack=work, normvectors=normvec, A=M,
+                kappa_bound=args.kappa_bound, w_veh=args.w_veh,
+                closed=True, print_debug=False)[0]
+        else:
+            steps = window_steps(float(np.mean(ds)), args.dkappa_window_min,
+                                 args.dkappa_window)
+            alpha = opt_min_curv_dkappa(work, normvec, M, args.kappa_bound,
+                                        args.w_veh, dk_bound, ds, steps)
+        k_ref = curvature_of(work, normvec, alpha, args.stepsize)
+        sweep = corner_sweep(k_ref)
+        # `sweep` already includes the body half-width, so the usable
+        # half-corridor for the *path* is the wall distance minus it.
+        keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
+        shrink = float(np.mean(reftrack[:, 2:4] - keep))
+        work = np.column_stack([reftrack[:, :2], keep])
+        if not quiet:
+            print(f'  sweep pass {it+1}: corridor shrunk by {shrink:.3f} m '
+                  f'(max sweep {sweep.max():.3f} m)')
+    return alpha, work
+
+
+def solve_dkappa(reftrack, normvec, M, args):
+    """The --dkappa-max pipeline: constrained QP, then measured refinement.
+
+    Stage 1 is the min-curvature QP with the curvature-rate rows in it
+    (`opt_min_curv_dkappa`), which gets the shape roughly right and keeps the
+    constraint where it belongs. Stage 2 (`refine_dkappa`) is what actually
+    delivers the bound, because the QP only ever sees its own linearization.
+    Both respect the corridor the body-sweep passes left.
+
+    Returns the SMOOTHED alpha -- the refinement works on the finished line, so
+    re-smoothing afterwards would undo part of the answer.
+    """
+    target = args.dkappa_max
+    alpha = work = None
+    # The in-QP rate rows are OFF by default and this is measured, not taste:
+    # they bound the linearization at the reference points, and on Porto the
+    # finished lines they produce are worse on every axis than refining the
+    # plain min-curvature solution (at target 1.0: peak |kappa| 1.02 against
+    # 0.83, windowed rate 1.43 against 1.00). They are kept because on a track
+    # whose corridor forces the shape they are the only way to state the bound
+    # before the shape is chosen.
+    for ask in ((target, 1.5 * target, 2.5 * target, None)
+                if args.dkappa_in_qp else (None,)):
+        if ask is None:
+            alpha, work = sweep_solve(reftrack, normvec, M, args)
+            if args.dkappa_in_qp:
+                print('  dkappa stage 1: no feasible in-QP bound; refining '
+                      'the plain min-curvature solution')
+            break
+        try:
+            alpha, work = sweep_solve(reftrack, normvec, M, args, ask,
+                                      quiet=True)
+            print(f'  dkappa stage 1: in-QP rate bound {ask:.2f} 1/m2 solved')
+            break
+        except (ValueError, RuntimeError):
+            continue
+
+    alpha = smooth_alpha(alpha, args.alpha_smooth, (-work[:, 2], work[:, 3]))
+    before, raw0, *_ = line_rate(reftrack, normvec, alpha, args)
+    _, _, E_kappa, _ = min_curv_matrices(work, normvec, M)
+    alpha, got, raw = refine_dkappa(reftrack, normvec, E_kappa, alpha,
+                                    (-work[:, 2], work[:, 3]), target, args)
+    note = '' if got <= target * 1.02 else '  *** TARGET NOT MET ***'
+    print(f'curvature-rate limit {target:.2f} 1/m2 over '
+          f'{args.dkappa_window_min:.2f}-{args.dkappa_window:.2f} m windows: '
+          f'{before:.3f} -> {got:.3f} 1/m2 (raw per-sample {raw0:.2f} -> '
+          f'{raw:.2f}){note}')
+    return alpha, work
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('centerline')
@@ -283,6 +696,52 @@ def main():
                          'on Porto\'s mesh skeleton line against 1.7 on the '
                          'shipping safe line. Above 5 the smoothed shift is '
                          'clipped back inside the corridor the QP solved.')
+    ap.add_argument('--dkappa-max', type=float, default=None, metavar='K',
+                    help='cap how fast curvature may change along the line, '
+                         'in 1/m2, as a hard linear constraint inside the '
+                         'min-curvature QP (opt-in; off by default, and the '
+                         'shipping lines are byte-identical without it). The '
+                         'steering actuator slews at 3.2 rad/s behind 0.135 s '
+                         'of dead time and holds a command for ~0.09-0.10 s, '
+                         'so at 4.5 m/s the car gets one command per 0.45 m: a '
+                         'kappa ramp of 0.7 over a metre asks for 0.22 rad in '
+                         '0.2 s. Porto\'s shipping line peaks at 1.4-1.7 1/m2 '
+                         'and that peak is where every fast-rate collision is. '
+                         'Ignored with --centerline-only (there is no lateral '
+                         'freedom to spend).')
+    ap.add_argument('--dkappa-refine', type=int, default=25,
+                    help='Gauss-Newton passes that pull the FINISHED line '
+                         'under --dkappa-max. The in-QP bound only holds for '
+                         'the linearized curvature at the reference points; '
+                         'each pass here measures the real 0.10 m line and '
+                         'asks for the smallest corridor-legal correction '
+                         'that fixes the remaining violations.')
+    ap.add_argument('--dkappa-window', type=float, default=0.50, metavar='M',
+                    help='longest window the rate bound is applied over. 0.50 '
+                         'is one steering command at hairpin-entry speed '
+                         '(commands are held ~0.09-0.10 s, 4.5 m/s).')
+    ap.add_argument('--dkappa-window-min', type=float, default=0.20,
+                    metavar='M',
+                    help='shortest window the rate bound is applied over. '
+                         'Below ~0.2 m the measured rate is dominated by the '
+                         'spline-knot wobble and the median filter\'s '
+                         'staircase, not by the line: a 0.6 mm change of the '
+                         'lateral shift moves it by 1.0 1/m2.')
+    ap.add_argument('--dkappa-step', type=float, default=0.05, metavar='M',
+                    help='trust region on one refinement pass, in metres of '
+                         'lateral shift.')
+    ap.add_argument('--dkappa-reg', type=float, default=1e-4,
+                    help='ridge on the refinement step, metres^-2.')
+    ap.add_argument('--dkappa-smooth-reg', type=float, default=1e-3,
+                    help='penalty on the second difference of the refinement '
+                         'step, which is what keeps it inside what the spline '
+                         'can actually express.')
+    ap.add_argument('--dkappa-in-qp', action='store_true',
+                    help='also put the rate bound in the min-curvature QP as '
+                         'a linear constraint on the linearized curvature at '
+                         'the reference points. Off by default: measured on '
+                         'Porto it makes the FINISHED line worse than refining '
+                         'the plain min-curvature solution.')
     ap.add_argument('--stepsize', type=float, default=0.10)
     ap.add_argument('--sweep-iters', type=int, default=2,
                     help='corridor shrink / re-optimize passes for body sweep')
@@ -307,6 +766,7 @@ def main():
     coeffs_x, coeffs_y, M, normvec = tph.calc_splines.calc_splines(
         path=refline_cl, use_dist_scaling=False)
 
+    presmoothed = False
     if args.centerline_only:
         alpha = np.zeros(len(reftrack))
         print('centerline-only: no lateral shift')
@@ -324,55 +784,26 @@ def main():
             alpha = np.clip(alpha, -reftrack[:, 3] + 0.05, reftrack[:, 2] - 0.05)
             print(f'inside bias up to {args.inside_bias:.2f} m at |kappa| >= '
                   f'{args.bias_kappa:.2f}: max shift {np.abs(alpha).max():.3f} m')
+    elif args.dkappa_max is not None:
+        alpha, work = solve_dkappa(reftrack, normvec, M, args)
+        presmoothed = True
     else:
-        # Iterate: optimize, measure how far the body sweeps at the resulting
-        # curvature, shrink the corridor by that, re-optimize. One pass with a
-        # constant w_veh cannot express this because the sweep depends on the
-        # solution's own curvature.
-        work = reftrack.copy()
-        alpha = None
-        for it in range(args.sweep_iters):
-            alpha = tph.opt_min_curv.opt_min_curv(
-                reftrack=work, normvectors=normvec, A=M,
-                kappa_bound=args.kappa_bound, w_veh=args.w_veh,
-                closed=True, print_debug=False)[0]
-            k_ref = curvature_of(work, normvec, alpha, args.stepsize)
-            sweep = corner_sweep(k_ref)
-            # `sweep` already includes the body half-width, so the usable
-            # half-corridor for the *path* is the wall distance minus it.
-            keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
-            shrink = float(np.mean(reftrack[:, 2:4] - keep))
-            work = np.column_stack([reftrack[:, :2], keep])
-            print(f'  sweep pass {it+1}: corridor shrunk by {shrink:.3f} m '
-                  f'(max sweep {sweep.max():.3f} m)')
+        alpha, work = sweep_solve(reftrack, normvec, M, args)
 
     # Light circular smoothing of the lateral shift: isolated single-point
     # solutions show up as curvature spikes that crater the velocity profile.
+    #
+    # A wider window moves the solution further, so a wider window stops
+    # trusting the measured-zero-violations result the default window earns
+    # and makes the corridor a hard constraint again -- see `smooth_alpha`,
+    # which is this code, factored out so the --dkappa-max outer loop can
+    # measure what the smoothing actually produces.
     win = args.alpha_smooth
-    kern = np.ones(win) / win
     alpha_raw = alpha.copy()
-    alpha = np.convolve(np.concatenate([alpha[-win:], alpha, alpha[:win]]),
-                        kern, mode='same')[win:-win]
-    if win != 5 and not args.centerline_only:
-        # A wider window moves the solution further, so stop trusting the
-        # measured-zero-violations result the default window earns and make
-        # the corridor a hard constraint again.
-        #
-        # A single hard clip is not enough: where the constraint is active
-        # over a stretch -- large --w-veh on a narrow track -- it truncates
-        # the smoothed shift into a flat with corners, and the corners are
-        # curvature spikes far worse than the ones the smoothing was meant to
-        # remove (measured on Porto's mesh map at w_veh 0.60: max d(kappa)/ds
-        # 1.6 -> 6.4 1/m2, and at 0.66 -> 16.9). Alternate projection and a
-        # short re-smooth so the result is both inside the corridor and still
-        # differentiable, then project once more so feasibility is exact.
-        lo, hi = -work[:, 2], work[:, 3]
-        k3 = np.ones(3) / 3.0
-        for _ in range(8):
-            alpha = np.clip(alpha, lo, hi)
-            alpha = np.convolve(np.concatenate([alpha[-3:], alpha, alpha[:3]]),
-                                k3, mode='same')[3:-3]
-        alpha = np.clip(alpha, lo, hi)
+    if not presmoothed:
+        alpha = smooth_alpha(alpha, win,
+                             None if args.centerline_only
+                             else (-work[:, 2], work[:, 3]))
 
     # Smoothing a CONSTRAINED solution can push it back outside the constraint,
     # and nothing downstream re-checked that. Measured on Porto at w_veh 0.44:
