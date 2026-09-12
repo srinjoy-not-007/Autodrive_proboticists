@@ -135,6 +135,11 @@ class MPC3Tracker(Node):
             # the publish index to an integer plan knot.  Set 0.0 together with
             # `rate_adaptive`.
             ('apply_floor_steps', 1.0),
+            # OPT-IN, -1.0 = off: read the published angle at exactly
+            # `nd + apply_lead_steps` horizon steps, decoupling the readout
+            # lead from the committed-step count `nd`.  See
+            # `mpc3_core.DEFAULTS` for why (hairpin-entry turn-in).
+            ('apply_lead_steps', -1.0),
             # OPT-IN, and only meaningful together (see mpc3_core.DEFAULTS):
             # `rate_terms=...,delay_tick` puts `period + dead_tick_c` on the
             # actuator's dead time, and `nd_mode:=period` derives the committed
@@ -417,6 +422,7 @@ class MPC3Tracker(Node):
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             apply_floor_steps=v['apply_floor_steps'],
+            apply_lead_steps=v['apply_lead_steps'],
             nd_mode=v['nd_mode'], nd_delay_s=v['nd_delay_s'],
             dead_tick_c=v['dead_tick_c'],
             w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],

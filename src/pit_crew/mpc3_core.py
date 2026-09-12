@@ -139,6 +139,22 @@ DEFAULTS = dict(
     # (12-28% of samples at s 13-16, 0.0% in the 0.094 s 100-lap run).
     # Set 0.0 with `rate_adaptive` on; the rate clamp keeps the index off `nd`.
     apply_floor_steps=1.0,
+    # `apply_lead_steps` (OPT-IN, -1.0 = off, byte-identical when off).
+    # WHY it exists: `nd` does two unrelated jobs.  It is the number of horizon
+    # steps whose steering is already in flight (a property of the machine's
+    # dead time, and the rollout needs it right), and it is also the base of
+    # the index the published angle is READ AT, `nd + max(apply_floor_steps,
+    # apply_ahead_s/step_dt)`.  The readout is a phase LEAD on a ramping
+    # reference: on a hairpin entry the plan's angle one step further on is a
+    # tighter angle, so a lead longer than the true pose-to-rack delay turns in
+    # early and the car settles INSIDE the line (measured: CDC-TF s 36-39.5,
+    # Porto s 8-11).  Shortening it via `delay_s` also corrupts `nd`; this
+    # parameter moves the readout ALONE.  When >= 0 the publish index is
+    # exactly `nd + apply_lead_steps` (in horizon steps, fractional allowed),
+    # `apply_floor_steps` and `apply_ahead_s` are both unread, and so is
+    # `rate_adaptive`'s `apply` term -- every other rate term still applies.
+    # -1.0 keeps the shipping readout untouched.
+    apply_lead_steps=-1.0,
     # measured lateral model ------------------------------------------------
     yaw_gain=0.956,           # measured yaw rate / (v tan(delta)/L)
     ay_deliver=9.5,           # asked curvature above this/v^2 is not delivered
@@ -1591,6 +1607,9 @@ class MPC3:
                     break
                 acc += dsj
             _f = max(_f, nd + float(c['apply_floor_steps']))
+        elif float(c['apply_lead_steps']) >= 0.0:
+            # OPT-IN: the readout lead, decoupled from `nd` (see DEFAULTS).
+            _f = nd + float(c['apply_lead_steps'])
         else:
             _f = nd + max(float(c['apply_floor_steps']),
                           float(c['apply_ahead_s']) / self.dt)

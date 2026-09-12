@@ -427,7 +427,8 @@ class MPC3Sim:
                        'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
                        'thr_lead_s', 'thr_lead_mode', 'thr_source',
                        'thr_brake_lead_s', 'thr_enc_tau', 'delay_s',
-                       'apply_ahead_s', 'apply_floor_steps', 'steer_rate',
+                       'apply_ahead_s', 'apply_floor_steps', 'apply_lead_steps',
+                       'steer_rate',
                        'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'nd_mode', 'nd_delay_s', 'dead_tick_c')
