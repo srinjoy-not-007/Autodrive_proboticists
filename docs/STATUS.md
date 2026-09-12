@@ -111,6 +111,18 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   lever is the line's lateral position at converging gates, not speed.
   An uncounted lap costs ~one lap time (10 s): weight it like a
   collision. Agent implementing the occupancy metric + constraint.
+- Gate-separation constraint built (committed): measured off the line
+  geometry, fast3_m53 has 0.388 m between gates 19 and 20 and straddles
+  two boxes 271 ms/lap; the safe line 0.558 m / 97 ms; Porto 0.96 m,
+  ICRA 2026 1.61, ICRA 2025 fast2 1.05 (all occupancy 1). On CDC-TF every
+  width-using line that satisfies the constraint fails the kappa gate,
+  so **CDC-TF ships its safe line** (the fast line's 9 s/race vs a 3%/lap
+  chance of a ~10 s uncounted lap: the drill now refuses it). Floor set
+  to 0.55 m (0.60 would condemn the safe line). Two tool bugs found:
+  corridor_of is mirrored vs tph's alpha sign (one-sided bounds broke;
+  --min-halfwidth's QP restatement is affected, explains "0.53 asked,
+  0.443 held"), and a 0.05 m keep-floor discarded half of one-sided
+  bounds. Open: the mirror fix.
 - steer_tau x barrier sweep (7488 harness laps): tau 0.02 keeps 88% of
   the tight-track gain and 0.03 keeps 95% while Porto's worst clearance
   goes 0.000 (tau 0.04, bm 0.34) -> 0.075 (0.03, bm 0.40) -> 0.103 (0.02,
