@@ -2,14 +2,72 @@
 """Score actual simulator lap transitions; never infer race success from geometry.
 
 One warm-up, ten consecutive scored laps, +10 seconds per scored collision.
-CSV sampling timestamps approximate crossing times to one sensor update; official
-simulator timing remains authoritative. Logs must begin before warm-up ends.
-The optional legacy centerline argument is accepted but never used for scoring.
+Three lap-time sources are reported, most authoritative first:
+
+* **official** -- the sequence of `last_lap_time` values the simulator latches at
+  each line crossing. This is exactly what the organisers' Foxglove
+  `race_time` / `adjusted_race_time` scripts accumulate, so it carries no
+  sampling error at all. Needs a log written by a `race_logger` new enough to
+  record the column.
+* **sim-timer estimate** -- the running `lap_time` on the last sample before a
+  transition: the same clock, but read up to one sensor period early.
+* **sample clock** -- differences of our own CSV timestamps, subject to logger
+  jitter on both ends.
+
+Logs must begin before warm-up ends. The optional legacy centerline argument is
+accepted but never used for scoring.
 """
 
 import argparse
 import csv
 import math
+
+
+def _official_lap_times(rows, laps_wanted):
+    """Per-lap times as the simulator itself latched them, or None.
+
+    `laps_wanted` is the `lap_count` value reached at each crossing of interest,
+    in order; the value latched into `last_lap_time` just after the counter
+    reaches L is lap L's official duration -- the same convention the running
+    `lap_time` estimate below uses.
+
+    `lap_count` and `last_lap_time` ride the same ~10 Hz bridge cycle but land
+    in separate callbacks, so the latch may be recorded one row either side of
+    the counter step; each lap's search window therefore starts one row early
+    and a value is accepted only once it differs from the previous lap's. A
+    dropped or never-published latch yields None so the caller falls back
+    rather than mis-attributing a lap.
+    """
+    if not rows or 'last_lap_time' not in rows[0]:
+        return None
+    try:
+        values = [float(r['last_lap_time']) for r in rows]
+        counts = [int(r['lap_count']) for r in rows]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(v) for v in values):
+        return None
+    first_row_of = {}
+    for i in range(1, len(rows)):
+        if counts[i] != counts[i - 1]:
+            first_row_of.setdefault(counts[i], i)
+    out = []
+    previous = None
+    for lap in laps_wanted:
+        if lap not in first_row_of:
+            return None
+        start = max(0, first_row_of[lap] - 1)
+        stop = first_row_of.get(lap + 1, len(rows))
+        found = None
+        for k in range(start, max(stop, start + 1)):
+            if values[k] > 0.0 and values[k] != previous:
+                found = values[k]
+                break
+        if found is None:
+            return None
+        out.append(found)
+        previous = found
+    return out
 
 
 def score_rows(rows, n_scored=10):
@@ -57,10 +115,18 @@ def score_rows(rows, n_scored=10):
                 sim_laps = None
         except (KeyError, ValueError):
             sim_laps = None
+    official_laps = _official_lap_times(rows, [c[1] for c in selected])
+    if official_laps is not None:
+        # The first entry belongs to the warm-up lap; it only seeds the
+        # "differs from the previous lap" test.
+        official_laps = official_laps[1:]
     collisions = selected[-1][2] - selected[0][2]
     elapsed = selected[-1][0] - selected[0][0]
     return dict(laps=laps, collisions=collisions, elapsed=elapsed,
                 race_time=elapsed + 10.0 * collisions, sim_laps=sim_laps,
+                official_laps=official_laps,
+                official_race_time=(None if official_laps is None
+                                    else sum(official_laps) + 10.0 * collisions),
                 passed=collisions <= 10, start=selected[0][0], end=selected[-1][0])
 
 
@@ -76,15 +142,25 @@ def main():
     except (ValueError, KeyError, OSError) as exc:
         print(f'UNVERIFIED: {exc}')
         return 1
-    print('Scored laps: ' + ', '.join(f'{t:.3f}' for t in result['laps']))
-    print(f"Elapsed {result['elapsed']:.3f} s; scored collisions "
-          f"{result['collisions']}; race {result['race_time']:.3f} s; "
-          f"best {min(result['laps']):.3f} s")
+    penalty = 10.0 * result['collisions']
+    if result['official_laps']:
+        ol = result['official_laps']
+        print('OFFICIAL (simulator last_lap_time) laps: '
+              + ', '.join(f'{t:.3f}' for t in ol))
+        print(f"OFFICIAL race {sum(ol):.3f} s + {penalty:.0f} s penalties = "
+              f"{result['official_race_time']:.3f} s; best {min(ol):.3f} s")
+    else:
+        print('OFFICIAL race time unavailable: log has no usable '
+              'last_lap_time column (pre-2026-09-12 logger)')
     if result['sim_laps']:
         sl = result['sim_laps']
-        print(f"Simulator lap timer: {sum(sl):.3f} s + penalties = "
-              f"{sum(sl) + 10.0 * result['collisions']:.3f} s; "
+        print(f"Sim-timer estimate: {sum(sl):.3f} s + penalties = "
+              f"{sum(sl) + penalty:.3f} s; "
               f"best {min(sl):.3f} s; laps " + ', '.join(f'{t:.2f}' for t in sl))
+    print('Sample-clock laps: ' + ', '.join(f'{t:.3f}' for t in result['laps']))
+    print(f"Sample-clock elapsed {result['elapsed']:.3f} s; scored collisions "
+          f"{result['collisions']}; race {result['race_time']:.3f} s; "
+          f"best {min(result['laps']):.3f} s")
     print('PASS' if result['passed'] else 'DISQUALIFIED')
     return 0 if result['passed'] else 1
 

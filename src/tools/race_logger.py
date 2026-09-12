@@ -31,9 +31,11 @@ class RaceLogger(Node):
         self.csv = csv.writer(self.f)
         self.csv.writerow(['t', 'x', 'y', 'speed', 'steering', 'throttle',
                            'lap_count', 'lap_time', 'collision_count',
-                           'collision_event', 'px', 'py', 'pyaw', 'cte'])
+                           'collision_event', 'px', 'py', 'pyaw', 'cte',
+                           'last_lap_time', 'best_lap_time'])
         self.state = {'x': None, 'y': None, 'speed': 0.0, 'steering': 0.0,
                       'throttle': 0.0, 'lap_count': 0, 'lap_time': 0.0,
+                      'last_lap_time': 0.0, 'best_lap_time': 0.0,
                       'collision_count': 0, 'px': float('nan'),
                       'py': float('nan'), 'pyaw': float('nan'), 'cte': float('nan')}
         self._enc_last = None
@@ -51,6 +53,14 @@ class RaceLogger(Node):
                                  lambda m: self.state.update(lap_count=m.data), qos)
         self.create_subscription(Float32, f'{ns}/lap_time',
                                  lambda m: self.state.update(lap_time=m.data), qos)
+        # The official score is the sum of the simulator's own per-lap times:
+        # `last_lap_time` latches the completed lap's duration at each crossing
+        # (see the devkit bridge's publish_last_lap_time_data), which is what
+        # the organisers' Foxglove race_time script accumulates.
+        self.create_subscription(Float32, f'{ns}/last_lap_time',
+                                 lambda m: self.state.update(last_lap_time=m.data), qos)
+        self.create_subscription(Float32, f'{ns}/best_lap_time',
+                                 lambda m: self.state.update(best_lap_time=m.data), qos)
         self.create_subscription(Int32, f'{ns}/collision_count', self.on_col, qos)
         # Localization estimate (evaluation only): lets a log show estimate
         # vs IPS truth, e.g. whether the hairpin inside cut is a pose bias.
@@ -101,7 +111,8 @@ class RaceLogger(Node):
                            f"{s['speed']:.3f}", f"{s['steering']:.3f}",
                            f"{s['throttle']:.3f}", s['lap_count'],
                            f"{s['lap_time']:.2f}", s['collision_count'],
-                           collision_event, s['px'], s['py'], s['pyaw'], s['cte']])
+                           collision_event, s['px'], s['py'], s['pyaw'], s['cte'],
+                           f"{s['last_lap_time']:.3f}", f"{s['best_lap_time']:.3f}"])
 
     def destroy_node(self):
         self.f.flush()
