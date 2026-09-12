@@ -358,6 +358,28 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Lap-time budget on the finals candidate (Sept 12, display log
+083832, 32 laps, median 6.944):** the car beats its own ideal lap
+(7.036) by 0.096 s by driving 0.857 m LESS track (every segment's median
+lateral is inside the line; hairpin -0.45 m of path), while losing
++0.161 s longitudinally: below plan on every acceleration phase (the
+plant's drive ceiling is ~4.2-4.7 m/s2 against the profile's ax 6.5;
+throttle never negative, setpoint == plan speed) and at the apex
+(driven kappa 1.05 vs planned 0.80 at achieved |ay| p95 7.05: on the
+grip limit on a tighter radius). Braking is weak (-2.4..-3.3 sustained
+vs plan -4.0), so the car carries +0.2..+0.4 m/s into the hairpin
+entry. Rate comparison: the display's 0.1-0.16 s advantage over Xvfb is
+ALL the geo term (path -0.86 vs -0.41 m); the longitudinal loss is
+rate-invariant. Of the plan-side gap to 6.46 s, ~90% is the lateral cap
+(ay 9.0 alone: 7.036 -> 6.352) and ~10% longitudinal; geometry
+contributes nothing (line family spans 0.06 s). Live transfer of ay
+6.75 -> 7.0 measured: 0.017 of the 0.095 s ideal (18%). brake 5-6 is
+worth 0.01 s and unreachable. Levers, all small (estimates): servo_k_p
+1.0 + head_max 0.25 (0.02-0.03 s/lap); the ay 7.0 profile on the
+identical geometry (fast_dk0.6_w0.63_ay7.0, 0.01-0.02); the 0.17 m
+shorter fast_w0.57 (0.02-0.04, but the car already runs to 0.09 m body
+clearance at 0.058). The remaining ~0.4 s is envelope.
+
 **Barrier mechanism (Sept 12, offline, 2304 harness laps):** the
 barrier is a corner-ENTRY bias: at the hairpin apex 99% of solves sit at
 the ay_limit steering cap (0.161 rad) and the published command is
