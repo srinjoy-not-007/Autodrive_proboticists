@@ -12,6 +12,22 @@ start the race, drive **12 laps** (warm-up, 10 scored, cool-down), sum the
 **simulator's own lap timer**, add **+10 s per collision**, and **more than 10
 collisions is a DQ**.
 
+**Ultra graphics is not cosmetic — it sets the sensor rate, and mpc3 is
+rate-sensitive.** The whole stack sees the world at whatever period the
+simulator's bridge delivers, and that period depends on graphics quality and on
+how busy the host is. Measured on this host (Xvfb): Low 11.05 Hz, Ultra
+10.64 Hz; the logger's own per-lap period is 0.088-0.091 s at Low and
+0.102-0.105 s at Ultra. mpc3 is **clean at ~0.104 s and collides at ~0.088 s**
+(faster arrival, later braking) — every "clean century" it has ever run was a
+9.6 Hz result. The organisers measured **~0.097 s** on their RTX 4090 at Ultra,
+i.e. between the clean and the colliding rate. So:
+
+* **Validate at Ultra.** Pass `SIM_QUALITY=ultra` to `run_exp.sh` /
+  `run_stanley.sh`; `test_submission_image.sh` already sets Ultra by default.
+* **Check the period on every scored run** (the `dt_p50` gate in step 5).
+* A run at the wrong rate is not evidence about the finals, in either
+  direction.
+
 Total wall clock for a clean pass through this runbook: **~4-6 h**, dominated by
 the 100-lap validation runs (step 5). Budget one full day.
 
@@ -26,6 +42,16 @@ git checkout -b finals     # qualification/promoted commit
 uptime                     # host must be quiet: run_exp.sh refuses load > 12
 docker ps                  # no leftover autodrive_* containers
 ```
+
+**Nothing else may run on this host while a scored run is in progress** — no
+offline line search, no second container, no build. This is not politeness: an
+offline search measurably drops the simulator's frame rate, which changes the
+sensor period, which changes what mpc3 does. `run_exp.sh` refuses above load 12,
+but load 12 is a backstop, not the gate; the real gate is `dt_p50` in step 5.
+The BLAS thread pin that keeps mpc3's own numpy from eating the host
+(`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1`, measured 1030 % CPU
+without it) is already in `submission/autodrive_devkit.sh` and in
+`scripts/run_stanley.sh` — nothing to set by hand, but do not remove it.
 
 Preserve the currently shipping image digest before touching anything. A
 validated image you can still push is the floor under the whole weekend.
@@ -158,33 +184,77 @@ overrides — **do not** for a scored run). **A scored run needs a quiet host.**
 A 150-lap re-run of a 0/100 config while three build agents computed took 9
 collisions. Any run taken under load is contaminated evidence; re-run it.
 
+**Every command in this step carries `SIM_QUALITY=ultra`.** It is a hook in
+`run_stanley.sh`: after the sim is connected it calls
+`scripts/sim_set_quality.sh ultra`, which clicks the simulator's quality button
+(the cycle Low -> High -> Ultra is verified). Omitting it validates at Low —
+about 11 Hz — which is the rate mpc3 collides at.
+
 Order of combos:
 
 **5.1 — mpc3 on the race line, only if the pipeline produced one that passed
 the kappa 1.0 gate** (~15 min for 32 laps):
 
 ```bash
-CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_race_probe race
 ```
 
 **5.2 — otherwise (or if 5.1 collides), mpc3 on the centerline/safe line:**
 
 ```bash
-CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_safe_probe safe
 ```
 
 **5.3 — 100-lap validation of whichever of 5.1/5.2 was clean** (~1 h):
 
 ```bash
-CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
   ./scripts/run_exp.sh finals_100 <race|safe>
+```
+
+**5.4 — the rate-proven fallback, run it too** (~15 min). The legacy tracker on
+the centerline is slower but has been clean at both rates, so it is the thing
+you ship if mpc3 cannot be made clean at Ultra:
+
+```bash
+SIM_QUALITY=ultra CONTROLLER=mpc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh finals_legacy_probe safe
 ```
 
 **Pass = 0 collisions over 100 laps on a quiet host.** 32 laps is a probe, not
 a pass: it cannot resolve a 1-3 %/lap collision rate (measured — 0.04
 `throttle_a_gain` was 0/32 and 8+/100).
+
+### 5A — The logger-period gate (mandatory on every scored run)
+
+Before a run counts as evidence, read the sensor period it was taken at:
+
+```bash
+.venv/bin/python tools/lap_report.py data/logs/race_<ts>.csv \
+    data/racelines/finals_mesh_<line>.csv data/maps/finals_mesh
+```
+
+The last column of the per-lap table is **`dt_p50`** — the median interval
+between distinct sensor poses in that lap (rows where the IPS pose did not
+change are dropped, so it measures the bridge, not the CSV writer). Read it per
+lap, not just the summary row: a run that starts at 0.104 and drifts to 0.090
+is a run something else started competing for the GPU part-way through.
+
+| `dt_p50` | Verdict |
+|---|---|
+| 0.102-0.106 s | The rate every clean mpc3 century was measured at. Valid evidence. |
+| ~0.097 s | The organisers' measured rate. The most valuable number to have, and the one nothing is yet proven at. |
+| 0.088-0.091 s | mpc3 collides here (3/10 laps, 11 collisions in 20 in the image run). **Discard the run as evidence about the finals** — but not as evidence about rate sensitivity. |
+| Varies by more than ~0.005 s across the laps of one run | Something else ran on the host. Contaminated; re-run. |
+
+If a run lands off Ultra's expected 0.102-0.105 s, the first suspects are
+`SIM_QUALITY=ultra` not having been passed (or its click having missed — the
+script prints a WARN and saves a label crop under `/tmp/sim_quality`) and
+another process on the host.
+
+### 5B — Scoring: use the OFFICIAL numbers
 
 Every run appends a row to `data/experiments.tsv` and prints
 `laps= coll= median= best= mean=` plus the `score_race.py` line. Score by hand
@@ -193,6 +263,76 @@ with:
 ```bash
 .venv/bin/python tools/score_race.py data/logs/race_<ts>.csv
 ```
+
+It reports one warm-up plus ten scored laps, +10 s per scored collision, from
+**three** clocks. Quote the first one; the others exist to cross-check it:
+
+| Line | What it is | Use |
+|---|---|---|
+| `OFFICIAL (simulator last_lap_time) laps: ...` / `OFFICIAL race ... s + N s penalties` | The values the simulator itself latches at each line crossing — exactly what the organisers' Foxglove `race_time` / `adjusted_race_time` accumulate. **No sampling error at all.** | **This is the score.** Report it, record it in `docs/STATUS.md`, compare configs on it. |
+| `Sim-timer estimate:` | The running `lap_time` read on the last sample *before* the transition — same clock, up to one sensor period early. | A sanity check on the official line, and the only sim-side number for a log from a logger too old to record `last_lap_time`. |
+| `Sample-clock laps:` / `Sample-clock elapsed` | Differences of our own CSV timestamps; jitter on both ends. | Diagnostics only. Never quote it as a race time. |
+
+`OFFICIAL race time unavailable` means the log predates the `last_lap_time`
+column — re-run rather than scoring a finals decision off the sample clock.
+`UNVERIFIED: ...` means the log cannot be certified at all (started after
+warm-up, a counter reset mid-log, a missing lap transition): fix the run, do not
+argue with the tool.
+
+### 5C — Controller decision table for the finals
+
+Take the **first** row whose condition holds, from the top:
+
+| # | Ship | Condition to be allowed to ship it |
+|---|---|---|
+| 1 | **mpc3 on the race line** (`finals_mesh_race.csv`) | The pipeline produced a race line that passed the `MESH_RACE_KAPPA_MAX` 1.0 gate in step 3a, **and** a 100-lap run at `SIM_QUALITY=ultra` on a quiet host was **0 collisions** with `dt_p50` in band. Both, not either. |
+| 2 | **mpc3 on the centerline/safe line** (`finals_mesh_safe.csv`) | The kappa gate rejected the race line, or the race line collided, and mpc3 on the safe line passed the same 100-lap Ultra gate. This is what ICRA-2026 ships (0/30 where the width-using line took 9 collisions in 30). |
+| 3 | **Legacy `mpc` on the centerline** (`PIT_CREW_CONTROLLER=mpc`) | Neither mpc3 configuration is clean at Ultra. Slower — 78.2-78.4 s on Porto against mpc3's ~73 s — but it is the **rate-proven** option: clean at 11 Hz (32 laps, 0 collisions) *and* at Ultra (32 laps, 0 collisions), where mpc3 at Ultra took 2 collisions in 100 laps. The entrypoint pairs `mpc` with the centerline automatically; **never pair `mpc` with the wide min-curvature line.** |
+
+A 2 %/lap mpc3 still beats a clean legacy on expected race time (~75 s against
+78.4 s), so row 3 is for "mpc3 is visibly unreliable at Ultra", not for "mpc3
+took one collision in 100". Decide on the Ultra numbers, with the collision
+rate and the +10 s penalty in front of you — and remember >10 collisions is a DQ.
+
+### 5D — Experimental knobs: `rate_adaptive` and ILC (do not ship blind)
+
+`src/pit_crew/mpc3.py` declares two opt-in mechanisms, both defaulting to
+**off**, and **neither validated live**:
+
+* **`rate_adaptive`** (with `rate_nominal`, `rate_window`, `rate_min_change`,
+  `rate_terms`) — the identified cause of the rate sensitivity. `apply_ahead_s`
+  was a constant 0.090 s, i.e. 0.87 of the 0.104 s period mpc3 was tuned at;
+  scaling it with the measured period is identity at 0.104 s and, **offline**,
+  reproduces and removes the 0.104 -> 0.088 s lateral-error rise (p50 0.075 ->
+  0.093 offline, 0.068 -> 0.093 live). The period is always measured; the flag
+  only decides whether the tracker acts on it.
+* **`ilc_enable`** (plus the `ilc_*` family; `ilc_v_enable` and `ilc_store` are
+  separately opt-in) — steering feedforward over 0.25 m bins, converging by lap
+  8-10 to p50 0.03 offline but costing 0.6-0.8 s/lap there. The speed-ceiling
+  table is a net loss in the harness and is off within the flag.
+
+**There is no `PIT_CREW_*` environment variable for either of these.** Nothing
+in `submission/autodrive_devkit.sh` maps env to mpc3 parameters; the entrypoint
+passes only `raceline_csv`, `speed_scale` and `map_prefix` (via `CTRL_ARGS`).
+Using one in the finals image therefore means **editing the entrypoint** to add
+an explicit `-p` to `start_ctrl`, e.g. appending to `CTRL_ARGS`:
+
+```bash
+CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true)
+```
+
+Test them the same way, with an explicit `-p` after the line argument:
+
+```bash
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh finals_rateadapt race -p rate_adaptive:=true
+```
+
+**Do not put either flag in the shipped image without its own clean 100-lap
+Ultra run**, scored the same way as every other row of the decision table. As of
+today their evidence is offline only, and the offline harness does not reproduce
+the live speed lag (0.5 m against the measured 1.45 m) that mpc3 was implicitly
+tuned around.
 
 If the race line collides, rebuild at a floor with evidence behind it
 (`--min-clearance 0.30`) and re-probe; if it still collides, race `safe`.
@@ -264,9 +404,18 @@ a helper container does what the organisers do by hand (clicks Connection) and
 records the evaluation log. It prints the live `ros2 node list` (expect bridge +
 localization + the controller, and nothing else) then the `score_race.py` result.
 
-**Pass = 12 laps, 0 collisions**, with a sim-timer race time at or below what
-step 5.3 measured. Also validate once at **Ultra graphics with `VISIBLE=1`**
-before submitting, since that is how it will be scored.
+The script **sets Ultra by default** (`SIM_QUALITY` defaults to `ultra`; it runs
+`sim_set_quality.sh ultra` through the helper container), so this test is at the
+scoring quality without being asked. Do not override it.
+
+**Pass = 12 laps, 0 collisions**, with an OFFICIAL race time at or below what
+step 5.3 measured, **and** `dt_p50` in the 0.102-0.106 s band — run step 5A's
+`lap_report.py` on the evaluation log this script leaves behind, not only
+`score_race.py`. A 14-lap sample scatters ~1.5 s, so do not read a small time
+difference as a regression; a rate difference, on the other hand, is real. The
+one image regression we have seen — 11 collisions in 20 laps from an image whose
+100-lap dev runs were clean — showed up as `dt_p50` 0.088 s against 0.104 s and
+nothing else.
 
 ---
 
@@ -349,6 +498,11 @@ must both be complete before **September 19, AoE**.
 | `... is not a closed loop: X m between its last point and its first` | Open line; the trackers treat it as cyclic | Regenerate the line; do not hand-edit CSVs. |
 | `raceline requires positive speeds and increasing arc length` | Corrupt/intermediate candidate | Ship only a drill output that passed the gates. |
 | `REFUSING: host load N; a scored run needs a quiet host` | Something else is computing | Stop it and re-run. `LOAD_OK=1` exists but any run under load is contaminated. |
+| `lap_report.py` shows `dt_p50` ~0.088-0.091 s | Validated at Low quality, or something else is using the GPU | Re-run with `SIM_QUALITY=ultra` on an idle host. mpc3 collides at this rate; the run is not evidence about the finals. |
+| `dt_p50` drifts across the laps of one run | A process started mid-run | Contaminated. Re-run on a quiet host; do not average it out. |
+| `WARN: could not set Ultra` | The quality click missed (same Unity press/release quirk as Connection) | Check the label crop in `/tmp/sim_quality/quality_after_label.png`; re-run `scripts/sim_set_quality.sh next --verify` until it reads Ultra. Never during a scored run — Reset and Quit are the next rows down. |
+| `OFFICIAL race time unavailable ...` from `score_race.py` | Log written by a logger with no `last_lap_time` column | Re-run with the current logger. Do not decide the finals config on the sample clock. |
+| `UNVERIFIED: ...` from `score_race.py` | Log starts after warm-up, or has a counter reset or a missing lap transition | Re-run. The scorer refuses to certify ambiguous telemetry on purpose. |
 | `ERROR: could not connect` from `test_submission_image.sh` | The Connection click missed (Unity needs the pointer to *enter* the control and press/release in separate frames) | The script already retries 3x with a toggle-off click. Just re-run it; check the sim window actually appeared. |
 | `docker: Conflict. The container name "autodrive_roboracer_api" is already in use` | Leftover container from a previous run | `docker rm -f autodrive_roboracer_api autodrive_roboracer_sim pit_helper` (`test_submission_image.sh` does this itself at the start). |
 | `Package 'pit_crew' not found` | `sim_restart_connect.sh` restarts the devkit container and wipes the colcon build | `colcon build --packages-select pit_crew --symlink-install` inside the container; the scripts do it for you. |
@@ -368,7 +522,8 @@ no submission at all.
    (or `_centerline.csv`), `PIT_CREW_CONTROLLER=mpc3`. The corridor middle,
    0.5-0.6 m of room. This is what ICRA-2026 ships and it was 0/30 there where
    the width-using line took 9 collisions.
-2. **Legacy tracker at ay 4.5.** `PIT_CREW_CONTROLLER=mpc` with the centerline
+2. **Legacy tracker at ay 4.5** — the rate-proven option, clean at both 11 Hz
+   and Ultra. `PIT_CREW_CONTROLLER=mpc` with the centerline
    (the entrypoint pairs `mpc` with a centerline automatically; **never pair
    `mpc` with a wide min-curvature line**). If the line itself is the problem,
    rebuild it at the conservative profile:
