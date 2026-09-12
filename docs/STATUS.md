@@ -470,7 +470,16 @@ and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
 speed 1.1 m/s with the encoder reading 2.1: the car nearly stops at
 that corner and slides half a metre off the line (wheel slip at low
 speed, a stuck-escape, or a spin: to be attributed). Same race time as
-fast_uni (101.9, 1 collision). **ICRA 2025 fast2_m50: 32 laps, 0
+fast_uni (101.9, 1 collision). ATTRIBUTED: not stuck, not slip (the
+encoder gap is the logger's speed filter lagging a 4.4 m/s2 decel), no
+commanded overspeed; the tracker cuts ~0.4 m inside on EVERY lap at the
+s 39 hairpin entry (a 0.13 -> 1.60 1/m curvature step in 0.4 m; safe
+line is cut by 0.42 too) and fast2_m50 has 0.68 m of inside half-width
+there, so the 2 collisions are the 2.2-sigma tail of the same behaviour
+(clean laps: body clearance p50 0.135, min 0.035). Fix: `--min-halfwidth
+0.53` -> fast3_m53 (ideal 9.96, clearance 0.395, inside half-width 0.72;
+committed, to drive). Do NOT raise the barrier there: the corridor is
+left-tight/right-open and the margin would bias the car further inside. **ICRA 2025 fast2_m50: 32 laps, 0
 collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
 drill's pick for that circuit under the finals config.
 
