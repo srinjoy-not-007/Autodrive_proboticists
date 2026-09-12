@@ -196,6 +196,28 @@ uncommitted, Porto/ICRA-2026 outputs byte-identical) yields fast lines at
 tracking (|e| p95 0.25 vs 0.37) but driven min clearance 0.07-0.11 m vs
 0.15-0.20 for safe -- the number to watch live. Porto's pick unchanged.
 
+**Collision-reset recovery audit (Sept 12, 100 live collisions across 21
+runs):** the reset is the last numbered checkpoint, 0.51 m p50 off the
+line, backwards along it on 50% of resets (up to 4.5 m). Recovery is
+acceptable: |est-truth| < 0.15 m after 1.20 s p50 (2.6 m), back to plan
+speed after 0.94 s, +0.5 s p50 of lap time beyond the 10 s penalty;
+**9% of collisions cascade within 3 s**. The teleport detector in
+vehicle.SpeedEstimator (needs an encoder sample implying >18 m/s) fired
+on 0 of 97 teleports, so the "stand still and spread" branch and mpc3's
+consume_jump are dead code; the encoder over-reads +1.8 m/s p50 for
+0.2-0.8 s after a reset and marches the cloud forward while the car is
+stopped (estimate ahead on 88% of post-reset samples). Twice the
+relocalization published a track-wide-cloud centroid 13 m from the car
+(publish_on_reloc, default True). Harness (`--teleport` added to
+sim_tracker.py, default-identical): 13.8% of teleports end in a
+collision within 3 s; opt-in mpc3 `v_pose_gate` / `reindex_after`
+tested and NOT established (11.5% vs 13.8%, p 0.46). Recommended:
+`publish_on_reloc:=false` (LOC_ARGS), no new mpc3 parameter; a legal
+teleport detector (scan jump) + checkpoint reseed is being designed.
+Caveat on max_step_mps 9.0: it also lets the cloud dead-reckon further
+forward after a reset (up to 0.89 m worst window) -- pair with a
+sanity bound if shipped.
+
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
 qualification session entitles a team for the final race"); ranking is
