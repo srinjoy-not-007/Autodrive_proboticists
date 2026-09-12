@@ -37,6 +37,12 @@ def find_canvas(img):
         k = np.argmax(xs[ends] - xs[starts])
         x0, x1 = int(xs[starts[k]]), int(xs[ends[k]])
         if x1 - x0 >= MIN_RUN:
+            # The header bar is ~84 px tall on a 1080 canvas; a transient
+            # frame mid-resize (or an unrelated grey band) is thinner.
+            band = grey[y:y + 120, x0:x1 + 1].mean(axis=1) > 0.6
+            height = int(np.argmin(band)) if not band.all() else len(band)
+            if height < 40:
+                continue
             return x0, y, x1 - x0 + 1
     return None
 

@@ -117,10 +117,17 @@ else
     # The frame geometry is not the canvas: find the sim's header bar in a
     # screenshot (tools/find_sim_ui.py) and use its origin. Falls back to the
     # frame with a proportional scale if the bar is not found.
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "DISPLAY=${DISP} import -window root /tmp/ui.png 2>/dev/null; true"
-    docker cp autodrive_roboracer_api:/tmp/ui.png /tmp/sim_ui.png >/dev/null 2>&1 || true
-    UI=$("${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/tools/find_sim_ui.py" /tmp/sim_ui.png 2>/dev/null || true)
+    UI=""
+    for shot in 1 2 3 4; do
+        sleep 2
+        docker exec autodrive_roboracer_api /bin/bash -c \
+            "DISPLAY=${DISP} import -window root /tmp/ui.png 2>/dev/null; true"
+        docker cp autodrive_roboracer_api:/tmp/ui.png /tmp/sim_ui.png >/dev/null 2>&1 || true
+        UI=$("${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/tools/find_sim_ui.py" /tmp/sim_ui.png 2>/dev/null || true)
+        # accept only a settled, full-width canvas (the resize animates)
+        if [ -n "$UI" ] && [ "$(echo "$UI" | cut -d" " -f3)" -ge 1900 ]; then break; fi
+        UI=""
+    done
     if [ -n "$UI" ]; then
         read -r CX CY CW <<<"$UI"
         echo "canvas at ${CX},${CY} width ${CW}"
