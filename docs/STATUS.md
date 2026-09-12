@@ -274,6 +274,22 @@ with a collision exists yet). On detection: reseed at checkpoints within
 2.5 m + encoder reset; replay p90 peak error 1.81 -> 0.49 m. Next: one
 BAG=1 run with collisions to validate the IMU branch.
 
+**Why the steering wiggles (research, Sept 12, full report in
+docs/research/steering_smoothness_peer_stacks.md):** every peer stack
+(ForzaETH, TUM, KAIST, Autoware) runs its tracker at a FIXED rate over a
+filtered state estimate and bounds the published steering against the
+previous command; none re-optimises per raw localization update. Ours
+puts a high-gain optimiser (w_lat 24 vs w_rate 0.6: a 0.05 m error, the
+MCL noise floor, is worth 10x a 0.10 rad steering step) directly on
+per-scan MCL output with no plan-to-plan coupling of the published
+command, feeding a per-tick latched rack with 0.135 s dead time -- the
+textbook rate-limit + dead-time limit cycle, whose amplitude grows with
+sensor rate. Ranked remedies (being implemented opt-in): plan-to-plan
+consistency term / clamp on the published command; deadband at the
+noise floor (0.035 m); spatial (distance) publish lead + first-order
+rack lag in the actuator model; command LPF with the same tau in the
+model. Not recommended: move blocking, raising w_rate alone.
+
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
 qualification session entitles a team for the final race"); ranking is
