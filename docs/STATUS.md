@@ -375,6 +375,21 @@ shipped (display 69.36 clean, ICRA 2026 -2 s, ICRA 2025 fast line
 clean) but its live hairpin margin cost (~0.01 m) is consistent with
 this; the barrier 0.40 rule on safe lines/Porto is the counterweight.
 
+**The hairpin-entry cut is the publish lead, and it is the lap time
+(Sept 12, offline):** from a zero-error state the solver plans NO cut
+(e_min -0.003 m over the horizon at every entry, unchanged by w_lat_T,
+horizon 30/40, e_free 0, yaw_gain 1.0, ay_deliver, w_barrier 0); the
+published angle is read nd + apply steps into a ramping-curvature plan
+and exceeds the line-matching angle by 0.04-0.33 rad. Only the readout
+lead moves the cut (apply_ahead 0: -0.179 -> -0.006 m for +0.39 s/lap;
+nd 2: -0.033 for +0.43). e_free is refuted on the logs (offsets pass
+straight through 0.18 m; it only modulates the speed plan). The
+understeer map is right to 5%. Opt-in `apply_lead_steps` (committed):
+1.0 removes most of the cut at +0.12..+0.31 s/lap with pole-plant
+collisions; 1.2 is lap-neutral and removes 10-15%. Not run live: the cut
+is the clearance-for-lap-time trade; the corner-local lever (inside
+half-width, fast3) remains the right one.
+
 **Turn-in timing probe (Sept 12, committed, not yet run live):**
 `ros2 run pit_crew turnin_probe` / `scripts/turnin_probe.sh` measures
 pose-stamp-to-yaw-rate delay INSIDE the race loop (publishes from the
