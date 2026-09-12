@@ -113,8 +113,22 @@ laps, 7 collisions, median 6.92 (ctl_fast3).** rate_adaptive at a 0.092 s instan
 all. Online steering ILC from zero (prior not visible inside the container)
 at a 0.092 s instance, WITHOUT rate_adaptive -> **32 laps, 0 collisions,
 median 7.10**: it converged within two laps (bin mean |e| 0.119 -> 0.053 m).
-Both together with the prior (ilc_store:=/home/data/ilc/run_prior) queued,
-32 then 100 laps.
+Both together with the prior (ilc_store:=/home/data/ilc/run_prior) at a
+0.090 s instance -> 32 laps, **1 collision** (lap 16, at s ~1.2 just after
+the start line, cte 0.04 -> 0.28 m in six samples; cause under offline
+analysis), median 7.17, OFFICIAL 71.48 s. 100 laps of the same running.
+ILC alone (0/32) is so far the cleanest fast-rate config; n is small.
+
+**Rejected offline (Sept 12): `control_mode:=timer`** (opt-in, committed,
+default byte-identical). A fixed 20 Hz solve halves the rate spread of
+lateral error (0.020 -> 0.011 m p50) but is 0.25 s/lap slower and collides
+at every sensor period (4-6 in 33 laps vs 0) in the realistic-plant
+harness; emulating its staleness in per-pose mode (`--pose-latency` 0.097)
+reproduces the loss exactly, so the cost is estimate freshness. Found on the
+way: **the devkit bridge consumes one command per telemetry tick**; a
+publish off the tick grid is dropped (`timer_sync_dead` models this,
+0.136 -> 0.092 m). Per-pose solving is information-optimal on this bridge.
+Not driven live.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
