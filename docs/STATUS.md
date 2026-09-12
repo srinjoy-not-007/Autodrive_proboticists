@@ -154,7 +154,8 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   to this stall shape. gap_predict_s ALONE caused the 13 s stop; the
   full package was clean; the defaults were clean. **Decision: the gap
   package stays opt-in (prepared GAP_BLOCK, type-checked test); not
-  shipped** -- no live evidence it helps, one live case it hurt.
+  shipped** -- no live evidence it helps, one live case it hurt. No-stall
+  Xvfb regression with the package: Porto 32/0/72.08 s (clean, no cost).
 - **Image test on the real display (the organisers' path: built image,
   --entrypoint /bin/bash, no mounts, helper clicks; period 0.058):
   12 laps, 0 collisions, OFFICIAL 70.06 s**, /localization and /mpc3 up,
