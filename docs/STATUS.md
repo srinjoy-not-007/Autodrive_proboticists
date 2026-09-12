@@ -295,6 +295,36 @@ and costs 0.06 m -- hold-only is better. hold_n is in scans (7 = 0.41 s
 at 0.058). Whether a smaller excursion cuts the 9% cascade rate is a
 live question; opt-in, not shipped.
 
+**THE WIGGLE IS A SOLVER LIMIT CYCLE, AND THE PLANT IS NOT RATE-DEPENDENT
+(Sept 12, two agents, offline + the display staircase).** Direct
+measurement: the rack moves exactly 3.2 x period per tick at 0.058 AND
+0.100 s (a wall-clock 3.2 rad/s slew limiter), dead time ~0.07-0.10 s at
+both; actuator-angle -> yaw-rate gain 0.93-0.95 and lag within one
+sample at every rate; throttle servo K 12-16, tau 0 at every rate;
+localization de-staled |err| p50 0.10 m at every rate (the "0.133 vs
+0.04" note was logger staleness); the shipping command law replayed
+open-loop on one trajectory resampled to four tick grids is identical
+to 0.0007 rad. What differs is the CLOSED LOOP: in the harness with
+localization noise set to ZERO the flutter is unchanged, and a
+frame-by-frame dump shows the published command alternating by exactly
+steer_rate*step_dt = 0.192 rad: the first free plan step after the nd
+committed steps has no jerk cost and 0.0022*u^2 of rate cost against
+w_lat 24, so a one-step flick at the slew limit is the cheapest answer
+to any small error, it is never executed before the next solve flicks
+back, period ~2*delay_s (0.35 s at 0.058, aliased to 2 frames at 10 Hz).
+Live: 1.1-1.6 Hz oscillation on the hairpin approach at 0.058, absent at
+0.09-0.10. Opt-in fix committed: `w_dcmd` (residual on published minus
+previous published) + `cmd_tau` (rate-invariant first-order filter on
+the published command); harness w_dcmd 50 + cmd_tau 0.10: command step
+p90 down 4.8-6.6x, rack HF rms down 3.7-6x, min clearance up at every
+frame, 0 collisions in 216 laps, lap -0.12..+0.02 s. Display A/B queued
+(`smooth_d50t10`). Also: drop `delay` from rate_terms (dead time does
+not scale with the period); the logger now records the steering command
+(`cmd` column) next to the actuator feedback (`steering` IS feedback).
+The harness cannot see the display failure (0 collisions at 0.058 with
+shipping params) -- do not tune against it for that; the display is the
+gate.
+
 **Why the steering wiggles (research, Sept 12, full report in
 docs/research/steering_smoothness_peer_stacks.md):** every peer stack
 (ForzaETH, TUM, KAIST, Autoware) runs its tracker at a FIXED rate over a
