@@ -176,6 +176,16 @@ back to the 0.104 value, defaults byte-identical. Live display A/B
 queued (`display_ratefix`). Also: the rate clamp is [0.052, 0.156] s
 (`rate_lo`/`rate_hi` now params) -- a host below 0.052 s silently
 reverts to the 0.104 tune.
+**Driven on the display (self-clicked, 0.058 s): 15 laps, 11 collisions.**
+The fix did what the harness said (command slew saturation 0.078 ->
+0.003, straight-line steering std 0.068 -> 0.055) and it changed nothing
+at the hairpin: identical collision, s 11.3-11.5, cte -0.34..-0.36 inside
+at 2.6-3.0 m/s, every lap. The slew was a symptom. The inside drift at
+the hairpin grows with sensor rate (-0.15..-0.20 m at 0.09-0.10, -0.35 at
+0.058) and the controller-side rate terms do not explain it; the working
+hypothesis is a rate-dependent PLANT (the bridge applies one command per
+tick, so a per-tick actuator limit is 1.7x faster at 0.058). Plant
+identification per rate from the display logs is in progress.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):

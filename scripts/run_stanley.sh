@@ -29,7 +29,7 @@ if [ -n "${RATE_PRE_SELECT:-}" ]; then   # superseded by run_exp.sh (measures wi
 fi
 # SIM_QUALITY=ultra reproduces the organisers' setting (they run Ultra); the
 # sensor cadence differs by quality, and the tracker is sensitive to it.
-if [ "${SIM_QUALITY:-}" = "ultra" ] && [ "${MANUAL_CONNECT:-0}" != 1 ]; then DISP="$([ "${VISIBLE:-0}" = 1 ] && echo "${DISPLAY:-:0}" || echo :99)" ./scripts/sim_set_quality.sh ultra >/dev/null 2>&1 || echo "WARN: could not set Ultra"; sleep 2; fi
+if [ "${SIM_QUALITY:-}" = "ultra" ] && [ "${MANUAL_CONNECT:-0}" != 1 ]; then DISP="$([ "${VISIBLE:-0}" = 1 ] && echo "${DISPLAY:-:0}" || echo :99)" ./scripts/sim_set_quality.sh ultra > /tmp/quality.log 2>&1 || { echo "WARN: could not set Ultra"; tail -3 /tmp/quality.log; }; sleep 2; fi
 R="export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 && source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash"
 docker exec autodrive_roboracer_api /bin/bash -c \
     "$R && cd /home/autodrive_devkit && colcon build --packages-select pit_crew --symlink-install 2>&1|tail -1"
