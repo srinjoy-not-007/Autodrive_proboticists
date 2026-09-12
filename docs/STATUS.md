@@ -283,6 +283,17 @@ IMU (0 false triggers at 15 m/s2; detection rate UNVALIDATED, no bag
 with a collision exists yet). On detection: reseed at checkpoints within
 2.5 m + encoder reset; replay p90 peak error 1.81 -> 0.49 m. Next: one
 BAG=1 run with collisions to validate the IMU branch.
+Validated on the real collision bag (exp_display_watch_120426, 9 resets
+at 0.0585 s): real resets move the car 0.88 m, the scan branch detects
+**9/9 within one frame at 0 false positives** for any threshold
+0.20-0.525 (clean max 0.194; use 0.35); the **IMU branch is unusable**
+(1/9 at 15 m/s2, clean max 9.73, and it fired one frame early once:
+set teleport_imu_g 0). Replay through the real filter: peak post-reset
+error 0.65 -> 0.30-0.38 m p50, recovery time unchanged (p90 1.17 s, the
+scan update already re-finds the pose); checkpoint reseed helped on 0/9
+and costs 0.06 m -- hold-only is better. hold_n is in scans (7 = 0.41 s
+at 0.058). Whether a smaller excursion cuts the 9% cascade rate is a
+live question; opt-in, not shipped.
 
 **Why the steering wiggles (research, Sept 12, full report in
 docs/research/steering_smoothness_peer_stacks.md):** every peer stack
