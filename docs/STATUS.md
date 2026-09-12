@@ -137,6 +137,16 @@ organisers' period is unknown and may drift (OBS recording), and the
 cr_dk0.8 + rate_adaptive config is clean without it. If ever re-tested:
 always start from a fresh copy of the pristine prior.
 
+**Porto line sweep under the shipping tracker (Sept 12, offline):** 76
+candidates (w_veh 0.50-0.80 x ay 6.75-7.5 x dkappa 0.5/0.6/0.8), 342
+harness laps per finalist, zero collisions on all 33 gate-passing lines.
+The line is converged: the best gate-passing candidate
+(fast_dk0.6_w0.63_ay7.0, ideal 6.91, clearance 0.309) beats cr_dk0.8 by
+0.027 s/lap in the harness; ay 7.25+ turns back (error grows, runs wide);
+lines under the 0.28 m gate are the least robust under stress. A/B
+queued live (dk06_w063_ay70, 32 laps). The remaining ~0.5 s to the
+winners is not in the line.
+
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
 qualification session entitles a team for the final race"); ranking is
