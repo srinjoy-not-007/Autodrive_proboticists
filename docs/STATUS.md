@@ -350,6 +350,23 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Period-range audit (Sept 12, offline):** shipping config is
+collision-free in the harness over 0.052-0.130 s on both plants (lap flat
+within 0.06 s), marginal below 0.052 on the pole plant, degrades hard
+above 0.14 s. Mid-run drift (0.092->0.110 step, 0.058->0.125 ramp, 2-3 s
+sawtooth) costs at most 1 collision / 36 laps. **Three consecutive
+dropped frames (0.40 s) exceed max_predict/stale_pose 0.35 s and put the
+car on the coast watchdog: 35-40 collisions / 36 laps when repeated** --
+one dropped frame is fine. Mechanics: below 0.069 s the apply term is
+inert (index floored at nd+1 knot), below rate_lo the 0.052 edge tune
+applies (not the 0.104 one), above 0.156 everything freezes; the clamp
+is now logged. Widening rate_lo/rate_hi is not supported by the data;
+opt-in `rate_slew` added, not recommended. With the shipping smoothing
+the command staircase that apply_floor_steps 0 targeted is gone (0.0%
+over-slew commands) and that fix now costs: do not ship it. Also the
+harness artefact: --pose-latency equal to --frame lands the pose on the
+tick boundary and fakes collisions (default 0.045 poisons frame 0.045).
+
 **Closed-loop timing hunt (Sept 12, offline): NOT reproduced.** Per-lap
 most-inside offset at s 9.5-12 is the discriminating metric: Xvfb
 -0.21..-0.23 p50 (3% of laps below -0.30), display -0.30..-0.33 (50-83%
