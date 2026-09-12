@@ -99,6 +99,20 @@ DEFAULTS = dict(
     # construction; with only one on they do not, which is why the pair is the
     # configuration to test.
     nd_mode='fixed',
+    # OPT-IN (0.0 = off, byte-identical): the delay, in seconds, that `nd` is
+    # derived from, PINNED regardless of what `set_rate`/`rate_terms` do to
+    # `delay_s`.  It exists because the two things `delay_s` controls pull in
+    # opposite directions once the measured dead-time law (`delay_tick`,
+    # period + `dead_tick_c`) is used.  The ACTUATOR compensation wants the
+    # true, period-dependent delay -- the fixed 0.180 s over-compensates a
+    # 0.103 s dead time at a 0.058 s period and only 0.140 s at 0.095 s, which
+    # is the measured rate-dependent turn-in phase (0.12-0.22 m of arc, see
+    # docs/STATUS.md).  But `nd` derived from that same number steps 2/3/4
+    # across the band, and moving `nd` is what made `nd_mode:='period'`
+    # collide on the tight circuits.  Pinning `nd_delay_s` at the validated
+    # 0.180 lets the dead-time law be corrected without touching the solver's
+    # structure.
+    nd_delay_s=0.0,
     # The constant of the measured dead-time law, in seconds.  Fitted offline
     # (slew-limited rack model, 3.2 rad/s, per-20 s-segment median) on the six
     # display/Xvfb race logs that carry both `cmd` and `steering`:
@@ -1073,7 +1087,8 @@ class MPC3:
         # `period` is written by `RateControl.update` every pose; the setter
         # below re-derives `nd` from it when `nd_mode` is 'period'.
         self._period = float(RATE_NOMINAL)
-        self.nd = self._nd_for(p['delay_s'])
+        self.nd = self._nd_for(float(p.get('nd_delay_s', 0.0) or 0.0)
+                               or p['delay_s'])
         self.u = np.zeros(self.N)
         self.v_plan = None            # last speed plan, warm start for ds
         self.v_ceiling = None         # the ceiling the throttle is handed
@@ -1105,7 +1120,10 @@ class MPC3:
 
     def _refresh_nd(self):
         """Re-derive `nd` from whichever law `nd_mode` selects."""
-        if str(self.cfg.get('nd_mode', 'fixed')) == 'period':
+        pinned = float(self.cfg.get('nd_delay_s', 0.0) or 0.0)
+        if pinned > 0.0:
+            self.nd = self._nd_for(pinned)
+        elif str(self.cfg.get('nd_mode', 'fixed')) == 'period':
             self.nd = self._nd_for(self._period + self.cfg['dead_tick_c'])
         else:
             self.nd = self._nd_for(self.cfg['delay_s'])
@@ -1118,7 +1136,8 @@ class MPC3:
     @period.setter
     def period(self, p):
         self._period = float(p)
-        if str(self.cfg.get('nd_mode', 'fixed')) == 'period':
+        if (str(self.cfg.get('nd_mode', 'fixed')) == 'period'
+                or float(self.cfg.get('nd_delay_s', 0.0) or 0.0) > 0.0):
             self._refresh_nd()
 
     # ..................................................................

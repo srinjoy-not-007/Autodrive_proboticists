@@ -136,6 +136,10 @@ class MPC3Tracker(Node):
             # rollout's `nd` describe one delay instead of two.
             ('dead_tick_c', 0.045),
             ('nd_mode', 'fixed'),
+            # OPT-IN, 0.0 = off: pin the delay `nd` is derived from, so the
+            # actuator's dead-time law and the solver's committed-step count
+            # can be set independently.  See mpc3_core.DEFAULTS.
+            ('nd_delay_s', 0.0),
             # --- command smoothing (OPT-IN; 0.0 = the tune that raced) -------
             # The front wheels flutter on straights because the solver's FIRST
             # free step carries no jerk cost and only a small rate cost, so the
@@ -405,7 +409,8 @@ class MPC3Tracker(Node):
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             apply_floor_steps=v['apply_floor_steps'],
-            nd_mode=v['nd_mode'], dead_tick_c=v['dead_tick_c'],
+            nd_mode=v['nd_mode'], nd_delay_s=v['nd_delay_s'],
+            dead_tick_c=v['dead_tick_c'],
             w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],
             cmd_notch=v['cmd_notch'], e_dead=v['e_dead'],
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],

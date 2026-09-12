@@ -429,7 +429,7 @@ class MPC3Sim:
                        'apply_ahead_s', 'apply_floor_steps', 'steer_rate',
                        'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
-                       'lead_k', 'lead_min_m', 'nd_mode', 'dead_tick_c')
+                       'lead_k', 'lead_min_m', 'nd_mode', 'nd_delay_s', 'dead_tick_c')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
