@@ -384,9 +384,19 @@ on the dead-reckoned pose with a decel ramp: harness with a stall every
 5 s, 72 laps per cell: 3-frame gaps 6 -> 1 (slew) / 19 -> 8 (pole)
 collisions at 0.104, 5-frame 18 -> 3 / 46 -> 18; one dropped frame 0
 everywhere; no-gap reports byte-identical. Not yet driven live (needs a
-stall injector); localization's own post-gap behaviour (patience -> 1
-scan at dt >= 0.35, one 4.5 m motion step) is unmodelled and is the
-remaining risk. The harness gained --drop-every/--drop-n.
+stall injector); localization's own post-gap behaviour: replayed on the real collision
+bag (25 injected stalls per run, 6 seeds): spurious relocalization is
+NOT the failure for gaps <= 0.6 s; the failure is that two 0.5 s
+constants coincide (scan dt clamp, MAX_ENC_GAP), so above 0.5 s the
+filter dead-reckons at the stale speed -- 0.9 m of phantom travel for a
+stalled car, 2.25 m error + 9 relocalizations/run for a 1 s
+telemetry-only gap. Opt-in fix (committed): gap_dt 0.15, gap_noise_mult
+3, lost_patience_min 3, scan_dt_max 1.2, enc_gap_max 1.5 -> worst
+post-gap error 0.46 m (widening the cloud works; capping the step
+throws away real motion). `scripts/stall_inject.sh` (docker pause of
+the sim = the organisers' risk shape; ~0.07 s overhead) is ready; the
+four-arm live test (control / stalls with defaults / + gap_predict_s /
++ both) is the next sim slot after the barrier regression.
 
 **Dead-time law settled (Sept 12):** command-to-feedback fits on six
 logs give pose-stamp-to-rack delay = **period + 0.052 s** (RMS 0.006 s;
