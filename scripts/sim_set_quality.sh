@@ -110,6 +110,13 @@ else
     WH=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\2/p')
     echo "window $WID at ${OX},${OY} size ${WW}x${WH} (coordinates scaled; --verify strongly advised)"
     map() { echo "$((OX + $1 * WW / 1920)) $((OY + DECOR + $2 * WH / 1080))"; }
+    # sim_restart_connect.sh leaves the canvas origin it found from a
+    # screenshot (tools/find_sim_ui.py); that beats any frame arithmetic.
+    if [ -s /tmp/sim_ui_origin ]; then
+        read -r CX CY CW < /tmp/sim_ui_origin
+        echo "using canvas origin ${CX},${CY} width ${CW} from sim_restart_connect"
+        map() { echo "$((CX + $1 * CW / 1920)) $((CY + $2 * CW / 1920))"; }
+    fi
 fi
 read -r HAMB_X HAMB_Y <<<"$(map $C_HAMB_X $C_HAMB_Y)"
 read -r QUAL_X QUAL_Y <<<"$(map $C_QUAL_X $C_QUAL_Y)"

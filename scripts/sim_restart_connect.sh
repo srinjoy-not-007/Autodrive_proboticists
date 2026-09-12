@@ -113,9 +113,26 @@ else
     OY=$(echo "$GEO" | sed -n 's/.*Position: \([0-9]*\),\([0-9]*\).*/\2/p')
     WW=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\1/p')
     WH=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\2/p')
-    echo "window $WID at ${OX},${OY} size ${WW}x${WH}"
-    HAMB_X=$((OX + 75 * WW / 1920)); HAMB_Y=$((OY + 43 * WH / 1080))
-    CONN_X=$((OX + 75 * WW / 1920)); CONN_Y=$((OY + 409 * WH / 1080))
+    echo "window $WID at ${OX},${OY} size ${WW}x${WH} (frame)"
+    # The frame geometry is not the canvas: find the sim's header bar in a
+    # screenshot (tools/find_sim_ui.py) and use its origin. Falls back to the
+    # frame with a proportional scale if the bar is not found.
+    docker exec autodrive_roboracer_api /bin/bash -c \
+        "DISPLAY=${DISP} import -window root /tmp/ui.png 2>/dev/null; true"
+    docker cp autodrive_roboracer_api:/tmp/ui.png /tmp/sim_ui.png >/dev/null 2>&1 || true
+    UI=$("${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/tools/find_sim_ui.py" /tmp/sim_ui.png 2>/dev/null || true)
+    if [ -n "$UI" ]; then
+        read -r CX CY CW <<<"$UI"
+        echo "canvas at ${CX},${CY} width ${CW}"
+        echo "$CX $CY $CW" > /tmp/sim_ui_origin
+        HAMB_X=$((CX + 75 * CW / 1920)); HAMB_Y=$((CY + 43 * CW / 1920))
+        CONN_X=$((CX + 75 * CW / 1920)); CONN_Y=$((CY + 409 * CW / 1920))
+    else
+        echo "WARN: header bar not found in screenshot; scaling from the frame"
+        rm -f /tmp/sim_ui_origin
+        HAMB_X=$((OX + 75 * WW / 1920)); HAMB_Y=$((OY + 43 * WH / 1080))
+        CONN_X=$((OX + 75 * WW / 1920)); CONN_Y=$((OY + 409 * WH / 1080))
+    fi
     # Keep a screenshot per attempt for diagnosis (data/logs/display_click_*.png).
     SHOT=1
 fi
