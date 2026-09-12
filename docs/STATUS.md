@@ -340,8 +340,10 @@ unknown period outranks 0.9 s of Xvfb race time. Cost on a tight track
 is larger: CDC-TF 2025 safe line 116.7 s with smoothing vs 111.1 s
 without (+0.5 s/lap) -- cmd_tau 0.10 lags the corners; candidates to
 recover it: w_dcmd alone (harness: fastest variant) or steer_tau 0.04
-(harness: buys the tracking back). To A/B on CDC-TF after the display
-chain. **Full shipping config (smoothing + localization fix) regression,
+(harness: buys the tracking back). CDC-TF A/B: **w_dcmd 100 alone: 32
+laps / 0 / 111.2 s** -- the lap cost is entirely cmd_tau. If w_dcmd
+alone is smooth enough on the display it replaces the filter (queued:
+disp_dcmd100, porto_dcmd100). **Full shipping config (smoothing + localization fix) regression,
 Xvfb, 32 laps each, 0 collisions on all four tracks:** Porto 71.17,
 CDC-TF 2025 116.7, ICRA 2025 149.6, ICRA 2026 150.3 s. Also: drop `delay`
 from rate_terms (dead time does not scale with the period); the logger now records the steering command
