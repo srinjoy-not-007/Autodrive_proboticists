@@ -34,6 +34,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import racelog  # noqa: E402
 from footprint_analysis import CORNERS, clearance, load_dist  # noqa: E402
 
 TELEPORT_S = 1.5   # collisions move the car; this much either side is junk
@@ -41,38 +42,31 @@ MIN_SPEED = 0.3    # below this the car is stopped, not tracking
 
 
 def load_log(path):
-    """Columns as arrays, with duplicated IPS rows removed."""
-    rows = list(csv.DictReader(open(path)))
-    if not rows:
-        raise ValueError('empty log')
-    col = lambda k: np.array([float(r[k]) for r in rows])  # noqa: E731
-    t, x, y = col('t'), col('x'), col('y')
-    keep = np.ones(len(t), bool)
-    keep[1:] = (np.diff(x) != 0) | (np.diff(y) != 0)
-    out = dict(t=t, x=x, y=y, lap=col('lap_count').astype(int),
-               lap_time=col('lap_time'), coll=col('collision_count').astype(int))
-    if 'last_lap_time' in rows[0]:
-        out['last_lap_time'] = col('last_lap_time')
-    return {k: v[keep] for k, v in out.items()}
+    """`x, y` (the IPS truth) and friends, with duplicated IPS rows removed.
+
+    Column semantics -- truth vs estimate, and the c-2 collision rule -- live in
+    `tools/racelog.py`. `raw` keeps the unfiltered log, because de-duplication
+    deletes the collision row that attribution needs.
+    """
+    raw = racelog.load_log(path)
+    keep = racelog.dedupe_ips_mask(raw)
+    out = dict(t=raw['t'], x=raw['truth_x'], y=raw['truth_y'], lap=raw['lap'],
+               lap_time=raw['lap_time'], coll=raw['coll'])
+    if 'last_lap_time' in raw:
+        out['last_lap_time'] = raw['last_lap_time']
+    out = {k: v[keep] for k, v in out.items()}
+    out['raw'] = raw
+    return out
 
 
 def project(line, x, y):
     """Nearest line point index for every sample (chunked to stay small)."""
-    lx, ly = line[:, 1], line[:, 2]
-    idx = np.empty(len(x), int)
-    for a in range(0, len(x), 2000):
-        b = min(a + 2000, len(x))
-        d = np.hypot(x[a:b, None] - lx[None, :], y[a:b, None] - ly[None, :])
-        idx[a:b] = d.argmin(1)
-    return idx
+    return racelog.project(line[:, 1:3], np.column_stack([x, y]))
 
 
 def signed_offset(line, x, y, idx):
     """Lateral offset, + = left of the line's travel direction."""
-    xy = line[:, 1:3]
-    fwd = np.roll(xy, -1, 0) - np.roll(xy, 1, 0)
-    yaw = np.arctan2(fwd[:, 1], fwd[:, 0])[idx]
-    return -np.sin(yaw) * (x - xy[idx, 0]) + np.cos(yaw) * (y - xy[idx, 1])
+    return racelog.signed_offset(line[:, 1:3], np.column_stack([x, y]), idx)
 
 
 def true_speed(t, x, y):
@@ -131,6 +125,13 @@ def lap_rows(log, line, dist_args, corners, bins):
     for i in np.flatnonzero(np.diff(log['coll'])) + 1:
         bad |= np.abs(log['t'] - log['t'][i]) < TELEPORT_S
     ok = (~bad) & (v > MIN_SPEED) & np.isfinite(clr)
+    # Charge each collision to the lap it was being driven on at the PRE-IMPACT
+    # sample (racelog's c-2 rule); the rows the counter steps on already carry
+    # the teleported pose and can fall on the far side of a lap boundary.
+    hits = {}
+    if 'raw' in log:
+        for rec in racelog.collisions(log['raw']):
+            hits[rec['lap'] + 1] = hits.get(rec['lap'] + 1, 0) + 1
     official = official_times(log)
     laps, lap_bin_mean = [], {}
     steps = {}
@@ -148,8 +149,7 @@ def lap_rows(log, line, dist_args, corners, bins):
         if g.sum() < 5:
             continue
         e, dt = off[g], np.diff(log['t'][m])
-        row = dict(lap=lap, time=secs,
-                   coll=int(log['coll'][end] - log['coll'][np.flatnonzero(m)[0]]),
+        row = dict(lap=lap, time=secs, coll=hits.get(lap, 0),
                    e_mean=e.mean(), e_p95=np.percentile(e, 95),
                    abs_p95=np.percentile(np.abs(e), 95), clr_min=clr[g].min(),
                    dv_mean=dv[g].mean(),

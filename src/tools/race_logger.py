@@ -5,6 +5,37 @@ for development/evaluation but NOT at race runtime — never launch this from
 the submission entrypoint.
 
 Usage: python3 race_logger.py [out_csv]   (default /home/data/logs/race_<ts>.csv)
+
+COLUMN SEMANTICS (read this before analysing a log; `tools/racelog.py` is the
+shared loader that encodes all of it, and offline tools should use it):
+
+* `x, y` -- the IPS pose: **GROUND TRUTH** from the simulator. This is the
+  opposite of the natural reading of the header; `px, py` look like "position"
+  and are not.
+* `px, py, pyaw, pstamp` -- the **LOCALIZATION ESTIMATE** (`/pit_crew/pose`)
+  and the stamp of when it was true. The row carries the last received pose,
+  about one sensor frame stale: compare it against the truth interpolated at
+  `pstamp`, never at `t` (see on_pose below).
+* `speed` -- the filtered **wheel-encoder** estimate written here, not truth.
+  Truth speed is the IPS trajectory differentiated.
+* `steering` -- the simulator's actuator feedback, in **RADIANS**.
+  `cmd` -- the published `steering_command`, **NORMALIZED to [-1, 1]**
+  (x MAX_STEER = 0.5236 for radians). The controllers publish
+  `vehicle.steer_to_cmd()` and the devkit bridge passes that [-1, 1] value
+  straight to Unity, while republishing `/steering` from the sim's own state.
+* `cte` -- the controller's own reported cross-track error, in metres.
+* `lap_count`, `collision_count` -- **cumulative across runs**; difference them
+  against the run's first row.
+
+THE c-2 RULE. When `collision_count` increments, `on_col` writes an extra row
+(`collision_event` 1) -- but the simulator has already teleported the car to its
+checkpoint and published that pose, so that row and the one before it both
+carry the TELEPORTED position. For a collision whose counter steps at row `c`:
+row `c` is the collision row (teleported pose), row `c-1` is the first
+teleported IPS row, and row **`c-2` is the last pre-impact sample** -- the only
+one that says where the car actually hit. Reading `c-1` piles every collision
+onto the checkpoint. Attribution must also run on the RAW rows: filtering out
+repeated IPS poses deletes row `c` itself.
 """
 
 import csv

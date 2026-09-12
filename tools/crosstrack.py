@@ -6,26 +6,29 @@ Usage: .venv/bin/python tools/crosstrack.py data/logs/race_X.csv data/racelines/
 Reports lap-wide |e_lat| p50/p95/max and the same inside an s window (default
 14.0-17.5 m, the corner that produces every collision on Porto). Samples within
 1 s of a collision are dropped (teleport).
+
+The error is measured from the IPS **ground truth** (`x, y` -- see
+`tools/racelog.py`; `px, py` are the localization estimate and are deliberately
+not used here), and the speed gate uses the logged encoder speed.
 """
-import csv, sys
+import sys
+
 import numpy as np
 
-def main(log, line, s_lo=14.0, s_hi=17.5):
-    rl = np.loadtxt(line, delimiter=',')
-    s, xy = rl[:, 0], rl[:, 1:3]
-    rows = list(csv.DictReader(open(log)))
-    t = np.array([float(r['t']) for r in rows])
-    p = np.array([[float(r['x']), float(r['y'])] for r in rows])
-    col = np.array([int(r['collision_count']) for r in rows])
-    sp = np.array([float(r['speed']) for r in rows])
-    bad = np.zeros(len(t), bool)
-    for i in np.flatnonzero(np.diff(col)) + 1:
-        bad |= np.abs(t - t[i]) < 1.0
-    ok = (~bad) & (sp > 0.5)
-    d = np.hypot(p[:, None, 0] - xy[None, :, 0], p[:, None, 1] - xy[None, :, 1])
-    j = d.argmin(1)
-    e = d[np.arange(len(p)), j]
+sys.path.insert(0, __file__.rsplit('/', 1)[0])
+import racelog  # noqa: E402
+
+
+def main(log_path, line_path, s_lo=14.0, s_hi=17.5):
+    s, xy, *_ = racelog.load_line(line_path)
+    log = racelog.load_log(log_path)
+    p = log['truth_xy']
+    sp = log['enc_speed']
+    ok = (~racelog.teleport_mask(log, window=1.0)) & (sp > 0.5)
+    j = racelog.project(xy, p)
+    e = np.hypot(p[:, 0] - xy[j, 0], p[:, 1] - xy[j, 1])
     sj = s[j]
+
     def stats(m):
         v = e[m]
         return f'n={m.sum():5d}  p50={np.median(v):.3f}  p95={np.percentile(v,95):.3f}  max={v.max():.3f}'
@@ -33,6 +36,7 @@ def main(log, line, s_lo=14.0, s_hi=17.5):
     w = ok & (sj >= s_lo) & (sj <= s_hi)
     print(f's {s_lo}-{s_hi}  ', stats(w))
     print(f'speed in window mean {sp[w].mean():.2f}')
+
 
 if __name__ == '__main__':
     a = sys.argv

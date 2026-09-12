@@ -14,13 +14,23 @@ Three lap-time sources are reported, most authoritative first:
 * **sample clock** -- differences of our own CSV timestamps, subject to logger
   jitter on both ends.
 
-Logs must begin before warm-up ends. The optional legacy centerline argument is
-accepted but never used for scoring.
+Logs must begin before warm-up ends. The optional line argument is never used
+for scoring -- pass one and the scored collisions are additionally located
+along it, via the shared attribution in `tools/racelog.py` (which also
+documents the log's column semantics: `x, y` are the IPS ground truth, `px, py`
+the localization estimate, and the pre-impact sample for a collision whose
+counter steps at row c is row **c-2**, because the logger writes one
+already-teleported row first).
 """
 
 import argparse
 import csv
 import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import racelog  # noqa: E402
 
 
 def _official_lap_times(rows, laps_wanted):
@@ -156,7 +166,9 @@ def score_rows(rows, n_scored=10):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('log')
-    parser.add_argument('centerline', nargs='?', help='legacy argument, unused')
+    parser.add_argument('centerline', nargs='?',
+                        help='raceline CSV: not used for scoring, but locates '
+                             'each scored collision along it')
     parser.add_argument('--laps', type=int, default=10)
     args = parser.parse_args()
     try:
@@ -184,6 +196,13 @@ def main():
     print(f"Sample-clock elapsed {result['elapsed']:.3f} s; scored collisions "
           f"{result['collisions']}; race {result['race_time']:.3f} s; "
           f"best {min(result['laps']):.3f} s")
+    if args.centerline and result['collisions']:
+        log = racelog.load_log(args.log)
+        hits = [r for r in racelog.collisions(log, line_path=args.centerline)
+                if result['start'] <= r['t'] <= result['end']]
+        print('\nScored collisions, at the pre-impact sample (racelog c-2 '
+              'rule; offset + = left of travel):')
+        print('\n'.join(racelog.format_collisions(hits)))
     print('PASS' if result['passed'] else 'DISQUALIFIED')
     return 0 if result['passed'] else 1
 
