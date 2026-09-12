@@ -189,6 +189,54 @@ DEFAULTS = dict(
     cmd_tau=0.0,
     cmd_notch=0.0,
     e_dead=0.0,
+    # --- the rack inside the rollout (OPT-IN, research R3) -----------------
+    # `steer_tau`      first-order lag of the rack, in seconds, ON TOP of the
+    #                  dead time and the 3.2 rad/s slew the rollout already
+    #                  models.  The plan's steering angle then lags the plan's
+    #                  COMMAND, which is what the identified rack does (joint
+    #                  fits of the display staircase: dead 0.100 / tau 0.04 /
+    #                  slew 3.2 at a 0.058 s period, dead 0.14-0.16 / tau
+    #                  0.06-0.08 at 0.100 s).  Autoware ships the same term as
+    #                  `vehicle_model_steer_tau` and warns that a wrong one is
+    #                  the usual cause of late turn-in.  Set the SAME value on
+    #                  `Actuator(steer_tau=...)` -- the node and the harness
+    #                  both do -- or the delay compensation and the rollout
+    #                  disagree about the same rack.
+    # `model_cmd_tau`  1.0 puts the `cmd_tau` output filter INSIDE the rollout
+    #                  as a first stage of the same lag chain, so the plan
+    #                  stops asking for steps the filter will not pass on.
+    #                  Inert while `cmd_tau` is 0.0.  The published angle is
+    #                  then read from the PRE-filter plan (`solve` applies the
+    #                  filter itself, exactly once).
+    # At `steer_tau` 0 and `model_cmd_tau` 0 the rollout takes the original
+    # branch untouched, so every committed number is reproduced byte for byte.
+    steer_tau=0.0,
+    model_cmd_tau=0.0,
+    # --- where the published angle is read out of the plan (OPT-IN) --------
+    # `lead_mode` 'temporal' is the shipping behaviour: the publish index is
+    # `nd + max(apply_floor_steps, apply_ahead_s/step_dt)`, i.e. a lead in
+    # SECONDS, which is exactly the constant `rate_adaptive` has to scale with
+    # the sensor period.  'spatial' replaces it with a lead in METRES,
+    # `max(lead_min_m, lead_m0 + lead_k * v)`, walked forward along the warm
+    # speed plan from step `nd`, which is rate-invariant by construction
+    # because a distance ahead of the car does not know what the sensor period
+    # is.  The defaults are the DIRECT spatial equivalent of the shipping
+    # `apply_ahead_s` 0.090 s (`lead_k` = that lead in seconds) with a floor
+    # that stops it collapsing onto the `nd` knot at walking pace.
+    # NOT ForzaETH's L1: their `0.6 v - 0.18`, floored at 0.8 m, is a
+    # pure-pursuit LOOKAHEAD POINT, a different object from the plan knot the
+    # published angle is read at.  Measured here (pole plant, 12 laps x 3
+    # seeds, frames 0.058 and 0.104): 198 and 210 collisions, |e| p95 0.59 m.
+    # Do not re-derive.
+    # Interaction with `rate_adaptive`: in 'spatial' mode the `apply` term is
+    # INERT (nothing reads `apply_ahead_s`).  Every other term still applies --
+    # `delay` (the actuator dead time and `nd`), `thr`, `predict`, `enc`,
+    # `pose` -- because they are properties of the machine, not of the lead.
+    # `apply_floor_steps` still floors the index off the `nd` knot.
+    lead_mode='temporal',
+    lead_m0=0.0,
+    lead_k=0.09,
+    lead_min_m=0.30,
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes
@@ -827,8 +875,15 @@ class MPC3:
         # and the measured sensor period `RateControl` last saw.  Both are
         # inert unless one of `w_dcmd` / `cmd_tau` / `cmd_notch` is non-zero.
         self.last_cmd = None
+        # The published angle BEFORE `cmd_tau`/`cmd_notch`.  Only read when the
+        # rollout models the rack as a lag, where it is the plan command the
+        # free steps continue from.
+        self.last_cmd_raw = None
         self.period = float(RATE_NOMINAL)
         self._apply = (0, 0.0)        # publish knot + fraction, set in solve()
+        # (command plan, its Jacobian) from the last rollout; None unless
+        # `steer_tau` / `model_cmd_tau` put a lag in the chain.
+        self._pub = None
 
 
     # ..................................................................
@@ -992,7 +1047,37 @@ class MPC3:
         if jac:
             Sout[0] = 0.0
         kc = np.empty(N)
+        # OPT-IN rack lag chain (`steer_tau` / `model_cmd_tau`, see DEFAULTS).
+        # `dc` is the plan's COMMAND (what would be published), `fl` the same
+        # after the `cmd_tau` output filter, and `d` the rack angle that
+        # actually steers the car.  With both taus 0 the three collapse into
+        # one and the original branch below runs untouched.
+        tau_a = float(c['steer_tau'])
+        tau_c = float(c['cmd_tau']) if float(c['model_cmd_tau']) else 0.0
+        lag_on = tau_a > 0.0 or tau_c > 0.0
+        dc = fl = Sdc_out = None
+        Ea = math.exp(-self.dt / tau_a) if tau_a > 0.0 else 0.0
+        Ec = math.exp(-self.dt / tau_c) if tau_c > 0.0 else 0.0
+        if lag_on:
+            dc = np.empty(N + 1)
+            fl = np.empty(N + 1)
+            Sdc = np.zeros(nf) if jac else None
+            Sfl = np.zeros(nf) if jac else None
+            Sdc_out = np.empty((N + 1, nf)) if jac else None
         for k in range(N):
+            if lag_on and k == nd:
+                # The command in flight when the free steps begin: the last one
+                # published (raw before the output filter, filtered after it).
+                # `d[nd]` -- the angle the rack is predicted to hold -- is the
+                # fallback for the first solve of a run.
+                h_raw = (self.last_cmd_raw if self.last_cmd_raw is not None
+                         else (self.last_cmd if self.last_cmd is not None
+                               else d[nd]))
+                h_f = self.last_cmd if self.last_cmd is not None else h_raw
+                dc[:nd + 1] = h_raw
+                fl[:nd + 1] = h_f
+                if jac:
+                    Sdc_out[:nd + 1] = 0.0
             ek, pk, dk = e[k], psi[k], d[k]
             kr = kap[k]
             dsk = ds[k]
@@ -1009,8 +1094,27 @@ class MPC3:
             e[k + 1] = ek + sp * dsk
             psi[k + 1] = wrap(pk + (kach - kr * cp / den) * dsk)
             raw = None
+            dc_clip = False
             if k < nd:
                 d[k + 1] = committed[k] if committed is not None else dk
+            elif lag_on:
+                raw = dc[k] + u[k - nd] * self.dt
+                dcn = min(cap, max(-cap, raw))
+                dc_clip = (raw != dcn)
+                dc[k + 1] = dcn
+                sl = (dcn - dc[k]) / self.dt
+                if tau_c > 0.0:
+                    fn = dcn - sl * tau_c + (fl[k] - dc[k] + sl * tau_c) * Ec
+                else:
+                    fn = dcn
+                fl[k + 1] = fn
+                if tau_a > 0.0:
+                    slf = (fn - fl[k]) / self.dt
+                    an = fn - slf * tau_a + (dk - fl[k] + slf * tau_a) * Ea
+                else:
+                    an = fn
+                raw = an
+                d[k + 1] = min(cap, max(-cap, an))
             else:
                 raw = dk + u[k - nd] * self.dt
                 d[k + 1] = min(cap, max(-cap, raw))
@@ -1023,6 +1127,27 @@ class MPC3:
                 Sn[1] = a10 * S[0] + a11 * S[1] + a12 * S[2]
                 if k < nd:
                     Sn[2] = 0.0            # committed: independent of u
+                elif lag_on:
+                    if dc_clip:
+                        Sdc_n = np.zeros(nf)
+                    else:
+                        Sdc_n = Sdc.copy()
+                        Sdc_n[k - nd] += self.dt
+                    Ss = (Sdc_n - Sdc) / self.dt
+                    if tau_c > 0.0:
+                        Sf_n = Sdc_n - tau_c * Ss + Ec * (Sfl - Sdc
+                                                          + tau_c * Ss)
+                    else:
+                        Sf_n = Sdc_n
+                    if tau_a > 0.0:
+                        Ssf = (Sf_n - Sfl) / self.dt
+                        Sa_n = Sf_n - tau_a * Ssf + Ea * (S[2] - Sfl
+                                                          + tau_a * Ssf)
+                    else:
+                        Sa_n = Sf_n
+                    Sn[2] = 0.0 if raw != d[k + 1] else Sa_n
+                    Sdc, Sfl = Sdc_n, Sf_n
+                    Sdc_out[k + 1] = Sdc_n
                 elif raw != d[k + 1]:
                     Sn[2] = 0.0            # against the steering cap
                 else:
@@ -1031,6 +1156,11 @@ class MPC3:
                 S = Sn
                 Sout[k + 1] = S
         self.k_cmd = kc
+        # What `solve` publishes and what `w_dcmd` charges: the plan's COMMAND
+        # when the rack is modelled as a lag, the plan's ANGLE otherwise (they
+        # are the same number in that case).  Set on every rollout, including
+        # the line-search ones, because `_residuals` reads it immediately.
+        self._pub = (dc, Sdc_out) if lag_on else None
         return e, psi, d, Sout
 
     # ..................................................................
@@ -1104,12 +1234,17 @@ class MPC3:
             # same interpolation `solve` publishes, and its sensitivity to `u`
             # is the same interpolation of the rollout's own Jacobian rows.
             ka, fr = self._apply
+            # With a modelled rack lag the published number is the plan's
+            # COMMAND, so that is what this residual has to charge.
+            pub, Spub = self._pub if self._pub is not None else (d, None)
+            if Spub is None and jac is not None:
+                Spub = jac[:, 2]
             if ka >= N:
-                da = d[N]
-                Sa = jac[N][2] if jac is not None else None
+                da = pub[N]
+                Sa = Spub[N] if jac is not None else None
             else:
-                da = d[ka] + fr * (d[ka + 1] - d[ka])
-                Sa = (jac[ka][2] + fr * (jac[ka + 1][2] - jac[ka][2])
+                da = pub[ka] + fr * (pub[ka + 1] - pub[ka])
+                Sa = (Spub[ka] + fr * (Spub[ka + 1] - Spub[ka])
                       if jac is not None else None)
             sw_dc = math.sqrt(wdc)
             r.append(sw_dc * (da - self.last_cmd))
@@ -1158,8 +1293,27 @@ class MPC3:
 
         # Where the published angle is read out of the plan.  Computed here,
         # before the solve, because `w_dcmd` costs exactly that angle.
-        _f = nd + max(float(c['apply_floor_steps']),
-                      float(c['apply_ahead_s']) / self.dt)
+        if str(c['lead_mode']).strip().lower() == 'spatial':
+            # A lead in METRES, walked along the warm speed plan from the first
+            # free step.  Rate-invariant by construction; `apply_ahead_s` (and
+            # therefore `rate_adaptive`'s `apply` term) is not read at all.
+            lead = max(float(c['lead_min_m']),
+                       float(c['lead_m0']) + float(c['lead_k']) * float(v0))
+            vw = (self.v_plan if (self.v_plan is not None
+                                  and len(self.v_plan) == N + 1)
+                  else np.full(N + 1, max(float(v0), 0.5)))
+            acc = 0.0
+            _f = float(N)
+            for _j in range(nd, N):
+                dsj = max(float(vw[_j]) * self.dt, float(c['min_step_m']))
+                if acc + dsj >= lead:
+                    _f = _j + (lead - acc) / dsj
+                    break
+                acc += dsj
+            _f = max(_f, nd + float(c['apply_floor_steps']))
+        else:
+            _f = nd + max(float(c['apply_floor_steps']),
+                          float(c['apply_ahead_s']) / self.dt)
         _k = min(int(_f), N)
         self._apply = (_k, _f - _k)
 
@@ -1233,9 +1387,11 @@ class MPC3:
         # hold for the frame.  Handing it d[nd] -- the angle it is already
         # predicted to hold -- would make the command never change.
         k, frac = self._apply
-        cmd = d[N] if k >= N else d[k] + frac * (d[k + 1] - d[k])
+        pub = self._pub[0] if self._pub is not None else d
+        cmd = pub[N] if k >= N else pub[k] + frac * (pub[k + 1] - pub[k])
         cmd = float(np.clip(cmd, -cap, cap))
         cmd_raw = cmd
+        self.last_cmd_raw = cmd_raw
         # Opt-in output smoothing; both are the identity at their 0.0 default.
         if self.last_cmd is not None:
             b = float(c['cmd_notch'])

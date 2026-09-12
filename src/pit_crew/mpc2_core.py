@@ -172,9 +172,18 @@ class Actuator:
     """
 
     def __init__(self, dead_time=0.135, rate=vehicle.STEER_RATE, sub_dt=0.005,
-                 keep_s=1.0):
+                 keep_s=1.0, steer_tau=0.0):
         self.dead_time = float(dead_time)
         self.rate = float(rate)
+        # OPT-IN first-order rack lag (Autoware's `vehicle_model_steer_tau`).
+        # 0.0 is the shipping model -- a pure slew limiter, which is what every
+        # earlier number was measured with -- and the multiply by 1.0 below is
+        # exact, so the default path is byte-identical.  The joint fits of the
+        # display staircase want dead 0.10 / tau 0.04 / slew 3.2 at 0.058 s and
+        # dead 0.14-0.16 / tau 0.06-0.08 at 0.100 s; the law here is the same
+        # one `tools/sim_tracker.Plant`'s `pole` actuator applies, so the model
+        # and the harness plant agree by construction.
+        self.steer_tau = float(steer_tau)
         self.sub_dt = float(sub_dt)
         self.keep_s = float(keep_s)
         self.hist = [(-1e9, 0.0)]          # (t_published, command_rad)
@@ -241,10 +250,22 @@ class Actuator:
         n = max(1, int(math.ceil((t_to - t_from) / self.sub_dt)))
         dt = (t_to - t_from) / n
         step = self.rate * dt
+        lag = self._lag(dt)
         for k in range(n):
             tgt = self._target_at(t_from + (k + 0.5) * dt)
-            delta += max(-step, min(step, tgt - delta))
+            delta += max(-step, min(step, (tgt - delta) * lag))
         return delta
+
+    def _lag(self, dt):
+        """Fraction of the remaining error the rack covers in ``dt``.
+
+        1.0 -- move all the way, i.e. a pure slew limiter -- unless
+        ``steer_tau`` is set, in which case it is the exact discrete first
+        order response ``1 - exp(-dt/tau)``.
+        """
+        if self.steer_tau <= 0.0:
+            return 1.0
+        return 1.0 - math.exp(-dt / self.steer_tau)
 
     def delta_at(self, t):
         """Actuator angle at ``t``: measured where we have it, modelled after."""
@@ -280,13 +301,14 @@ class Actuator:
         n = max(1, int(math.ceil((t1 - t0) / self.sub_dt)))
         dt = (t1 - t0) / n
         step = self.rate * dt
+        lag = self._lag(dt)
         for k in range(n):
             tm = t0 + (k + 0.5) * dt
             if tm <= t_fb:
                 delta = self._measured_at(tm)
             else:
                 tgt = self._target_at(tm)
-                delta += max(-step, min(step, tgt - delta))
+                delta += max(-step, min(step, (tgt - delta) * lag))
             yr = v * kappa_of(delta)
             ym = yaw + 0.5 * yr * dt
             x += v * math.cos(ym) * dt

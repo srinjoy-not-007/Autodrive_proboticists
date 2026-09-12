@@ -416,14 +416,17 @@ class MPC3Sim:
                        'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
                        'thr_lead_s', 'thr_lead_mode', 'thr_enc_tau', 'delay_s',
                        'apply_ahead_s', 'apply_floor_steps', 'steer_rate',
-                       'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead')
+                       'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
+                       'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
+                       'lead_k', 'lead_min_m')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
                 skw[k] = int(round(skw[k]))
         self.P.update(kw)
         self.mpc = MPC3(path, **skw)
-        self.act = Actuator(dead_time=self.P['cmd_dead_time'])
+        self.act = Actuator(dead_time=self.P['cmd_dead_time'],
+                            steer_tau=self.mpc.cfg['steer_tau'])
         self.filt = PoseFilter(self.act, blend=self.P['pose_blend'],
                                gate_m=self.P['blend_gate_m'])
         self.thr = ServoThrottle(

@@ -143,6 +143,24 @@ class MPC3Tracker(Node):
             ('cmd_tau', 0.0),
             ('cmd_notch', 0.0),
             ('e_dead', 0.0),
+            # --- the rack inside the rollout (OPT-IN; see mpc3_core) ---------
+            # `steer_tau` is handed to BOTH the solver's rollout and the
+            # `Actuator` that does the delay compensation, so there is one rack
+            # model in the node.  `model_cmd_tau` 1.0 additionally puts the
+            # `cmd_tau` output filter inside the rollout.
+            ('steer_tau', 0.0),
+            ('model_cmd_tau', 0.0),
+            # --- publish lead: seconds ('temporal') or metres ('spatial') ----
+            # 'spatial' reads the published angle a DISTANCE ahead
+            # (`max(lead_min_m, lead_m0 + lead_k * v)`), which is
+            # rate-invariant; `apply_ahead_s` and `rate_adaptive`'s `apply`
+            # term are then inert, every other rate term still applies.  The
+            # defaults are `apply_ahead_s` 0.090 s expressed as a distance,
+            # NOT ForzaETH's pure-pursuit L1 -- see `mpc3_core.DEFAULTS`.
+            ('lead_mode', 'temporal'),
+            ('lead_m0', 0.0),
+            ('lead_k', 0.09),
+            ('lead_min_m', 0.30),
             ('use_steer_feedback', True),
             ('steer_fb_age', 0.0),
             # --- steering authority ------------------------------------------
@@ -343,9 +361,13 @@ class MPC3Tracker(Node):
             apply_floor_steps=v['apply_floor_steps'],
             w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],
             cmd_notch=v['cmd_notch'], e_dead=v['e_dead'],
+            steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
+            lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
+            lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],
             steer_rate=v['steer_rate_limit'])
         self.act = Actuator(dead_time=float(v['cmd_dead_time']),
-                            rate=float(v['steer_rate_limit']))
+                            rate=float(v['steer_rate_limit']),
+                            steer_tau=float(v['steer_tau']))
         self.filt = PoseFilter(self.act, blend=float(v['pose_blend']),
                                gate_m=float(v['blend_gate_m']))
         self.thr = ServoThrottle(
@@ -444,6 +466,16 @@ class MPC3Tracker(Node):
                 # Commands are stamped with the tick they are latched at, so
                 # what is left to model is the bridge alone.
                 self.act.dead_time = self._bridge
+        if str(v['lead_mode']).strip().lower() == 'spatial':
+            # Not a conflict, but it changes what `rate_adaptive` is doing:
+            # the publish index is a distance now, so the `apply` term has
+            # nothing to scale.  Every other rate term still applies.
+            self.get_logger().info(
+                'lead_mode=spatial: publish index is '
+                f"max({float(v['lead_min_m']):.2f}, "
+                f"{float(v['lead_m0']):+.2f} + {float(v['lead_k']):.2f} v) m "
+                'ahead of the first free step; apply_ahead_s (and '
+                "rate_adaptive's `apply` term) is inert")
 
         self.pose = None
         self.gyro_z = 0.0
