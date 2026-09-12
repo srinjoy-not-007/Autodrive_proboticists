@@ -60,10 +60,14 @@ BARRIER_RICH = 0.40
 BARRIER_DEFAULT = 0.34
 
 # How much room the margin must have over and above itself before 0.40 is
-# taken.  The feasible cap is measured on a 0.02 m marching grid off a 0.025 m
-# map, so a line sitting exactly on the cap is not distinguishable from one
-# just under it.
-BARRIER_SLACK = 0.02
+# taken.  The steer_tau x barrier sweep (Sept 12, 7488 harness laps) found
+# 0.40 free-or-better on every line whose cap is >= 0.385 (the 2025 safe
+# lines and cdctf fast3_m53: lap -0.03..+0.03 s, collisions down, min
+# clearance up) and worse only where the cap is 0.345 (icra2025 fast2_m50:
+# +0.04..+0.08 s/lap and the sweep's one collision).  The measured caps
+# are 0.345 / 0.385 / 0.585, so the threshold sits between the first two:
+# a NEGATIVE slack of 0.015 takes 0.40 at 0.385 and refuses it at 0.345.
+BARRIER_SLACK = -0.015
 
 # What makes a circuit "tight" enough for the brake lead to be worth its
 # +0.23..+0.30 s/lap.  Both 2025 circuits trip the kappa test (1.68 and 1.74);

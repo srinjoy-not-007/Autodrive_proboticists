@@ -44,7 +44,7 @@ class TestTheBarrierRule:
     @pytest.mark.parametrize('half,want', [
         (0.420, 0.34),      # Porto cr_dk0.8: cap 0.285
         (0.480, 0.34),      # the fast2_m50 lines: cap 0.345
-        (0.520, 0.34),      # the safe lines / fast3_m53: cap 0.385
+        (0.520, 0.40),      # the safe lines / fast3_m53: cap 0.385 (sweep: 0.40 free-or-better)
         (0.560, 0.40),      # cap 0.425, clears 0.40 + slack
         (0.720, 0.40),      # ICRA 2026: cap 0.585
     ])
@@ -52,11 +52,13 @@ class TestTheBarrierRule:
         assert pick_config.decide(geo(min_halfwidth=half))[
             'barrier_margin'] == want
 
-    def test_a_line_exactly_on_040_does_not_get_040(self):
-        """The cap is measured on a 0.02 m march off a 0.025 m map, so sitting
-        ON it is not distinguishable from sitting just under it."""
-        assert pick_config.decide(geo(min_halfwidth=0.40 + 0.135))[
+    def test_the_threshold_sits_between_the_measured_caps(self):
+        """0.345 (icra2025 fast2_m50: worse at 0.40) must refuse, 0.385 (the
+        safe lines, fast3_m53: free-or-better at 0.40) must take it."""
+        assert pick_config.decide(geo(min_halfwidth=0.345 + 0.135))[
             'barrier_margin'] == 0.34
+        assert pick_config.decide(geo(min_halfwidth=0.385 + 0.135))[
+            'barrier_margin'] == 0.40
 
     def test_the_slack_is_a_knob_not_a_constant(self):
         assert pick_config.decide(geo(min_halfwidth=0.535),
