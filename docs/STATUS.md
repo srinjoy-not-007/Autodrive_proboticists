@@ -147,6 +147,21 @@ lines under the 0.28 m gate are the least robust under stress. A/B
 queued live (dk06_w063_ay70, 32 laps). The remaining ~0.5 s to the
 winners is not in the line.
 
+**REAL-DISPLAY RUN (Sept 12) -- the organisers' setup, and a failure.**
+Same shipping config (cr_dk0.8 + rate_adaptive, Ultra), simulator
+windowed on this host's real display (240 Hz monitor) with a human
+clicking Connection (MANUAL_CONNECT=1): telemetry period **0.058 s**
+(Xvfb: 0.088-0.106), **23 laps, 10 collisions**, median 7.105 between
+them, OFFICIAL 72.5 + 30 s. 9 of 10 at the hairpin entry (-1.6,-6.5),
+cte -0.34..-0.37 m at 2.7 m/s, localization error at impact 0.02-0.05 m:
+the rate failure again, now at a period rate_adaptive was never tested
+at (its clamp is 0.5-1.5x nominal). Run-wide est-truth p50 0.133 m vs
+~0.04 on Xvfb (cause unverified). **Every Xvfb lap time so far was
+measured at a period the organisers may not have**; the stack must be
+clean from ~0.055 to ~0.11 s. Offline reproduction and fix in progress;
+the real-display test needs a human click until the click geometry is
+fixed for a small window on a 5120x2880 screen.
+
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
 ICRA 2026 32 laps / 0 collisions / 150.4 s; SRL 2025 CDC-TF (never
