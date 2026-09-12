@@ -86,11 +86,47 @@ stage "3/4 centerline + swept racing lines (no recon: checkpoints stand in)"
 # clearance, extra lateral-shift smoothing, and the provisional 0.22 m
 # clearance floor. Both centerline methods are built and every candidate is
 # gated on drivability and measured body clearance, exactly as before.
-.venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" || exit 1
+#
+# LINE_ARGS passes extra flags straight to make_track_lines.py. The set that
+# exists for a TIGHT circuit -- one whose own centerline is tighter than the
+# 1.0 1/m bar the absolute kappa gate applies, which rejects every width-using
+# candidate and silently falls back to the centerline:
+#
+#   LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
+#              --kappa-gate safe' ./scripts/finals_drill_mesh.sh ...
+#
+# All four are opt-in and off by default, so the drill's output without
+# LINE_ARGS is byte-identical to what it has always produced. Read the gate
+# output in 3/4 first: reach for them when every `raceline` candidate is
+# REJECTED on kappa and `race.csv` has become the safe line.
+# shellcheck disable=SC2086
+.venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" ${LINE_ARGS:-} || exit 1
 
-stage "4/4 footprint clearance check on the line we would actually race"
-.venv/bin/python tools/footprint_analysis.py "$MAP" \
-    "data/racelines/${SLUG}_mesh_race.csv"
+stage "4/4 footprint clearance check on both lines we might race"
+for kind in race safe; do
+    echo "--- ${SLUG}_mesh_${kind}.csv"
+    .venv/bin/python tools/footprint_analysis.py "$MAP" \
+        "data/racelines/${SLUG}_mesh_${kind}.csv"
+done
+
+stage "the exact submission edits for slug '${SLUG}_mesh'"
+# The commonest way to lose a finals is an asset that never made it into the
+# image, so print the two edits rather than describing them.
+cat <<EOM
+submission/Dockerfile -- add at the 'ADD THE FINALS LINES HERE' marker
+(the centerline is REQUIRED: localization seeds its whole particle cloud at
+centerline[0] and resamples along it on every collision recovery):
+
+     data/racelines/${SLUG}_mesh_centerline.csv \\
+     data/racelines/${SLUG}_mesh_<race|safe>.csv \\
+
+submission/autodrive_devkit.sh -- one line; LINE and CENTER follow the slug:
+
+  MAP="\${PIT_CREW_MAP:-/home/data/maps/${SLUG}_mesh}"
+
+The map itself needs no Dockerfile edit (data/maps/*_mesh.{pgm,yaml} is
+globbed). Verify both with:  .venv/bin/python -m pytest -q tests/test_submission_assets.py
+EOM
 
 stage "DRILL COMPLETE in $(( $(date +%s) - T0 ))s"
 cat <<EOM
@@ -101,6 +137,10 @@ Drive it (the race line, then the safe line as the fallback):
   CONTROLLER=mpc3 LIDAR_OFFSET=0.1933 ./scripts/run_stanley.sh 1.0 ${SLUG}_mesh safe
 
 Score it:  .venv/bin/python tools/score_race.py <log> data/racelines/${SLUG}_mesh_centerline.csv
+
+\`${SLUG}_mesh_centerline.csv\` is 4 columns (x, y, w_right, w_left) and carries
+NO speed profile: it is what localization seeds from, and it can never be passed
+as PIT_CREW_LINE. The centerline-shaped thing you RACE is \`_safe.csv\`.
 
 The race line is chosen under a clearance floor of 0.22 m, which is a PHYSICS
 bound and not a driven one -- nothing has yet raced a mesh-map line that tight.

@@ -52,6 +52,7 @@ def run(func, env):
         'MAP=/m; CENTER=/c.csv; LINE=/l.csv; SCALE=1.00',
         'LIDAR_OFFSET=0.1933; CONTROLLER=mpc3',
         'CTRL_ARGS=(-p map_prefix:="$MAP")',
+        'LOC_ARGS=()',
         'EXTRA_CTRL_ARGS=(); EXTRA_LOC_ARGS=()',
     ]
     # The real script builds the EXTRA_* arrays at top level; lift that too.
@@ -149,3 +150,86 @@ class TestTheSupervisorRestartsWithTheSameArguments:
         src = source()
         loop = src[src.index('while :; do'):]
         assert 'ros2 run' not in loop
+
+
+class TestTheBuiltInArgArraysComeBeforeTheEnvironment:
+    """`CTRL_ARGS` / `LOC_ARGS` hold the parameters the SHIP decision turns on
+    (the mpc3 rate fix, the localization speed cap). They must be appended at
+    the launch functions -- so a supervisor restart carries them -- and must
+    come BEFORE the `PIT_CREW_*_ARGS` environment, so a finals-day override
+    still wins."""
+
+    @pytest.mark.parametrize('func,built_in,extra', [
+        ('start_ctrl', 'CTRL_ARGS', 'EXTRA_CTRL_ARGS'),
+        ('start_loc', 'LOC_ARGS', 'EXTRA_LOC_ARGS'),
+    ])
+    def test_built_in_then_environment(self, func, built_in, extra):
+        body = lift(func, src=source())
+        assert '"${%s[@]}"' % built_in in body, (func, built_in)
+        assert body.index('${%s[@]}' % built_in) < body.index('${%s[@]}' % extra)
+
+    def test_the_localization_override_wins_over_the_built_in(self):
+        """Both arrays populated: the environment's copy is last, and ROS takes
+        the last `-p name:=value` for a repeated name."""
+        src = source()
+        script = '\n'.join([
+            'setsid() { "$@"; }',
+            'ros2() { for a in "$@"; do printf "%s\\n" "$a"; done; }',
+            'MAP=/m; CENTER=/c.csv; LIDAR_OFFSET=0.1933',
+            'LOC_ARGS=(-p max_step_mps:=9.0)',
+        ] + re.findall(
+            r'^if \[\[ -n "\$\{PIT_CREW_LOCALIZATION_ARGS.*?^fi$',
+            src, re.M | re.S) + [lift('start_loc', src), 'start_loc', 'wait'])
+        out = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True, check=True,
+            env={**os.environ,
+                 'PIT_CREW_LOCALIZATION_ARGS': '-p max_step_mps:=7.0'})
+        argv = out.stdout.split('\n')[:-1]
+        assert argv[-4:] == ['-p', 'max_step_mps:=9.0',
+                             '-p', 'max_step_mps:=7.0']
+
+
+class TestTheLineDefaultFollowsTheMap:
+    """The finals mistake this closes: switching PIT_CREW_MAP to the finals
+    map alone used to leave the legacy-`mpc` branch on Porto's
+    `track_v2_safe.csv`. Preflight refuses that, which means the container
+    exits 2 and there is no race at all."""
+
+    def block(self):
+        src = source()
+        m = re.search(r'^if \[\[ -n "\$\{PIT_CREW_LINE.*?^fi$', src,
+                      re.M | re.S)
+        assert m, 'the entrypoint no longer derives LINE in one block'
+        return m.group(0)
+
+    def line_for(self, slug, controller, env=None):
+        script = '\n'.join([
+            'SLUG=%s; CONTROLLER=%s' % (slug, controller),
+            self.block(), 'printf "%s\\n" "$LINE"'])
+        out = subprocess.run(['bash', '-c', script], capture_output=True,
+                             text=True, check=True,
+                             env={**os.environ, **(env or {})})
+        return out.stdout.strip()
+
+    @pytest.mark.parametrize('slug,controller,want', [
+        ('porto_mesh', 'mpc3', '/home/data/racelines/porto_mesh_cr_dk0.8.csv'),
+        ('porto_mesh', 'mpc', '/home/data/racelines/porto_mesh_safe.csv'),
+        ('finals_mesh', 'mpc3', '/home/data/racelines/finals_mesh_race.csv'),
+        ('finals_mesh', 'mpc', '/home/data/racelines/finals_mesh_safe.csv'),
+    ])
+    def test_the_default_is_derived_from_the_slug(self, slug, controller, want):
+        env = {k: v for k, v in os.environ.items()}
+        env.pop('PIT_CREW_LINE', None)
+        assert self.line_for(slug, controller, env) == want
+
+    def test_no_default_names_another_track(self):
+        env = {k: v for k, v in os.environ.items()}
+        env.pop('PIT_CREW_LINE', None)
+        for controller in ('mpc3', 'mpc'):
+            got = self.line_for('finals_mesh', controller, env)
+            assert 'track_v2' not in got and 'porto' not in got, got
+
+    def test_an_explicit_line_still_wins(self):
+        got = self.line_for('finals_mesh', 'mpc3',
+                            {'PIT_CREW_LINE': '/home/data/racelines/x.csv'})
+        assert got == '/home/data/racelines/x.csv'

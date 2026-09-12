@@ -11,6 +11,11 @@ IMAGE="${1:?image:tag}"; LAPS="${2:-12}"; TAG="${3:-2026-iros-practice}"
 REPO_DIR="$(pwd)"; DISP=":99"; GEOM="1920x1080"
 R="source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash"
 
+# The rules' own preamble. Harmless if there is no X server to talk to, and
+# without it the organisers' `-v /tmp/.X11-unix --env DISPLAY` container is
+# refused by the host's X access control.
+xhost local:root >/dev/null 2>&1 || true
+
 docker rm -f autodrive_roboracer_api autodrive_roboracer_sim pit_helper >/dev/null 2>&1
 # Helper: dev image with the repo mounted, used only for xdotool + the logger.
 docker run --name pit_helper --rm -d --network=host --ipc=host \
@@ -37,11 +42,46 @@ if [ "${SIM_QUALITY:-ultra}" = "ultra" ]; then
     sleep 2
 fi
 
-# The submission image, as the organisers run it (plus -d instead of -it).
-docker run --name autodrive_roboracer_api --rm -d --network=host --ipc=host \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY --privileged --gpus all "$IMAGE" >/dev/null
+# The submission image, as the organisers run it.
+#
+# ENTRY_MODE picks WHICH documented path is under test, and the default is the
+# organisers' own: the official repo's "Competition Execution" uses
+# `--entrypoint /bin/bash -it` -- which lands in a shell and starts NOTHING --
+# and then runs `/home/autodrive_devkit.sh` from that shell. `-c "exec ..."` is
+# that shell, non-interactively, so the image's CMD is bypassed exactly as it
+# is for them. ENTRY_MODE=cmd tests the other path, the argument-less
+# `docker run <image>` that boots the stack from the image's default CMD.
+# Both must work; only the first is what the rules describe.
+ENTRY_MODE="${ENTRY_MODE:-bash}"
+case "$ENTRY_MODE" in
+    bash) RUN_ARGS=(--entrypoint /bin/bash) ; RUN_CMD=(-c "exec /home/autodrive_devkit.sh") ;;
+    cmd)  RUN_ARGS=()                       ; RUN_CMD=() ;;
+    *)    echo "ENTRY_MODE must be bash or cmd"; exit 2 ;;
+esac
+echo "entry mode: $ENTRY_MODE"
+docker run --name autodrive_roboracer_api --rm -d "${RUN_ARGS[@]}" \
+    --network=host --ipc=host \
+    -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY --privileged --gpus all \
+    "$IMAGE" "${RUN_CMD[@]}" >/dev/null
 sleep 12
 docker exec pit_helper /bin/bash -c "$R && ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1; true"
+# The organisers may open extra shells in the running container. Nothing in the
+# image may start on shell entry -- the base image's ~/.bashrc sources the two
+# ROS overlays and nothing else, and our Dockerfile never touches it -- so a
+# second shell must not add a node. (Run AFTER the daemon restart, or the two
+# node lists are not comparable.)
+nodes() { docker exec pit_helper /bin/bash -c "$R && ros2 node list 2>/dev/null | sort | tr '\n' ' '"; }
+BEFORE="$(nodes)"
+docker exec autodrive_roboracer_api bash -lc 'true' >/dev/null 2>&1
+sleep 3
+AFTER="$(nodes)"
+if [ "$BEFORE" != "$AFTER" ]; then
+    echo "ERROR: a second shell changed the node list:"
+    echo "  before: $BEFORE"
+    echo "  after:  $AFTER"
+    exit 1
+fi
+echo "second shell started no extra node: $AFTER"
 LOG="/home/data/logs/submission_$(date +%Y%m%d_%H%M%S).csv"
 docker exec -d pit_helper /bin/bash -c "$R && python3 /home/autodrive_devkit/src/pit_crew/tools/race_logger.py $LOG > /tmp/logger.log 2>&1"
 

@@ -169,11 +169,25 @@ class TestLidarOffsetMustMatchTheMap:
 
 
 class TestShippingAssetsPassPreflight:
-    """The entrypoint's own defaults must survive every new check."""
+    """Every baked combination must survive every new check.
+
+    The entrypoint's own DEFAULTS are covered by
+    `tests/test_submission_assets.py`, which derives them by running the
+    entrypoint's shell instead of restating them here (this list went stale
+    once already: it still called `mc0.60_ay6.0` the shipping mpc3 line three
+    lines after the default moved to `cr_dk0.8`).  What this list adds is the
+    combinations someone may select BY HAND with `PIT_CREW_LINE`.
+    """
 
     @pytest.mark.parametrize('mp,line,center,offset', [
-        ('porto_mesh', 'porto_mesh_mc0.60_ay6.0', 'porto_mesh_centerline',
+        ('porto_mesh', 'porto_mesh_cr_dk0.8', 'porto_mesh_centerline',
          '0.1933'),                                     # mpc3, shipping
+        ('porto_mesh', 'porto_mesh_mc0.63_ay6.75', 'porto_mesh_centerline',
+         '0.1933'),
+        ('porto_mesh', 'porto_mesh_mc0.60_ay6.0', 'porto_mesh_centerline',
+         '0.1933'),
+        ('icra2026_mesh', 'icra2026_mesh_safe', 'icra2026_mesh_centerline',
+         '0.1933'),
         ('porto_mesh', 'track_v2_safe', 'porto_mesh_centerline', '0.1933'),
         ('track_v2', 'track_v2_safe', 'track_v2_centerline', None),
         ('icra2026_mesh', 'icra2026_mesh_race', 'icra2026_mesh_centerline',

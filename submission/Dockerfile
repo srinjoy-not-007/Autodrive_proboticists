@@ -28,7 +28,11 @@ COPY src /home/autodrive_devkit/src/pit_crew
 # that a finals map produced by `scripts/finals_drill_mesh.sh` ships without an
 # edit here -- the commonest way to lose a race is an asset that did not make
 # it into the image. A map with no line is unreachable: nothing loads a map
-# that PIT_CREW_MAP does not name. ~3.6 MB total.
+# that PIT_CREW_MAP does not name, and the entrypoint's LINE default follows
+# the map's slug, so a slug with no line fails by NAME rather than by racing
+# another circuit's geometry. The glob therefore also sweeps up scratch maps
+# (`drill_*_mesh`) -- harmless, and cheaper than an explicit list that someone
+# forgets to extend on the finals day. ~3.6 MB total.
 COPY data/maps/track_v2.pgm data/maps/track_v2.yaml /home/data/maps/
 COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
 
@@ -40,10 +44,28 @@ COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
 # from being driven in the final. A line nobody has cleared should not be
 # reachable inside the submission at all.
 #
-# Every line here has been driven clean; the entrypoint picks the shipping one (cr_dk0.8 at the time of writing: mc0.63_ay6.75 with its hairpin-entry curvature ramp halved, 100 laps / 0 collisions / 70.5 s at the fast sensor rate with rate_adaptive). mc0.60_ay6.0 (the earlier
-# line, 100 laps / 0 collisions / 73.46 s with mpc3), track_v2_safe (100 laps
-# clean with the legacy mpc), icra2026_mesh_race (60 laps / 0 collisions).
-# ADD THE FINALS LINES HERE after the drill has produced and driven them.
+# Every line here has been driven clean; the entrypoint picks the shipping one.
+# At the time of writing that is `porto_mesh_cr_dk0.8` (mc0.63_ay6.75 with its
+# hairpin-entry curvature ramp halved: 100 laps / 0 collisions / 70.5 s at the
+# fast sensor rate with rate_adaptive). Also here: mc0.60_ay6.0 (the earlier
+# line, 100 laps / 0 collisions / 73.46 s with mpc3), mc0.63_ay6.75 and
+# mc0.60_ay6.5, track_v2_safe (100 laps clean with the legacy mpc) and the
+# ICRA-2026 set (60 laps / 0 collisions) as an unseen-track regression fixture.
+#
+# ADD THE FINALS LINES HERE after the drill has produced and driven them. Two
+# files, both required, both named for the map's slug because the entrypoint
+# derives them from it:
+#
+#      data/racelines/finals_mesh_centerline.csv
+#      data/racelines/finals_mesh_race.csv
+#
+# (each continued with a trailing backslash, like the lines below)
+#
+# The centerline is NOT optional and NOT a diagnostic: localization seeds its
+# whole particle cloud at centerline[0] and resamples along it on every
+# collision recovery. `tests/test_submission_assets.py` fails on the host, in
+# under a second, if any entrypoint default is missing from this list -- run it
+# before starting a five-minute build.
 COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
      data/racelines/track_v2_centerline.csv \
      data/racelines/porto_mesh_mc0.60_ay6.0.csv data/racelines/porto_mesh_mc0.60_ay6.5.csv \

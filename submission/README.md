@@ -57,7 +57,13 @@ package, `pit_crew`.
   copied from the `track_v2` files under the names the entrypoint derives from
   `PIT_CREW_MAP`.
 - `/home/autodrive_devkit.sh` — the entrypoint script, the only thing that
-  starts a race. `.bashrc` is untouched.
+  starts a race. **Nothing runs on shell entry.** The base image's
+  `/root/.bashrc` sources `/opt/ros/humble/setup.bash` and
+  `/home/autodrive_devkit/install/setup.bash` and starts no node; our
+  Dockerfile never writes to it, and there is no `.bash_profile`, `.profile`,
+  `/etc/bash.bashrc` or `/etc/profile` content of ours either (verified by
+  extracting them from both images). `scripts/test_submission_image.sh` asserts
+  the live `ros2 node list` is unchanged by a second `docker exec` shell.
 
 `ENTRYPOINT ["/bin/bash"]` is kept (the rules and every helper pass `-c "..."`),
 with `CMD ["-c", "exec /home/autodrive_devkit.sh"]` added so an argument-less
@@ -80,6 +86,7 @@ uses `--entrypoint /bin/bash -it`, which lands in a shell and starts nothing, so
 the stack is started from that shell:
 
 ```bash
+xhost local:root
 docker pull YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
 docker run --name autodrive_roboracer_api --rm -it --entrypoint /bin/bash \
   --network=host --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY \
@@ -125,14 +132,15 @@ all. Nothing else is read.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PIT_CREW_MAP` | `/home/data/maps/porto_mesh` | Map prefix (`.pgm` + `.yaml`). Its basename is the slug used to derive the centerline. Exact mesh map from `tools/map_from_mesh.py`. |
-| `PIT_CREW_LINE` | `porto_mesh_mc0.63_ay6.75.csv` under `/home/data/racelines/` for `mpc3`; `track_v2_safe.csv` for `mpc` | The raceline to track (6 columns: s, x, y, heading, curvature, speed). |
+| `PIT_CREW_LINE` | Derived from the map slug: `porto_mesh_cr_dk0.8.csv` for `mpc3` on `porto_mesh`, otherwise `<slug>_race.csv` for `mpc3` and `<slug>_safe.csv` for `mpc`, all under `/home/data/racelines/` | The raceline to track (6 columns: s, x, y, heading, curvature, speed). **Not `<slug>_centerline.csv`** — that file is 4 columns (x, y, w_right, w_left) with no speed profile, and preflight rejects it as a line. The `_safe.csv` line is the corridor middle *with* a profile. |
 | `PIT_CREW_CENTERLINE` | `/home/data/racelines/<map basename>_centerline.csv` | Derived from `PIT_CREW_MAP`, never from a fixed Porto path. **Not a diagnostic:** localization seeds its whole particle cloud at `centerline[0]` and resamples along it on every collision recovery, so a centerline from another track is a race with no laps in it. |
 | `PIT_CREW_LIDAR_OFFSET` | `0.1933` | LiDAR forward offset used by the filter, in metres. Must match the `lidar_offset` stamped in the map YAML — preflight rejects a mismatch. A recon map built at 0 must be raced at 0. |
 | `PIT_CREW_CONTROLLER` | `mpc3` | `mpc3` or `mpc` only; anything else exits 2 (use `PIT_CREW_MODE=reactive` for Follow-the-Gap). `mpc3`/`mpc2` are passed `-p map_prefix:=` for the corridor barrier; the legacy `mpc` does not declare it. `mpc` defaults to the centerline — **never pair `mpc` with the wide min-curvature line.** |
 | `PIT_CREW_SPEED_SCALE` | `1.00` | Multiplier on the line's speed profile; preflight requires finite and in (0, 1.5]. |
 | `PIT_CREW_MODE` | `raceline` | `raceline` = localization + controller. `reactive` = map-free Follow-the-Gap only (no map, line, centerline or preflight). Any other value exits 2. |
-| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--experimental-knobs-rate_adaptive-and-ilc-do-not-ship-blind) — these default off and are unvalidated live. |
-| `PIT_CREW_LOCALIZATION_ARGS` | *(empty)* | Same, for the localization node. |
+| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--the-two-prepared-fixes-and-the-knobs-that-stay-off) for what is already on (`rate_adaptive`), what is prepared but not enabled, and what stays off (ILC). Appended **after** the script's own `CTRL_ARGS`, so an override here wins. |
+| `PIT_CREW_LOCALIZATION_ARGS` | *(empty)* | Same, for the localization node. Appended **after** the script's own `LOC_ARGS`, so an override here wins (ROS takes the last `-p name:=value` for a repeated name). |
+| `PIT_CREW_FTG_PARAMS` | `…/src/pit_crew/config/ftg_mapping.yaml` | Parameter file for the reactive stack (`PIT_CREW_MODE=reactive`, and the supervisor's last-resort fallback). The default is the **mapping** profile, `v_max` 1.0 m/s: deliberately slow, and the only profile carrying the stuck/escape keys that unwedge an unattended car. `…/config/ftg.yaml` is the faster racing profile (`v_max` 1.5) with no escape behaviour. Which is right depends on how tight the finals circuit is — Follow-the-Gap took 24 collisions in 194 s on SRL 2025 ICRA, which is a DQ. |
 
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` are pinned to 1
 by the script: the controller's numpy solves are 20x30 matrices, and OpenBLAS
@@ -180,13 +188,25 @@ Race the image exactly as the organisers do — no source or data mounts, the
 image's own entrypoint, the official docker flags, Ultra graphics — with:
 
 ```bash
+# the organisers' documented path: --entrypoint /bin/bash, script run inside
 ./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification 12
+# the argument-less CMD path, which must work too
+ENTRY_MODE=cmd ./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification 12
 .venv/bin/python tools/score_race.py data/logs/submission_<ts>.csv
 ```
 
+The script runs `xhost local:root` first, sets Ultra, and checks that a second
+`docker exec` shell adds no node. `ENTRY_MODE` defaults to `bash`.
+
 - Run the image with no mounts; verify the bridge and both team nodes come up.
 - Wait before connecting; confirm the car only begins when Connection is pressed.
-- Open a second shell; confirm it creates no second controller.
+- Open a second shell; confirm it creates no second controller (the script
+  does this automatically and fails the run if the node list changes).
+- Run the host asset check before building:
+  `.venv/bin/python -m pytest -q tests/test_submission_assets.py`. It derives
+  the entrypoint's `MAP`/`LINE`/`CENTER` defaults by running the entrypoint's
+  own shell and asserts every one of them is produced by a Dockerfile `COPY`
+  and passes preflight — the "edited the default, forgot the COPY" failure.
 - Record one warm-up lap plus ten simulator-counted race laps, and score them
   with `tools/score_race.py`. Quote the **`OFFICIAL (simulator last_lap_time)`**
   line and its `+10 s` collision penalties — never `10 * median`, geometric
