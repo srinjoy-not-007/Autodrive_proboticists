@@ -481,7 +481,9 @@ there, so the 2 collisions are the 2.2-sigma tail of the same behaviour
 committed, to drive). Do NOT raise the barrier there: the corridor is
 left-tight/right-open and the margin would bias the car further inside. **ICRA 2025 fast2_m50: 32 laps, 0
 collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
-drill's pick for that circuit under the finals config.
+drill's pick for that circuit under the finals config. **ICRA 2026 with
+steer_tau: 32/0/148.3 s (vs 150.4 without). steer_tau 0.04 SHIPPED in
+the entrypoint (Sept 12).**
 
 **Cross-track config matrix (Sept 12, harness, 432 laps per config on
 the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin

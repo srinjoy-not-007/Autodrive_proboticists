@@ -134,6 +134,12 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     #
     # Uncomment the next line -- ONE line, here, nowhere else -- once its
     # four-track Xvfb regression and the finals track's Gate D are clean.
+    # steer_tau 0.04 (Sept 12): first-order rack lag in the rollout. Display
+    # 32/0 69.36 s (with the barrier); recovers the smoothing's lap cost on
+    # tight circuits (CDC-TF 116.7 -> 112.0, ICRA 2026 150.4 -> 148.3);
+    # ICRA 2025 fast2_m50 32/0 140.4 s. Keep at 0.04: 0.06+ is a plant
+    # mismatch that collides in the harness.
+    CTRL_ARGS+=(-p steer_tau:=0.04)
     CTRL_ARGS+=(-p barrier_margin:=0.34)  # enabled Sept 12: display 32/0 x2 (69.44, 69.36 s), Porto 100/0 Xvfb 71.50 s, CDC-TF/ICRA25/ICRA26 32/0 each
     #
     # REJECTED, do not resurrect: `-p apply_floor_steps:=0.0 -p rate_terms:=...`
