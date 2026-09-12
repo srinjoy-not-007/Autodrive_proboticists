@@ -137,6 +137,12 @@ k_e 3.7, apply_ahead_s 0.082, delay_s 0.145, thr_lead_s 0.24, ay_budget
 the most likely harness artefact; w_rate, w_barrier and step_dt sit on
 their search bounds. The harness itself is ~10x optimistic on collisions
 at 0.088 (1 per 57 laps vs 7 per 32 live), so these are margin claims.
+**Driven (rateinv, 0.094 s): 32 laps, 0 collisions, 70.90 s, but the
+margin claim did NOT transfer**: |e| p95 0.226 vs 0.182 m, min clearance
+0.127 vs 0.179 m, hairpin offset -0.22 vs -0.18 m against defaults +
+rate_adaptive on the same instance class. Not adopted. The harness ranks
+lines and rate terms usefully; it does not predict absolute tracking
+error, so do not tune cost weights on it.
 
 **Curvature-rate-limited lines (Sept 12, offline, not driven):**
 `optimize_raceline.py --dkappa-max` (opt-in, uncommitted until
