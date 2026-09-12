@@ -11,6 +11,13 @@ collisions, 73.75 s sim timer, PASS (the previous image sampled 70.82 s;
 14-lap samples scatter ~1.5 s). w_veh 0.63 at ay 7.0: best lap 6.71 s but
 4 collisions/32 (s 11.3 hairpin entry x3) -- rejected; ay 6.75 is the limit
 for this tracker on this line family.
+**REGRESSION under investigation:** the same image raced as shipped for 42
+laps took 11 collisions in 20 laps (4 in the scored ten; laps 6.8 s where
+the dev runs lap 7.2), all hairpin entries. Localization is fine (lateral
+est-truth p95 0.04). The logger's sample period was 0.088 s in the image run
+against 0.104 s in the clean 100-lap dev runs: mpc3 was validated at ~9.6
+Hz and misbehaves at 11.4 Hz (faster, later braking). Rate adaptivity is
+being built; do not trust a 14-lap image sample either way.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
