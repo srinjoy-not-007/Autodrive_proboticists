@@ -147,6 +147,22 @@ lines under the 0.28 m gate are the least robust under stress. A/B
 queued live (dk06_w063_ay70, 32 laps). The remaining ~0.5 s to the
 winners is not in the line.
 
+**UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
+(mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
+ICRA 2026 32 laps / 0 collisions / 150.4 s; SRL 2025 CDC-TF (never
+tuned) 32 / 0 / **111.1 s** (Aug 30 legacy stack: 124.5 s); **SRL 2025
+ICRA (never tuned) 4 laps / 14 collisions = DQ.** Cause from the log: on
+the long straight the encoder reads 7.5 m/s while IPS truth moves at 4.76
+m/s (wheelspin at throttle 0.30; no slip below ~5 m/s, and none on
+CDC-TF at the same throttle and speed), the dead-reckoned estimate runs
+7 m ahead of the car, localization is lost and the car hits the same
+corner every lap. Physics, vehicle and tyre assets are IDENTICAL between
+the two images (compare_sim_builds), so it is track-specific (floor
+material or geometry -- under investigation). A SCALE=0.75 re-run is
+queued to test the speed dependence; a slip-robust fix (throttle slip
+guard / IMU-fused speed / conservative v_max for unseen tracks) is being
+designed offline. **This is the finals risk to close before Sep 16.**
+
 **Rules check (Sept 12, from the 2026 rules page and the organisers'
 repo):** the Porto qualification is a pass/fail GATE only ("Passing the
 qualification session entitles a team for the final race"); ranking is
