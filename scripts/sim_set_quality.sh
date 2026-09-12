@@ -119,6 +119,8 @@ else
     fi
 fi
 read -r HAMB_X HAMB_Y <<<"$(map $C_HAMB_X $C_HAMB_Y)"
+read -r PROBE_X PROBE_Y <<<"$(map $C_PROBE_X $C_PROBE_Y)"
+read -r LABEL_X LABEL_Y <<<"$(map 110 670)"
 read -r QUAL_X QUAL_Y <<<"$(map $C_QUAL_X $C_QUAL_Y)"
 
 # --- primitives --------------------------------------------------------------
@@ -134,7 +136,7 @@ click_at() {
 # shot <name>: full screenshot + a crop of the quality label, copied to OUTDIR.
 shot() {
     api "DISPLAY=$DISP import -window root /tmp/q.png &&
-         convert /tmp/q.png -crop 520x80+110+670 +repage /tmp/qlabel.png" >/dev/null
+         convert /tmp/q.png -crop 520x80+${LABEL_X}+${LABEL_Y} +repage /tmp/qlabel.png" >/dev/null
     docker cp "$SIM_API:/tmp/q.png"      "$OUTDIR/$1.png"      >/dev/null
     docker cp "$SIM_API:/tmp/qlabel.png" "$OUTDIR/$1_label.png" >/dev/null
     echo "  screenshot $OUTDIR/$1.png   label crop $OUTDIR/$1_label.png"
@@ -146,7 +148,7 @@ shot() {
 # open (255,255,255), closed (44,75,120).
 sidebar_open() {
     api "DISPLAY=$DISP import -window root /tmp/probe.png &&
-         convert /tmp/probe.png -format '%[fx:int(255*p{$C_PROBE_X,$C_PROBE_Y}.r)] %[fx:int(255*p{$C_PROBE_X,$C_PROBE_Y}.g)] %[fx:int(255*p{$C_PROBE_X,$C_PROBE_Y}.b)]' info:" \
+         convert /tmp/probe.png -format '%[fx:int(255*p{$PROBE_X,$PROBE_Y}.r)] %[fx:int(255*p{$PROBE_X,$PROBE_Y}.g)] %[fx:int(255*p{$PROBE_X,$PROBE_Y}.b)]' info:" \
     | awk '{ exit !($1>200 && $2>200 && $3>200) }'
 }
 
