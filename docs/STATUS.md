@@ -161,6 +161,21 @@ measured at a period the organisers may not have**; the stack must be
 clean from ~0.055 to ~0.11 s. Offline reproduction and fix in progress;
 the real-display test needs a human click until the click geometry is
 fixed for a small window on a 5120x2880 screen.
+**ROOT CAUSE (offline, same day):** `MPC3.solve` floors the command lead
+at one `step_dt` (0.060 s), so below a 0.069 s period the rate-adapted
+`apply_ahead_s` is discarded and the publish index becomes an exact plan
+knot: successive commands step 3.2*0.060/0.058 = 3.31 rad/s, above the
+rack's 3.2 rad/s. Live: 12-28% of commands through s 13-16 exceed the
+rack rate at 0.058 (0% at 0.094); the car turns in early and drifts
+inside from s 9.7 to the wall at s 11.3-11.7. Localization is innocent
+(de-staled |err| p50 0.037 m at both rates). Fix, opt-in and committed:
+`apply_floor_steps:=0.0` + `rate_terms:=apply,thr,delay,predict,enc,pose`
+(actuator dead time = bridge + p/2). Harness: min clearance 0.035 ->
+0.071 at 0.058, command saturation 0.23 -> 0.00, 0.065/0.075 lap times
+back to the 0.104 value, defaults byte-identical. Live display A/B
+queued (`display_ratefix`). Also: the rate clamp is [0.052, 0.156] s
+(`rate_lo`/`rate_hi` now params) -- a host below 0.052 s silently
+reverts to the 0.104 tune.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
