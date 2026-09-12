@@ -16,7 +16,9 @@ i.e. a late/weak braking point, not a steering problem. Testing horizon 30
 with earlier braking: a_brake 3.5 -> 9/32, thr_lead_s 0.30 -> 7/32, w_rate
 1.9 alone -> 0/32 at 72.29 (neutral). Horizon 30 is dead live. The shipping
 defaults are the local optimum on this line; next is the line's own braking
-profile (planner --brake 3.5) into that hairpin.
+profile (planner --brake 3.5) into that hairpin: 32 laps, 0 collisions,
+71.90 s, median 7.18 -- neutral. Porto has converged at ~71-72 s clean with
+this line and tracker.
 
 ## September 13: 71.6 s / 100 laps clean
 
