@@ -76,6 +76,14 @@ the harness (`--pose-lon-bias 0.15 --frame 0.088 --plant-realistic`) it
 reproduces 64 collisions/100 laps at s 11.1-11.8 and 0/100 at 0.104. So the
 fix is in the pose/latency chain (stamp-to-now prediction, committed
 steps), i.e. the period-scaled terms, not the throttle.
+The sensor period is a PER-START LOTTERY of the simulator on this host:
+some starts run at 0.088-0.091 s, others at 0.103-0.106 s, stable within a
+run (dt per 2-minute window is flat), independent of graphics quality and
+host load in the quiet case. Two rate-adaptive "A/B" runs (ra_low, ra_low_wide)
+landed on 0.104 s instances and are therefore not 11 Hz tests (both clean,
+73.1 s official). `RATE_MAX_DT`/`RATE_MIN_DT` on run_exp/run_stanley now
+restart the sim until the period is in the wanted band; every run must be
+read with its dt_p50 (tools/lap_report.py).
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
