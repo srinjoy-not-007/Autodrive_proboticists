@@ -517,7 +517,10 @@ candidate = shipping + barrier_margin 0.34 + steer_tau 0.04 (steer_tau
 also recovers the smoothing's lap cost on tight circuits: CDC-TF 112.0
 vs 116.7). nd_mode display runs dropped (rejected on the tight circuits
 offline). Regression of the barrier on the three circuits + Porto 100
-running; steer_tau + barrier on the circuits to follow.
+running; steer_tau + barrier on the circuits to follow. **Barrier
+regression: CDC-TF 117.3, ICRA 2025 149.8, ICRA 2026 150.4 (all 32/0,
+unchanged), Porto 100 laps / 0 / 71.50 s (Xvfb). ENABLED in the
+entrypoint's CTRL_ARGS (Sept 12).**
 
 **Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
 committed; display A/B queued):** `steer_tau` (first-order rack lag
