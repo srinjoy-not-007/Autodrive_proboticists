@@ -28,16 +28,10 @@
 # opt-in precisely because it takes over the pointer to click Connection, so it
 # should only ever be used when somebody has ASKED to watch.
 set -e
+. "$(dirname "$0")/lib_display.sh"   # display_select / click / canvas geometry
 TAG="${TAG:-2026-iros-practice}"
 GEOM="1920x1080"
-if [ "${VISIBLE:-0}" = "1" ]; then
-    DISP="${DISPLAY:-:0}"
-    echo "VISIBLE=1: simulator will open on your display ${DISP}."
-    echo "It will move the mouse pointer briefly to click Connection."
-    xhost local:root >/dev/null 2>&1 || true
-else
-    DISP=":99"
-fi
+display_select
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -66,8 +60,7 @@ docker run --name autodrive_roboracer_sim --rm -d \
 
 echo "Waiting for simulator window on ${DISP}..."
 for i in $(seq 1 30); do
-    WID=$(docker exec autodrive_roboracer_api /bin/bash -c \
-        "DISPLAY=${DISP} xdotool search --name '^AutoDRIVE Simulator\$' 2>/dev/null | head -1" || true)
+    WID=$(display_find_window autodrive_roboracer_api "${DISP}")
     [ -n "$WID" ] && break
     sleep 2
 done
@@ -83,66 +76,10 @@ connected() {
 # and wants the press and release in separate frames. Approach from elsewhere,
 # then hold the button down briefly; `xdotool click` alone frequently misses.
 # Coordinates are for a 1920x1080 canvas with no window-manager decoration.
-click_at() {
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "export DISPLAY=${DISP}
-         xdotool mousemove 900 600; sleep 0.4
-         xdotool mousemove $1 $2; sleep 1.2
-         xdotool mousedown 1; sleep 0.2; xdotool mouseup 1"
-}
+click_at() { display_click_at autodrive_roboracer_api "${DISP}" "$1" "$2"; }
 
-# On :99 there is no window manager: the canvas is a bare 1920x1080 at 0,0.
-# On a real display the window is decorated and smaller, so the UI is scaled
-# and offset -- take the geometry from the window itself rather than assuming.
-if [ "${DISP}" = ":99" ]; then
-    HAMB_X=75;  HAMB_Y=43;  CONN_X=75;  CONN_Y=409
-else
-    # Make the window the 1920x1080 canvas the coordinates were measured on:
-    # on a 5120x2880 desktop Unity opens small and the UI is scaled, and
-    # fixed offsets (the old +51/+64/+302) missed every click. Resize, then
-    # read the geometry back (Position is the client-area origin, i.e. it
-    # already includes the window-manager decoration) and fall back to
-    # proportional scaling if the window manager refused the size.
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "DISPLAY=${DISP} xdotool windowmove $WID 0 0; sleep 0.5
-         DISPLAY=${DISP} xdotool windowsize $WID 1920 1080; sleep 1.5
-         DISPLAY=${DISP} xdotool windowactivate $WID 2>/dev/null; true"
-    GEO=$(docker exec autodrive_roboracer_api /bin/bash -c \
-        "DISPLAY=${DISP} xdotool getwindowgeometry $WID")
-    OX=$(echo "$GEO" | sed -n 's/.*Position: \([0-9]*\),\([0-9]*\).*/\1/p')
-    OY=$(echo "$GEO" | sed -n 's/.*Position: \([0-9]*\),\([0-9]*\).*/\2/p')
-    WW=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\1/p')
-    WH=$(echo "$GEO" | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\).*/\2/p')
-    echo "window $WID at ${OX},${OY} size ${WW}x${WH} (frame)"
-    # The frame geometry is not the canvas: find the sim's header bar in a
-    # screenshot (tools/find_sim_ui.py) and use its origin. Falls back to the
-    # frame with a proportional scale if the bar is not found.
-    UI=""
-    for shot in 1 2 3 4; do
-        sleep 2
-        docker exec autodrive_roboracer_api /bin/bash -c \
-            "DISPLAY=${DISP} import -window root /tmp/ui.png 2>/dev/null; true"
-        docker cp autodrive_roboracer_api:/tmp/ui.png /tmp/sim_ui.png >/dev/null 2>&1 || true
-        UI=$("${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/tools/find_sim_ui.py" /tmp/sim_ui.png 2>/dev/null || true)
-        # accept only a settled, full-width canvas (the resize animates)
-        if [ -n "$UI" ] && [ "$(echo "$UI" | cut -d" " -f3)" -ge 1900 ]; then break; fi
-        UI=""
-    done
-    if [ -n "$UI" ]; then
-        read -r CX CY CW <<<"$UI"
-        echo "canvas at ${CX},${CY} width ${CW}"
-        echo "$CX $CY $CW" > /tmp/sim_ui_origin
-        HAMB_X=$((CX + 75 * CW / 1920)); HAMB_Y=$((CY + 43 * CW / 1920))
-        CONN_X=$((CX + 75 * CW / 1920)); CONN_Y=$((CY + 409 * CW / 1920))
-    else
-        echo "WARN: header bar not found in screenshot; scaling from the frame"
-        rm -f /tmp/sim_ui_origin
-        HAMB_X=$((OX + 75 * WW / 1920)); HAMB_Y=$((OY + 43 * WH / 1080))
-        CONN_X=$((OX + 75 * WW / 1920)); CONN_Y=$((OY + 409 * WH / 1080))
-    fi
-    # Keep a screenshot per attempt for diagnosis (data/logs/display_click_*.png).
-    SHOT=1
-fi
+display_resolve_click_coords autodrive_roboracer_api "${DISP}" "$WID" "${REPO_DIR}"
+
 # MANUAL_CONNECT=1: a human clicks Connection (and sets graphics quality),
 # exactly as the organisers do. Wait for data instead of clicking.
 if [ "${MANUAL_CONNECT:-0}" = "1" ]; then
