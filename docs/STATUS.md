@@ -396,8 +396,13 @@ pose-stamp-to-yaw-rate delay INSIDE the race loop (publishes from the
 pose callback like mpc3; ramp pulses of 0.12 rad on Porto's safe-line
 straights at 2.5 m/s; `tools/turnin_fit.py --compare display.csv
 xvfb.csv`). The rate comparison is the robust output (a single-rate
-absolute is tick-quantised plus a sub-tick constant). Next sim slots:
-VISIBLE=1 ./scripts/turnin_probe.sh, then ./scripts/turnin_probe.sh.
+absolute is tick-quantised plus a sub-tick constant). First two live
+attempts fired 0 pulses: the runner passed max_run_s as an integer to a
+double parameter (fixed); re-queued in chain7 together with the four-arm
+stall test (control / stalls with defaults / + gap_predict_s 0.6 / + the
+localization gap set; stall_inject.sh --dur 0.33 --every 20 --count 8
+on the display) and the first image build + organiser-style image test
+on the real display since today's config changes.
 
 **Longitudinal plant identified (Sept 12, display + Xvfb logs):** the
 4.2-4.7 m/s2 drive ceiling is the sim's speed servo saturating (fit:
