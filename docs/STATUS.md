@@ -140,6 +140,13 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   pose. Exactly the predicted localization failure; the `both` arm (with
   gap_dt / gap_noise_mult / lost_patience_min / scan_dt_max / enc_gap_max)
   is the real test.
+- **stall_both arm (gap_predict_s 0.6 + the localization gap set; 8
+  sim pauses of 0.4-0.6 s delivered): 32 laps, 0 collisions, longest lap
+  7.54 s, OFFICIAL 70.18 s.** The package rides out stalls that stop the
+  car for 13 s without it. Candidate for the finals image after a
+  no-stall Xvfb regression (Porto + one circuit, queued in chain8), plus
+  a stalls-with-defaults arm for the comparison (the earlier one had no
+  stalls injected).
 - Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
   data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
   0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
