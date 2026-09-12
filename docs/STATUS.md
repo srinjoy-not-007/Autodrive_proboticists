@@ -107,7 +107,9 @@ controller's fixed apply_ahead_s 0.090 s (0.87 period at 0.104, 1.02 at
 0.088): 0.054-0.084 m of extra plan lead at hairpin-approach speeds, same
 corner and sign as the collisions -- exactly the term `rate_adaptive`
 scales. Live A/B at a rate-selected 11 Hz instance queued (ra_fast vs
-ctl_fast).
+ctl_fast). **Live at a rate-selected 0.090 s instance: mpc3 defaults -> 32
+laps, 7 collisions, median 6.92 (ctl_fast3).** rate_adaptive running next on
+a fast instance.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
