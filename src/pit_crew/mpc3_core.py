@@ -171,6 +171,26 @@ DEFAULTS = dict(
     # of the ceiling over [0, thr_lead_s], so a drop ahead is anticipated and a
     # rise ahead is not.  A symmetric 0.30 s lead already failed live (7/32).
     thr_lead_mode='point',
+    # WHICH speed curve the lead is taken from.  'ceiling' is what raced: the
+    # speed plan's ceiling `v_lim`.  Note what that actually is -- `v_lim`
+    # STARTS as `P.v_prof[idx]` and every later term is a `min` (ILC scale,
+    # the `e_free` error cut, the grip cap, the backward brake pass), so with
+    # the ILC off the ceiling can never exceed the offline profile at the same
+    # index and 'min' is exactly 'ceiling'.  Measured Sept 12 (offline,
+    # `MPC3.solve` on a braking approach): ceiling 6.925 against profile 6.951
+    # at the same lead point.  The entry overspeed the display logs show is
+    # therefore NOT a setpoint above the plan at the lead point; it is the
+    # point lead itself plus a plant that delivers -1.7 where the profile asks
+    # -3.0.  'profile' ignores the cuts and is the FASTER source of the three;
+    # 'min' only differs from 'ceiling' when `ILC.v_scale` is above 1.
+    thr_source='ceiling',
+    # OPT-IN brake-phase lead, s, ADDED to `thr_lead_s` only where the offline
+    # profile is braking (`a_prof < 0` anywhere inside the base lead window).
+    # A straight therefore keeps the current point lead exactly; only a corner
+    # approach looks further ahead, and when the extension is active the value
+    # is the MINIMUM over the extended window, so it can only brake early and
+    # never accelerate early.  0.0 = off, byte-identical to the shipping tune.
+    thr_brake_lead_s=0.0,
     thr_enc_tau=0.19,         # encoder-filter lag, s, for the 'sum' rate rule
     # cost ------------------------------------------------------------------
     w_lat=24.0,
@@ -1092,6 +1112,7 @@ class MPC3:
         self.u = np.zeros(self.N)
         self.v_plan = None            # last speed plan, warm start for ds
         self.v_ceiling = None         # the ceiling the throttle is handed
+        self.v_ceiling_idx = None     # the reference indices it is built on
         self.e_pred = np.zeros(self.N + 1)
         self.k_cmd = np.zeros(self.N)
         self.last_cost = float('nan')
@@ -1261,6 +1282,12 @@ class MPC3:
             lo = math.sqrt(max(v[k] ** 2 - 2.0 * c['a_brake'] * ds[k], 0.04))
             v[k + 1] = max(lo, min(v_lim[k + 1], hi))
         self.v_ceiling = v_lim
+        # The reference indices `v_lim` is indexed BY.  `solve` recomputes
+        # `idx` after this call (the speed plan changes the arc steps), so the
+        # two index sets are not the same array, and comparing the ceiling
+        # against `P.v_prof[solve's idx]` would compare two different points.
+        # `thr_source` reads the profile through THIS one.
+        self.v_ceiling_idx = idx
         return v
 
     # ..................................................................
@@ -1658,11 +1685,36 @@ class MPC3:
         self.last_cmd = cmd
 
         vp = self.v_ceiling if self.v_ceiling is not None else self.v_plan
-        fk = min(float(c['thr_lead_s']) / self.dt, N - 1e-6)
+        # `thr_source`: which curve the throttle SETPOINT is read from.  The
+        # default 'ceiling' is the historical behaviour; see DEFAULTS.
+        # `info['v_ceiling']` keeps reporting the real ceiling either way.
+        v_src = vp
+        src = str(c.get('thr_source', 'ceiling')).strip().lower()
+        # Both the ceiling and the profile are read through `v_ceiling_idx`,
+        # the index set the ceiling was built on -- not `solve`'s own `idx`,
+        # which the speed plan has moved since.
+        src_idx = (self.v_ceiling_idx if self.v_ceiling_idx is not None
+                   else idx)
+        if src != 'ceiling':
+            v_pr = self.path.v_prof[src_idx].astype(float)
+            v_src = v_pr if src == 'profile' else np.minimum(vp, v_pr)
+        lead_s = float(c['thr_lead_s'])
+        # Brake-phase lead: only extend where the offline profile is already
+        # braking inside the base window, and then take the window MINIMUM so
+        # the extension is one-sided (see DEFAULTS).
+        brake_ext = False
+        bl = float(c.get('thr_brake_lead_s', 0.0) or 0.0)
+        if bl > 0.0:
+            fk0 = min(lead_s / self.dt, N - 1e-6)
+            ki0 = int(fk0)
+            if float(np.min(self.path.a_prof[src_idx[:ki0 + 2]])) < 0.0:
+                lead_s += bl
+                brake_ext = True
+        fk = min(lead_s / self.dt, N - 1e-6)
         ki = int(fk)
-        v_cmd = float(vp[ki] + (fk - ki) * (vp[ki + 1] - vp[ki]))
-        if str(c['thr_lead_mode']) == 'min':
-            v_cmd = float(min(v_cmd, vp[:ki + 2].min()))
+        v_cmd = float(v_src[ki] + (fk - ki) * (v_src[ki + 1] - v_src[ki]))
+        if brake_ext or str(c['thr_lead_mode']) == 'min':
+            v_cmd = float(min(v_cmd, v_src[:ki + 2].min()))
         info = dict(cost=cost, iters=self.last_iters, delta=d, e=e, psi=psi,
                     cmd_raw=cmd_raw,
                     v=self.v_plan, v_ceiling=vp, v_cmd=v_cmd, lo=lo, hi=hi,

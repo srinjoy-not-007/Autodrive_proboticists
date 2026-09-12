@@ -115,6 +115,12 @@ class MPC3Tracker(Node):
             ('v_mod_min', 0.55),
             ('thr_lead_s', 0.225),
             ('thr_lead_mode', 'point'),   # 'min' = brake-only lead, opt-in
+            # OPT-IN, defaults reproduce the shipping tune exactly:
+            # `thr_source` 'ceiling' (raced) | 'profile' | 'min' -- which speed
+            # curve the throttle setpoint is read from, and `thr_brake_lead_s`
+            # an extra lead taken ONLY where the profile is braking.
+            ('thr_source', 'ceiling'),
+            ('thr_brake_lead_s', 0.0),
             ('thr_enc_tau', 0.19),
             # --- actuator / delay --------------------------------------------
             ('steer_rate_limit', 3.2),
@@ -406,6 +412,8 @@ class MPC3Tracker(Node):
             a_brake=v['a_brake'], a_accel=v['a_accel'], e_free=v['e_free'],
             k_e=v['k_e'], v_mod_min=v['v_mod_min'],
             thr_lead_s=v['thr_lead_s'], thr_lead_mode=v['thr_lead_mode'],
+            thr_source=v['thr_source'],
+            thr_brake_lead_s=v['thr_brake_lead_s'],
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             apply_floor_steps=v['apply_floor_steps'],

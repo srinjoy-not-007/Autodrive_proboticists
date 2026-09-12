@@ -1099,3 +1099,118 @@ class TestDeadTimeTickLaw:
                 ctl.update(t)
             assert act.dead_time == pytest.approx(period + 0.045, abs=1e-9)
             assert m.nd == m._nd_for(act.dead_time)
+
+
+# --------------------------------------------------------------------------
+# thr_source / thr_brake_lead_s (OPT-IN throttle setpoint source)
+# --------------------------------------------------------------------------
+
+def _decel_line(tmp_path, name='decel.csv', n=600, R=40.0):
+    """A closed circle whose PROFILE brakes over one arc and accelerates back.
+
+    The point of the fixture is the ``ax`` column: ``thr_brake_lead_s`` is only
+    allowed to act where the offline profile's ``ax`` is negative, so a line
+    with an honest sign change in column 6 is what the test needs.
+    """
+    t = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    xy = np.column_stack([R * np.cos(t), R * np.sin(t)])
+    d = np.hypot(*np.diff(xy, axis=0).T)
+    s = np.concatenate([[0.0], np.cumsum(d)])
+    fwd = np.roll(xy, -1, axis=0) - np.roll(xy, 1, axis=0)
+    psi = np.arctan2(fwd[:, 1], fwd[:, 0])
+    dpsi = (np.roll(psi, -1) - np.roll(psi, 1) + np.pi) % (2 * np.pi) - np.pi
+    ds = np.roll(s, -1) - np.roll(s, 1)
+    kappa = dpsi / np.where(np.abs(ds) > 1e-9, ds, 1e-9)
+    half = n // 2
+    v = np.empty(n)
+    v[:half] = np.linspace(8.0, 3.0, half)          # braking arc
+    v[half:] = np.linspace(3.0, 8.0, n - half)      # accelerating arc
+    ax = np.gradient(0.5 * v ** 2, s)
+    rows = np.column_stack([s, xy[:, 0], xy[:, 1], psi, kappa, v, ax])
+    p = tmp_path / name
+    np.savetxt(p, rows, delimiter=',')
+    return str(p)
+
+
+class TestThrottleSetpointSource:
+    """`v_cmd` is the throttle's setpoint, and these two knobs choose it."""
+
+    def test_defaults_are_the_shipping_ceiling(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=6.0, n=400, v=5.0))
+        assert MPC3(p).cfg['thr_source'] == 'ceiling'
+        assert MPC3(p).cfg['thr_brake_lead_s'] == 0.0
+        base = make_mpc(p)
+        explicit = make_mpc(p, thr_source='ceiling', thr_brake_lead_s=0.0)
+        for _ in range(4):
+            _, a = base.solve(0.05, 0.0, 0.0, 10, 5.0)
+            _, b = explicit.solve(0.05, 0.0, 0.0, 10, 5.0)
+        assert b['v_cmd'] == pytest.approx(a['v_cmd'], abs=1e-12)
+
+    def test_min_is_the_ceiling_while_the_ILC_is_off(self, tmp_path):
+        """The ceiling is built by CUTTING the profile, so it cannot exceed it.
+
+        `v_lim` starts as `P.v_prof[idx]` and every term after that is a
+        `min`, so with the ILC off `min(ceiling, profile) == ceiling` exactly
+        and `thr_source='min'` is a no-op.  It is not redundant: `ILC.v_scale`
+        goes to `v_hi` 1.05, and there the two differ.  `'profile'` is the
+        source that genuinely ignores the cuts.
+        """
+        p = RefPath(_decel_line(tmp_path))
+        outs = {}
+        for src in ('ceiling', 'profile', 'min'):
+            m = make_mpc(p, thr_source=src)
+            for _ in range(4):
+                _, info = m.solve(0.0, 0.0, 0.0, 60, 7.0)
+            outs[src] = info['v_cmd']
+            if src == 'ceiling':
+                assert (info['v_ceiling']
+                        <= p.v_prof[info['idx']] + 1e-9).all()
+        assert outs['min'] == pytest.approx(outs['ceiling'], abs=1e-12)
+        assert outs['profile'] >= outs['ceiling'] - 1e-9
+
+    def test_brake_lead_only_acts_where_the_profile_brakes(self, tmp_path):
+        p = RefPath(_decel_line(tmp_path))
+        n = p.n
+
+        def cmd_at(i0, v0, **cfg):
+            m = make_mpc(p, **cfg)
+            for _ in range(4):
+                _, info = m.solve(0.0, 0.0, 0.0, i0, v0)
+            return info['v_cmd']
+
+        # braking arc: the extra lead must lower the setpoint
+        brake_i = 60
+        assert p.a_prof[brake_i] < 0.0
+        base = cmd_at(brake_i, 7.0)
+        lead = cmd_at(brake_i, 7.0, thr_brake_lead_s=0.30)
+        assert lead < base - 1e-6
+        # accelerating arc: profile ax > 0 ahead, so nothing may change
+        acc_i = (n // 2) + 60
+        assert p.a_prof[acc_i] > 0.0
+        assert (cmd_at(acc_i, 4.0, thr_brake_lead_s=0.30)
+                == pytest.approx(cmd_at(acc_i, 4.0), abs=1e-12))
+
+    def test_brake_lead_is_one_sided(self, tmp_path):
+        """It may only ever brake earlier, never command more speed."""
+        p = RefPath(_decel_line(tmp_path))
+        for i0 in range(0, p.n, 40):
+            a = make_mpc(p)
+            b = make_mpc(p, thr_brake_lead_s=0.30)
+            for _ in range(4):
+                _, ia = a.solve(0.0, 0.0, 0.0, i0, float(p.v_prof[i0]))
+                _, ib = b.solve(0.0, 0.0, 0.0, i0, float(p.v_prof[i0]))
+            assert ib['v_cmd'] <= ia['v_cmd'] + 1e-9
+
+    def test_the_sources_are_read_through_one_index_set(self, tmp_path):
+        """`solve` moves `idx` after `_speed_plan`; the sources must not mix.
+
+        The ceiling is indexed by `v_ceiling_idx`.  Reading the profile through
+        `solve`'s later `idx` compared two different points on the track and
+        made `min` differ from `ceiling` by up to 0.04 s of harness lap time.
+        """
+        p = RefPath(_decel_line(tmp_path))
+        m = make_mpc(p, thr_source='ceiling')
+        for _ in range(4):
+            _, info = m.solve(0.0, 0.0, 0.0, 60, 7.0)
+        assert m.v_ceiling_idx is not None
+        assert len(m.v_ceiling_idx) == len(info['v_ceiling'])
