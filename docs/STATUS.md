@@ -186,6 +186,13 @@ the hairpin grows with sensor rate (-0.15..-0.20 m at 0.09-0.10, -0.35 at
 hypothesis is a rate-dependent PLANT (the bridge applies one command per
 tick, so a per-tick actuator limit is 1.7x faster at 0.058). Plant
 identification per rate from the display logs is in progress.
+Repeat with a bag recorded (display_watch, self-clicked, 0.058): 20
+laps / 11 collisions, median 6.96 between them (laps ARE faster at the
+fast rate); the bag (data/bags/exp_display_watch_*) is the first sensor
+recording through real collisions, for the teleport detector's IMU
+branch. Human observer: the wiggle on the approach before the hairpin
+appears to seed the early turn-in; collisions happen on the first pass
+too.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
