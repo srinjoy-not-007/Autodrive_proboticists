@@ -204,9 +204,12 @@ it exactly (14 collisions, same corner) and is clean at cap >= 6.4.
 Physics, floor, materials, spawn height are identical between images.
 Fix: `max_step_mps:=9.0` on localization (parameter exists; zero lap
 cost). Plumbing: run_stanley.sh now takes LOC_ARGS; the entrypoint takes
-PIT_CREW_LOCALIZATION_ARGS. Live A/B queued (icra2025_step9); then
-regression on Porto and ICRA 2026. **This is the finals risk to close
-before Sep 16.**
+PIT_CREW_LOCALIZATION_ARGS. **Driven: SCALE 0.75 (cap not reached) ->
+32 laps / 0 collisions / 191.2 s; full speed with `max_step_mps:=9.0
+publish_on_reloc:=false` -> 32 laps / 0 collisions / 148.8 s** (the DQ
+run was 4 laps / 14 collisions). Promote after a Porto regression run
+(needs the LOC_ARGS line in the entrypoint uncommented). The
+finals-day risk this exposed is closed.
 
 **Tight-circuit lines (Sept 12, offline; live A/B queued):** the drill's
 MESH_RACE_KAPPA_MAX 1.0 gate rejected every raceline on both 2025
