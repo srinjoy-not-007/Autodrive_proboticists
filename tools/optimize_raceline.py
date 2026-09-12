@@ -539,6 +539,81 @@ def refine_dkappa(reftrack, normvec, E_kappa, alpha, corridor, target, args):
     return best[1], best[0], best[2]
 
 
+def wall_bounds(reftrack, normvec, args):
+    """Per-reference-point alpha bounds that keep the PATH `M` from any wall.
+
+    Measured against the map's own distance transform, not against the
+    corridor half-widths `extract_centerline.py` reports. That distinction is
+    the whole point and it was measured, not assumed: bounding the REPORTED
+    width by 0.55 m on cdctf2025 produced a finished line whose true minimum
+    wall distance was 0.470 m, because the reported width is taken along the
+    centerline normal and a corner's nearest wall is not on that normal.
+
+    For each reference point the clearance is sampled along the normal on a
+    1 cm grid and the largest contiguous feasible run containing alpha = 0 is
+    kept. Where no alpha satisfies M the bound collapses on the roomiest
+    sample, so a genuine pinch pins the line to the widest point rather than
+    making the track infeasible.
+    """
+    from footprint_analysis import load_dist, clearance as clear_at
+
+    dist, res, ox, oy = load_dist(args.min_halfwidth_map)
+    m = args.min_halfwidth
+    reach = float(np.max(reftrack[:, 2:4])) + 0.10
+    grid = np.arange(-reach, reach + 1e-9, 0.01)
+    lo = np.empty(len(reftrack))
+    hi = np.empty(len(reftrack))
+    for i in range(len(reftrack)):
+        pts = reftrack[i, :2][None, :] + grid[:, None] * normvec[i][None, :]
+        c = np.nan_to_num(clear_at(dist, res, ox, oy, pts), nan=0.0)
+        ok = c >= m
+        z = int(np.argmin(np.abs(grid)))
+        if not ok[z]:
+            k = int(np.argmax(c))
+            lo[i] = hi[i] = grid[k]
+            continue
+        a = z
+        while a > 0 and ok[a - 1]:
+            a -= 1
+        b = z
+        while b < len(grid) - 1 and ok[b + 1]:
+            b += 1
+        lo[i], hi[i] = grid[a], grid[b]
+    n_pinch = int(np.sum(hi - lo < 1e-9))
+    print(f'  min-halfwidth {m:.2f} m: corridor from the map, median width '
+          f'{np.median(hi - lo):.3f} m, {n_pinch} of {len(lo)} reference '
+          f'points cannot reach it')
+    return lo, hi
+
+
+def corridor_of(reftrack, normvec, work, args):
+    """(lo, hi) bounds on the lateral shift alpha, as the solver sees them.
+
+    `work` is the corridor left by the body-sweep passes and already contains
+    the body half-width, so with no `--min-halfwidth` this is exactly the
+    `(-work[:, 2], work[:, 3])` the code used inline before -- byte-identical.
+
+    OPT-IN, September 12. `--min-halfwidth M` says: the PATH may not come
+    closer than M to any wall. Why it is needed on top of `--w-veh`: w_veh
+    only constrains the QP, while the alpha smoothing and the `--dkappa-max`
+    refinement are projected back into `work`, i.e. into sweep + 0, not
+    sweep + w_veh/2. On the two 2025 circuits that is where the fast lines'
+    single pinch comes from -- the QP was told to keep 0.78/2 = 0.39 m and
+    the finished line still passes 0.427 m (cdctf, s 40.8) / 0.432 m
+    (icra2025, s 42.5) from a wall. `--min-halfwidth` states the floor once
+    and applies it at every stage.
+    """
+    lo, hi = -work[:, 2], work[:, 3]
+    if getattr(args, 'min_halfwidth', None) is None:
+        return lo, hi
+    if getattr(args, '_wall_bounds', None) is None:
+        args._wall_bounds = wall_bounds(reftrack, normvec, args)
+    lo2, hi2 = args._wall_bounds
+    lo = np.maximum(lo, lo2)
+    hi = np.minimum(hi, hi2)
+    return np.minimum(lo, hi), hi
+
+
 def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
     """Optimize / measure body sweep / shrink the corridor / re-optimize.
 
@@ -565,6 +640,15 @@ def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
         # `sweep` already includes the body half-width, so the usable
         # half-corridor for the *path* is the wall distance minus it.
         keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
+        if getattr(args, 'min_halfwidth', None) is not None:
+            # Restate the wall floor as a corridor width, so the QP's own
+            # `reftrack[:, 2] - w_veh/2` bound lands exactly on it.
+            inf = np.full((len(reftrack), 2), np.inf)
+            lo2, hi2 = corridor_of(reftrack, normvec,
+                                   np.column_stack([reftrack[:, :2], inf]),
+                                   args)
+            keep = np.minimum(keep, np.column_stack([-lo2, hi2])
+                              + args.w_veh / 2.0)
         shrink = float(np.mean(reftrack[:, 2:4] - keep))
         work = np.column_stack([reftrack[:, :2], keep])
         if not quiet:
@@ -610,11 +694,12 @@ def solve_dkappa(reftrack, normvec, M, args):
         except (ValueError, RuntimeError):
             continue
 
-    alpha = smooth_alpha(alpha, args.alpha_smooth, (-work[:, 2], work[:, 3]))
+    corridor = corridor_of(reftrack, normvec, work, args)
+    alpha = smooth_alpha(alpha, args.alpha_smooth, corridor)
     before, raw0, *_ = line_rate(reftrack, normvec, alpha, args)
     _, _, E_kappa, _ = min_curv_matrices(work, normvec, M)
     alpha, got, raw = refine_dkappa(reftrack, normvec, E_kappa, alpha,
-                                    (-work[:, 2], work[:, 3]), target, args)
+                                    corridor, target, args)
     note = '' if got <= target * 1.02 else '  *** TARGET NOT MET ***'
     print(f'curvature-rate limit {target:.2f} 1/m2 over '
           f'{args.dkappa_window_min:.2f}-{args.dkappa_window:.2f} m windows: '
@@ -634,6 +719,20 @@ def main():
     ap.add_argument('--w-veh', type=float, default=0.16,
                     help='extra safety on top of the swept footprint')
     ap.add_argument('--kappa-bound', type=float, default=1.6)
+    ap.add_argument('--min-halfwidth', type=float, default=None, metavar='M',
+                    help='OPT-IN (off by default, outputs byte-identical '
+                         'without it): keep the PATH at least M metres from '
+                         'either wall, enforced in the QP corridor, in the '
+                         'alpha smoothing AND in the --dkappa-max refinement. '
+                         'Car half-width is 0.135 m, so M = 0.50 leaves '
+                         '0.365 m of body clearance on the pinch. Collapses '
+                         'to the widest reachable point where the track is '
+                         'narrower than 2M. Needs --min-halfwidth-map.')
+    ap.add_argument('--min-halfwidth-map', default=None, metavar='PREFIX',
+                    help='map the --min-halfwidth clearance is measured '
+                         'against, e.g. data/maps/cdctf2025_mesh. Separate '
+                         'from --map-prefix so the wall floor can be used '
+                         'without also enabling the clearance SPEED cap.')
     ap.add_argument('--map-prefix', default=None,
                     help='enables the clearance speed cap; needs the map the '
                          'line was built from, e.g. data/maps/track_v2')
@@ -752,6 +851,8 @@ def main():
     args = ap.parse_args()
     out = args.out or args.centerline.replace('_centerline.csv', '_raceline')
 
+    if args.min_halfwidth is not None and not args.min_halfwidth_map:
+        sys.exit('--min-halfwidth needs --min-halfwidth-map')
     reftrack = np.loadtxt(args.centerline, delimiter=',')
     print(f'centerline: {len(reftrack)} pts')
 
@@ -803,7 +904,8 @@ def main():
     if not presmoothed:
         alpha = smooth_alpha(alpha, win,
                              None if args.centerline_only
-                             else (-work[:, 2], work[:, 3]))
+                             else corridor_of(reftrack, normvec,
+                                              work, args))
 
     # Smoothing a CONSTRAINED solution can push it back outside the constraint,
     # and nothing downstream re-checked that. Measured on Porto at w_veh 0.44:
@@ -815,8 +917,8 @@ def main():
     # further w_veh/2 taken off: `sweep` already contains the body half-width,
     # so subtracting it twice would be double-counting.
     if not args.centerline_only:
-        viol = np.maximum(np.maximum(-work[:, 2] - alpha,
-                                     alpha - work[:, 3]), 0.0)
+        c_lo, c_hi = corridor_of(reftrack, normvec, work, args)
+        viol = np.maximum(np.maximum(c_lo - alpha, alpha - c_hi), 0.0)
         n_v = int((viol > 1e-6).sum())
         moved = float(np.abs(alpha - alpha_raw).max())
         msg = (f'  alpha smoothing: moved at most {moved:.3f} m, '
@@ -894,6 +996,13 @@ def main():
         print(f'clearance cap: min clearance {clear.min():.3f} m, '
               f'speed limited at {n_cut} of {len(vx)} points '
               f'(worst allows {cap.min():.2f} m/s)')
+
+    if args.min_halfwidth is not None and not args.centerline_only:
+        from footprint_analysis import load_dist, clearance as clear_at
+        _d, _r, _ox, _oy = load_dist(args.min_halfwidth_map)
+        _c = np.nan_to_num(clear_at(_d, _r, _ox, _oy, raceline[:, :2]), nan=0.0)
+        print(f'min-halfwidth {args.min_halfwidth:.2f} m asked: finished line '
+              f'holds {_c.min():.3f} m at s {s_race[int(np.argmin(_c))]:.1f}')
 
     if args.jerk_lat is not None:
         before = float(np.sum(el_lengths / np.maximum(vx, 0.1)))

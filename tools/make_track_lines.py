@@ -409,6 +409,8 @@ def build(track, tag, extra, cfg):
     best = None
     for kind, args, w in cands:
         args = args + cfg.profile
+        if kind == 'raceline':
+            args = args + cfg.race_args
         suffix = tag if w is None else f'{tag}_w{w:g}'
         path = f'data/racelines/{stem}_{kind}_{suffix}'
         label = f'{kind}' if w is None else f'{kind} w{w:.2f}'
@@ -423,8 +425,24 @@ def build(track, tag, extra, cfg):
         bad = drivability(path + '.csv')
         if kind == 'raceline' and is_mesh(mp):
             kmax = float(np.abs(np.loadtxt(path + '.csv', delimiter=',')[:, 4]).max())
-            if kmax > MESH_RACE_KAPPA_MAX:
-                bad.append(f'kappa max {kmax:.2f} above the {MESH_RACE_KAPPA_MAX:.1f} '
+            gate = cfg.kappa_gate
+            if gate is None:
+                gate = MESH_RACE_KAPPA_MAX
+            elif gate == 'lock':
+                gate = 1.0 / MIN_TURN_R
+            elif gate == 'safe':
+                # The principled bar on a track we have not driven: a raceline
+                # may not ask for more curvature than (a) the steering lock,
+                # or (b) what the FALLBACK line already demands. On a circuit
+                # with a real hairpin the centerline is itself tighter than
+                # the absolute 1.0 bar -- cdctf2025 peaks at 2.10 1/m and
+                # icra2025 at 1.63 -- so rejecting a raceline at 1.7 while
+                # shipping a centerline at 2.10 rejects the easier line.
+                gate = max(1.0 / MIN_TURN_R, float(np.abs(np.loadtxt(
+                    out['safe']['path'] + '.csv', delimiter=',')[:, 4]).max())
+                    if 'safe' in out else 0.0)
+            if kmax > gate:
+                bad.append(f'kappa max {kmax:.2f} above the {gate:.2f} '
                            f'the tracker has held on a width-using line')
         try:
             wc = worst_corner(mp, path + '.csv')
@@ -498,12 +516,59 @@ def configure(argv=None):
                     help=f'smoothing window on the QP\'s lateral shift. '
                          f'Default 5 on a recon map (what every shipping line '
                          f'was built with), {MESH_ALPHA_SMOOTH} on a mesh map.')
+    # OPT-IN, September 12. Off by default, so every existing output is
+    # byte-identical. Measured on the two 2025 circuits, where the drill's
+    # kappa gate rejected every min-curvature candidate (kappa 1.6-2.0 at all
+    # w_veh) and fell back to the centerline:
+    #
+    #   cdctf2025  safe                     0.395 m  kappa 2.10  ideal 10.66 s
+    #              w0.78 --dkappa-max 1.5
+    #                    --kappa-bound 1.0  0.305 m  kappa 1.81  ideal  9.92 s
+    #   icra2025   safe                     0.395 m  kappa 1.63  ideal 14.56 s
+    #              same flags               0.304 m  kappa 1.68  ideal 13.85 s
+    #
+    # Driven in tools/sim_tracker.py (mpc3, rate_adaptive, --plant-realistic,
+    # frames 0.092 and 0.104, 6 seeds x 12 laps each): 0 collisions on both,
+    # median 10.31 vs 11.01 s and 14.43 vs 15.15 s, and |e| p95 LOWER on the
+    # fast line (0.245 vs 0.368; 0.345 vs 0.418).
+    ap.add_argument('--dkappa-max', type=float, default=None, metavar='K',
+                    help='pass --dkappa-max/--dkappa-refine to the QP for the '
+                         'raceline candidates (opt-in; off by default). Bounds '
+                         'the curvature RATE, which on a track with a hairpin '
+                         'is what actually brings the curvature PEAK down: '
+                         'more --alpha-smooth makes it worse.')
+    ap.add_argument('--dkappa-refine', type=int, default=3, metavar='N',
+                    help='Gauss-Newton passes used with --dkappa-max. 3 and 6 '
+                         'measured identical on both 2025 circuits.')
+    ap.add_argument('--min-halfwidth', type=float, default=None, metavar='M',
+                    help='pass --min-halfwidth to the QP for the raceline '
+                         'candidates (opt-in; off by default). Floors the '
+                         'distance from the LINE to either wall at M metres '
+                         'at every stage -- QP, alpha smoothing and the '
+                         '--dkappa-refine pass -- which is where the fast '
+                         'lines\' single pinch lives (cdctf2025 0.427 m at '
+                         's 40.8, icra2025 0.432 m at s 42.5). Car half-width '
+                         'is 0.135 m.')
+    ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
+                    help='pass --kappa-bound to the QP for the raceline '
+                         'candidates (opt-in; off by default).')
+    ap.add_argument('--kappa-gate', default=None, metavar='K',
+                    help=f'curvature ceiling a width-using raceline must meet '
+                         f'on a mesh map. Default {MESH_RACE_KAPPA_MAX:.1f}, '
+                         f'the peak the tracker has held on Porto. On a track '
+                         f'whose OWN centerline is tighter than that the '
+                         f'absolute bar rejects everything -- see the drill '
+                         f'recommendation in docs/STATUS.md. "lock" uses the '
+                         f'steering lock (1/{MIN_TURN_R:.3f} = '
+                         f'{1.0 / MIN_TURN_R:.2f} 1/m), "safe" uses the safe '
+                         f'line\'s own peak on this track.')
     ap.add_argument('--dilate', type=int, default=None, metavar='N',
                     help='cells of wall dilation before the flood fill. '
                          'Default 3 on a recon map (seals LiDAR gaps), 0 on a '
                          'mesh map (the walls are already closed).')
     cfg = ap.parse_args(argv)
-
+    if cfg.kappa_gate not in (None, 'lock', 'safe'):
+        cfg.kappa_gate = float(cfg.kappa_gate)
     cfg.mesh = is_mesh(f'data/maps/{cfg.track}')
     cfg.out_name = cfg.out_name or cfg.track
     if cfg.min_clearance is None:
@@ -516,6 +581,18 @@ def configure(argv=None):
     cfg.extract_args = ['--dilate', str(dil)] if dil != 3 else []
 
     cfg.profile = list(PROFILE)
+    # Extra QP flags that apply to the width-using raceline candidates only
+    # (--centerline-only has no lateral freedom to spend, and optimize_raceline
+    # ignores them there anyway). Empty unless opted in.
+    cfg.race_args = []
+    if cfg.dkappa_max is not None:
+        cfg.race_args += ['--dkappa-max', f'{cfg.dkappa_max:g}',
+                          '--dkappa-refine', str(cfg.dkappa_refine)]
+    if cfg.kappa_bound is not None:
+        cfg.race_args += ['--kappa-bound', f'{cfg.kappa_bound:g}']
+    if cfg.min_halfwidth is not None:
+        cfg.race_args += ['--min-halfwidth', f'{cfg.min_halfwidth:g}',
+                          '--min-halfwidth-map', f'data/maps/{cfg.track}']
     if cfg.ay is not None:
         cfg.profile[cfg.profile.index('--ay') + 1] = f'{cfg.ay:g}'
     aw = cfg.alpha_smooth if cfg.alpha_smooth is not None else (
