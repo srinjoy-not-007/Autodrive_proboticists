@@ -171,3 +171,83 @@ def test_the_floor_lets_every_shipped_line_through():
     cps = os.path.join(REPO, 'data', 'maps', 'porto_mesh_checkpoints.csv')
     geo = pick_config.checkpoint_geometry(csv, cps)
     assert geo['checkpoint_margin_min'] > pick_config.CHECKPOINT_MIN_MARGIN
+
+
+# ---------------------------------------------------------------------------
+# gate SEPARATION and trigger occupancy (September 12, second pass)
+# ---------------------------------------------------------------------------
+# The margin above says the line passes INSIDE every box.  It does not say the
+# car is inside only ONE of them at a time, and that is the other half of the
+# mechanism: `LapTimer.cs` keeps a single `CheckpointFlag` and overwrites
+# `PreviousCheckpoint` on EVERY trigger exit, so while the body straddles two
+# boxes an exit from the one behind can overwrite the state of the one it is
+# in, and cp20's enter is then refused because PreviousCheckpoint != 19.
+
+
+def test_gate_separation_ranks_the_line_that_lost_a_lap_last():
+    """fast3_m53 lost a lap; the safe line has never lost one."""
+    cps = opt.load_checkpoints(CP)
+    fast = np.loadtxt(line('cdctf2025_mesh_fast3_m53'), delimiter=',')[:, 1:3]
+    safe = np.loadtxt(line('cdctf2025_mesh_safe'), delimiter=',')[:, 1:3]
+    s_fast = opt.gate_separations(fast, cps)
+    s_safe = opt.gate_separations(safe, cps)
+    # the pair that fails is the one before the finish, on both lines
+    assert min(s_fast, key=s_fast.get) == (19, 20)
+    assert min(s_safe, key=s_safe.get) == (19, 20)
+    assert s_fast[(19, 20)] < s_safe[(19, 20)] < 0.60
+
+
+def test_porto_and_icra2026_are_never_inside_two_gates():
+    for slug, ln in (('porto_mesh', 'porto_mesh_cr_dk0.8'),
+                     ('icra2026_mesh', 'icra2026_mesh_race')):
+        cps = opt.load_checkpoints(os.path.join(
+            REPO, 'data', 'maps', slug + '_checkpoints.csv'))
+        rl = np.loadtxt(line(ln), delimiter=',')
+        occ = opt.gate_occupancy(rl[:, 1:3], rl[:, 5], cps)
+        assert occ['max_occupancy'] == 1, slug
+        assert occ['time_double_s'] == 0.0
+
+
+def test_occupancy_counts_a_straddle():
+    """Two gates 0.20 m apart must show the body inside both at once."""
+    cps = [(0, 0.0, 0.0, 0.0, 1.0), (1, 0.2, 0.0, 0.0, 1.0)]
+    x = np.arange(-3.0, 3.0, 0.05)
+    xy = np.column_stack([x, np.zeros_like(x)])
+    occ = opt.gate_occupancy(xy, np.full(len(x), 2.0), cps, closed=False)
+    assert occ['max_occupancy'] == 2
+    assert occ['time_triple_s'] == 0.0
+    assert occ['time_double_s'] > 0.0
+
+
+def test_driven_occupancy_matches_the_line_it_was_driven_on():
+    cps = [(0, 0.0, 0.0, 0.0, 1.0), (1, 0.2, 0.0, 0.0, 1.0)]
+    x = np.arange(-3.0, 3.0, 0.05)
+    t = (x + 3.0) / 2.0
+    occ = opt.gate_occupancy_poses(x, np.zeros_like(x), np.zeros_like(x),
+                                   t, cps)
+    assert occ['max_occupancy'] == 2
+    assert occ['time_double_s'] > 0.0
+
+
+def test_pick_config_fails_a_line_whose_gates_converge():
+    geo = pick_config.gate_geometry(line('cdctf2025_mesh_fast3_m53'), CP)
+    assert geo['gate_sep_min'] < pick_config.GATE_SEPARATION_MIN
+    assert '19->20' in geo['gate_sep_short']
+    rec = pick_config.main([
+        'cdctf2025_mesh', '--line', line('cdctf2025_mesh_fast3_m53'),
+        '--no-write'])
+    assert 'gate_fail' in rec
+
+
+def test_gate_separation_bands_stay_inside_the_trigger():
+    cps = opt.load_checkpoints(CP)
+    ref = np.loadtxt(line('cdctf2025_mesh_centerline'),
+                     delimiter=',')[:, :2]
+    bands, info = opt.gate_separation_bands(cps, ref, 0.60, 0.25,
+                                            verbose=False)
+    for name, cx, cy, yaw, w in cps:
+        lo, hi = bands[name]
+        assert lo <= hi
+        assert lo >= -(w / 2.0 - 0.25) - 1e-9
+        assert hi <= (w / 2.0 - 0.25) + 1e-9
+    assert not info['short']

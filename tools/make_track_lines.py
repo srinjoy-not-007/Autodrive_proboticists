@@ -391,6 +391,25 @@ def checkpoint_check(line_csv, cp_csv):
             ok[0][1] if ok else None, skipped)
 
 
+def gate_check(line_csv, cp_csv):
+    """(min consecutive gate separation, its pair, max simultaneous occupancy).
+
+    The lap counter keeps one global checkpoint latch, so a body inside two
+    trigger boxes at once can have one box's exit overwrite the other's state
+    and drop a checkpoint -- which costs a whole lap time, not a collision
+    penalty.  Measured on cdctf2025: the line that lost a lap holds 0.39 m
+    between its last gates, the safe line 0.56 m.
+    """
+    from optimize_raceline import (load_checkpoints, gate_separations,
+                                   gate_occupancy)
+    cps = load_checkpoints(cp_csv)
+    rl = np.loadtxt(line_csv, delimiter=',')
+    sep = gate_separations(rl[:, 1:3], cps)
+    occ = gate_occupancy(rl[:, 1:3], rl[:, 5], cps)
+    pair, lo = min(sep.items(), key=lambda kv: kv[1])
+    return lo, pair, occ['max_occupancy']
+
+
 def build(track, tag, extra, cfg):
     """Both lines for one centerline method. Returns None if extraction fails."""
     mp = f'data/maps/{track}'
@@ -469,6 +488,14 @@ def build(track, tag, extra, cfg):
             if cp_skip:
                 bad.append(f'passes OUTSIDE checkpoint(s) {cp_skip} -- the '
                            f'sim would not count the lap')
+            if cfg.gate_separation is not None:
+                g_min, g_pair, g_occ = gate_check(path + '.csv',
+                                                  cfg.checkpoints)
+                cp_note += (f'  gate {g_min:.3f}@{g_pair[0]}->{g_pair[1]} '
+                            f'occ {g_occ}')
+                if g_occ >= 3:
+                    bad.append(f'inside {g_occ} checkpoint triggers at once '
+                               f'-- one exit can drop the lap')
         if kind == 'raceline' and is_mesh(mp):
             kmax = float(np.abs(np.loadtxt(path + '.csv', delimiter=',')[:, 4]).max())
             gate = cfg.kappa_gate
@@ -619,6 +646,13 @@ def configure(argv=None):
                     metavar='M',
                     help='trigger half-width kept in hand at each checkpoint '
                          '(default 0.25 m). Only used with --checkpoints.')
+    ap.add_argument('--gate-separation', type=float, default=None, metavar='M',
+                    help='OPT-IN, needs --checkpoints. Hold consecutive '
+                         'checkpoint planes M metres apart along the line '
+                         '(0.60 = body 0.50 + trigger box 0.10) so the car is '
+                         'never inside two trigger boxes at once, and REJECT '
+                         'any candidate that still occupies three. A lap the '
+                         'sim does not count costs a whole lap time.')
     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
                     help='pass --kappa-bound to the QP for the raceline '
                          'candidates (opt-in; off by default).')
@@ -652,6 +686,8 @@ def configure(argv=None):
             print(f'--checkpoints auto: no {auto}; lines are unconstrained')
     if cfg.checkpoints is not None and not os.path.exists(cfg.checkpoints):
         ap.error(f'--checkpoints {cfg.checkpoints}: no such file')
+    if cfg.gate_separation is not None and cfg.checkpoints is None:
+        ap.error('--gate-separation needs --checkpoints')
     cfg.mesh = is_mesh(f'data/maps/{cfg.track}')
     cfg.out_name = cfg.out_name or cfg.track
     if cfg.min_clearance is None:
@@ -679,6 +715,8 @@ def configure(argv=None):
     if cfg.checkpoints is not None:
         cfg.race_args += ['--checkpoints', cfg.checkpoints,
                           '--checkpoint-margin', f'{cfg.checkpoint_margin:g}']
+        if cfg.gate_separation is not None:
+            cfg.race_args += ['--gate-separation', f'{cfg.gate_separation:g}']
     if cfg.ay is not None:
         cfg.profile[cfg.profile.index('--ay') + 1] = f'{cfg.ay:g}'
     aw = cfg.alpha_smooth if cfg.alpha_smooth is not None else (

@@ -662,6 +662,410 @@ def checkpoint_margins(xy, checkpoints, closed=True):
     return out
 
 
+# --------------------------------------------------------------------------
+# gate separation and occupancy (OPT-IN, September 12)
+# --------------------------------------------------------------------------
+# The lap counter (LapTimer.cs) keeps ONE global `CheckpointFlag` and
+# overwrites `PreviousCheckpoint` on EVERY trigger exit, so a lap only counts
+# when cp20's enter is accepted while PreviousCheckpoint == 19.  The car is
+# 0.50 x 0.27 m with ~15 colliders, each firing its own enter/exit, so being
+# inside two trigger boxes at once lets one box's exit overwrite the other's
+# state and drop a checkpoint.  Measured on cdctf2025 fast3_m53: gates 17-20
+# sit 0.26 m apart along that line (0.13 s/lap of TRIPLE occupancy) and one
+# lap in 32 was not counted; the safe line holds 0.39-0.41 m and never even
+# doubles.
+#
+# `GATE_DEPTH` is the trigger box's extent along travel, read off the scene by
+# `tools/map_from_mesh.py` (width x 0.254 tall x 0.100 deep).
+
+GATE_DEPTH = 0.100
+
+
+def _rect_corners(cx, cy, hd, lat, half_along, half_lat):
+    c = np.array([cx, cy], float)
+    return np.array([c + a * half_along * hd + b * half_lat * lat
+                     for a, b in ((1, 1), (1, -1), (-1, -1), (-1, 1))])
+
+
+def _obb_overlap(a, b):
+    """SAT test for two convex boxes given as 4x2 corner arrays."""
+    for poly in (a, b):
+        e = np.roll(poly, -1, axis=0) - poly
+        for ex, ey in e:
+            ax = np.array([-ey, ex])
+            n = math.hypot(ax[0], ax[1])
+            if n < 1e-12:
+                continue
+            ax = ax / n
+            pa, pb = a @ ax, b @ ax
+            if pa.max() < pb.min() - 1e-12 or pb.max() < pa.min() - 1e-12:
+                return False
+    return True
+
+
+def _arclength(xy, closed=True):
+    P = np.vstack([xy, xy[:1]]) if closed else np.asarray(xy, float)
+    d = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    return np.concatenate([[0.0], np.cumsum(d)]), float(d.sum())
+
+
+def gate_crossings(xy, checkpoints, closed=True):
+    """`{index: (s, lateral)}` -- where the path cuts each gate plane.
+
+    `s` is arclength along the path at the crossing nearest the box centre and
+    `lateral` its offset from that centre along the gate.  A gate the path
+    never reaches is absent.
+    """
+    s, _L = _arclength(xy, closed)
+    out = {}
+    for name, cx, cy, yaw, w in checkpoints:
+        cuts = _plane_cuts(xy, cx, cy, yaw, closed)
+        if not cuts:
+            continue
+        i, lat = min(cuts, key=lambda c: abs(c[1]))
+        hd, _ = _gate_axes(yaw)
+        P = np.vstack([xy, xy[:1]]) if closed else np.asarray(xy, float)
+        r0 = (P[i] - np.array([cx, cy])) @ hd
+        r1 = (P[i + 1] - np.array([cx, cy])) @ hd
+        f = abs(r0) / (abs(r0) + abs(r1) + 1e-12)
+        out[name] = (float(s[i] + f * (s[i + 1] - s[i])), float(lat))
+    return out
+
+
+def gate_separations(xy, checkpoints, closed=True):
+    """`{(a, b): along-line metres}` between consecutive gate planes.
+
+    Measured along the PATH at the lateral position the path actually takes,
+    because that is what the car has to traverse between one trigger and the
+    next.  The pair that wraps the finish line is included.
+    """
+    cr = gate_crossings(xy, checkpoints, closed)
+    _s, L = _arclength(xy, closed)
+    names = [n for n, *_ in checkpoints if n in cr]
+    out = {}
+    for k, a in enumerate(names):
+        b = names[(k + 1) % len(names)]
+        if b == a:
+            continue
+        d = cr[b][0] - cr[a][0]
+        if closed:
+            d = d % L
+        out[(a, b)] = float(d)
+    return out
+
+
+def _gate_boxes(checkpoints):
+    out = []
+    for name, cx, cy, yaw, w in checkpoints:
+        hd, lat = _gate_axes(yaw)
+        out.append((name, _rect_corners(cx, cy, hd, lat,
+                                        GATE_DEPTH / 2.0, w / 2.0),
+                    np.array([cx, cy]), max(w / 2.0, GATE_DEPTH / 2.0)))
+    return out
+
+
+def _occupancy_counts(px, py, head, gates):
+    """How many of `gates` the body box overlaps at each pose."""
+    car_reach = math.hypot(max(FRONT, REAR_OVERHANG), HALF_W)
+    counts = np.zeros(len(px), int)
+    worst = ()
+    for k in range(len(px)):
+        c, sn = math.cos(head[k]), math.sin(head[k])
+        hd = np.array([c, sn])
+        lat = np.array([-sn, c])
+        mid = np.array([px[k], py[k]]) + hd * (FRONT - REAR_OVERHANG) / 2.0
+        body = _rect_corners(mid[0], mid[1], hd, lat,
+                             (FRONT + REAR_OVERHANG) / 2.0, HALF_W)
+        hit = []
+        for name, box, ctr, reach in gates:
+            if np.linalg.norm(ctr - mid) > reach + car_reach:
+                continue
+            if _obb_overlap(body, box):
+                hit.append(name)
+        counts[k] = len(hit)
+        if len(hit) > len(worst):
+            worst = tuple(sorted(hit))
+    return counts, list(worst)
+
+
+def gate_occupancy_poses(x, y, yaw, t, checkpoints):
+    """The same measurement on a DRIVEN trajectory (harness or race log).
+
+    Poses are the car's own, so the count is what the sim's triggers would
+    have seen, and the times are wall time rather than the plan's.
+    """
+    x, y, yaw, t = (np.asarray(v, float) for v in (x, y, yaw, t))
+    counts, worst = _occupancy_counts(x, y, yaw, _gate_boxes(checkpoints))
+    dt = np.gradient(t)
+    return {
+        'max_occupancy': int(counts.max()),
+        'worst_gates': worst,
+        'time_double_s': float(dt[counts >= 2].sum()),
+        'time_triple_s': float(dt[counts >= 3].sum()),
+    }
+
+
+def gate_occupancy(xy, vx, checkpoints, step=0.01, closed=True):
+    """How many trigger boxes the BODY is inside at once, and for how long.
+
+    The 0.50 x 0.27 m body box is swept along the path (rear axle at the path
+    point, as everywhere else in this repo) at `step` metre resolution and
+    tested against every gate box with SAT.  Returns the maximum simultaneous
+    occupancy, the time per lap spent at each level >= 2 at the line's own
+    planned speed, and the worst run of gates seen together.
+    """
+    P = np.vstack([xy, xy[:1]]) if closed else np.asarray(xy, float)
+    s, L = _arclength(xy, closed)
+    v = np.concatenate([vx, vx[:1]]) if closed else np.asarray(vx, float)
+    q = np.arange(0.0, L, step)
+    px = np.interp(q, s, P[:, 0])
+    py = np.interp(q, s, P[:, 1])
+    pv = np.maximum(np.interp(q, s, v), 0.1)
+    hx = np.gradient(px)
+    hy = np.gradient(py)
+    head = np.arctan2(hy, hx)
+
+    counts, worst_set = _occupancy_counts(px, py, head,
+                                          _gate_boxes(checkpoints))
+    dt = step / pv
+    return {
+        'max_occupancy': int(counts.max()),
+        'worst_gates': list(worst_set),
+        'time_double_s': float(dt[counts >= 2].sum()),
+        'time_triple_s': float(dt[counts >= 3].sum()),
+        'dist_double_m': float(step * int((counts >= 2).sum())),
+        'dist_triple_m': float(step * int((counts >= 3).sum())),
+    }
+
+
+def gate_pair_distance(ci, lati, li, cj, latj, lj):
+    """Straight-line distance between two gate-plane crossings."""
+    d = (ci + np.outer(li, lati)[:, None, :]
+         - cj - np.outer(lj, latj)[None, :, :])
+    return np.linalg.norm(d, axis=2)
+
+
+def gate_separation_bands(checkpoints, ref_xy, sep_min, margin, limits=None,
+                          geom=None, slope_max=0.5,
+                          n_grid=81, reward_cap=0.90, tie_w=0.05,
+                          band_floor=0.12,
+                          verbose=True):
+    """Per-gate lateral bands that keep consecutive gate planes `sep_min` apart.
+
+    The car can only be inside one trigger box at a time if consecutive gate
+    planes are further apart along its path than the body plus the box, and
+    how far apart they are is a function of WHERE the path cuts each plane:
+    around a hairpin the gates fan out, so a line that runs inside collapses
+    the spacing (cdctf2025, gates 17-20).
+
+    Structure of the problem: each gate contributes one scalar (the lateral
+    offset of its crossing) and the constraint couples only CONSECUTIVE gates,
+    so the whole thing is a chain and a dynamic program solves it exactly on a
+    grid.  The reward saturates at `sep_min + reward_cap` so that a pair which
+    cannot reach `sep_min` at any admissible lateral is pushed as far apart as
+    the geometry allows instead of making the problem infeasible ("where
+    infeasible, minimise occupancy"), and a small pull towards the reference
+    line's own crossings breaks ties.
+
+    The DP gives one point per gate; the QP needs an interval.  A crossing
+    moved by r moves by at most r, so a pair keeps `sep_min` for ANY choice
+    inside the bands as long as `r_i + r_j <= sep_ij - sep_min`.  Each band is
+    the largest radius satisfying that against both its neighbours.
+
+    Returns `({name: (lo, hi)}, info)` with the chosen laterals and the
+    separations they realise.
+    """
+    names = [c[0] for c in checkpoints]
+    ctr = {c[0]: np.array([c[1], c[2]]) for c in checkpoints}
+    lat = {c[0]: _gate_axes(c[3])[1] for c in checkpoints}
+    half = {c[0]: max(c[4] / 2.0 - margin, 0.0) for c in checkpoints}
+    ref = gate_crossings(ref_xy, checkpoints)
+    # A trigger box is often wider than the track (cdctf2025 gate 19 is 5.0 m
+    # across), so the box alone would let the DP choose a crossing the corridor
+    # cannot reach and hand the QP an empty interval.  `limits` is the lateral
+    # range the PATH can actually take at each gate, from the corridor.
+    span = {}
+    for n in names:
+        lo, hi = -half[n], half[n]
+        if limits is not None and n in limits:
+            lo, hi = max(lo, limits[n][0]), min(hi, limits[n][1])
+            if lo > hi:
+                mid = float(np.clip(0.5 * (limits[n][0] + limits[n][1]),
+                                    -half[n], half[n]))
+                lo = hi = mid
+        span[n] = (lo, hi)
+    grids = {n: (np.linspace(span[n][0], span[n][1], n_grid)
+                 if span[n][1] - span[n][0] > 1e-9
+                 else np.array([span[n][0]])) for n in names}
+    K = len(names)
+    edges = [(names[k], names[(k + 1) % K]) for k in range(K)]
+    # How far the PATH has to be pushed off the reference to put a crossing at
+    # a given lateral: `dev = (l - a0) / g`.  Two gates a metre apart cannot
+    # ask for +1.0 m of deviation and then -0.1 m -- that is a curvature the
+    # QP will refuse, and asking for it is what made the solver report
+    # "corridor exhausted" rather than a line.  `slope_max` is the deviation
+    # the chain may build up per metre of path between two gates.
+    cr_ref = gate_crossings(ref_xy, checkpoints)
+    dev = {}
+    if geom is not None:
+        for n in names:
+            if n in geom:
+                a0, g = geom[n]
+                if abs(g) > 1e-6:
+                    dev[n] = (a0, g)
+    R = {}
+    for a, b in edges:
+        d = gate_pair_distance(ctr[a], lat[a], grids[a],
+                               ctr[b], lat[b], grids[b])
+        R[(a, b)] = np.minimum(d, sep_min + reward_cap)
+        if a in dev and b in dev and a in cr_ref and b in cr_ref:
+            gap = abs(cr_ref[b][0] - cr_ref[a][0])
+            gap = min(gap, 1e3)
+            da = (grids[a] - dev[a][0]) / dev[a][1]
+            db = (grids[b] - dev[b][0]) / dev[b][1]
+            bad = (np.abs(da[:, None] - db[None, :])
+                   > slope_max * max(gap, 0.2))
+            R[(a, b)] = np.where(bad, -1e3, R[(a, b)])
+    pull = {n: -tie_w * (grids[n] - (ref[n][1] if n in ref else 0.0)) ** 2
+            for n in names}
+
+    best = None
+    n0 = names[0]
+    for k0 in range(len(grids[n0])):
+        val = np.full(len(grids[n0]), -np.inf)
+        val[k0] = pull[n0][k0]
+        back = []
+        for a, b in edges[:-1]:
+            m = val[:, None] + R[(a, b)] + pull[b][None, :]
+            back.append(np.argmax(m, axis=0))
+            val = m.max(axis=0)
+        # close the cycle back onto the fixed first state
+        val = val + R[edges[-1]][:, k0]
+        j = int(np.argmax(val))
+        if best is None or val[j] > best[0]:
+            idx = [j]
+            for bk in reversed(back):
+                idx.append(int(bk[idx[-1]]))
+            idx.append(k0)
+            best = (float(val[j]), list(reversed(idx[:-1])))
+    l_star = {n: float(grids[n][i]) for n, i in zip(names, best[1])}
+
+    sep = {}
+    for a, b in edges:
+        p = ctr[a] + l_star[a] * lat[a]
+        q = ctr[b] + l_star[b] * lat[b]
+        sep[(a, b)] = float(np.linalg.norm(p - q))
+    # The band each gate gets is the CONTIGUOUS run of admissible laterals
+    # around its own solution, with its two neighbours held at theirs: the
+    # distance to a fixed neighbour crossing is convex in the lateral, so
+    # `>= sep_min` excludes one interval and the band is what is left on the
+    # side the solution sits.  That is deliberately permissive -- these bounds
+    # only STEER the QP, and the finished line's separations are measured
+    # afterwards (here, in make_track_lines and in pick_config), so a band
+    # that is too generous is caught rather than believed.
+    # A crossing moved by r moves by at most r, so a pair keeps `sep_min` for
+    # ANY choice inside the bands as long as `r_i + r_j <= sep_ij - sep_min`.
+    # That is the guarantee the QP needs, because it moves every gate at once.
+    slack = {e: sep[e] - sep_min for e in edges}
+    bands = {}
+    for k, n in enumerate(names):
+        p_prev = ctr[names[k - 1]] + l_star[names[k - 1]] * lat[names[k - 1]]
+        nx = names[(k + 1) % K]
+        p_next = ctr[nx] + l_star[nx] * lat[nx]
+        g = grids[n]
+        pts = ctr[n] + np.outer(g, lat[n])
+        ok = ((np.linalg.norm(pts - p_prev, axis=1) >= sep_min - 1e-9)
+              & (np.linalg.norm(pts - p_next, axis=1) >= sep_min - 1e-9))
+        z = int(np.argmin(np.abs(g - l_star[n])))
+        if not ok[z]:
+            bands[n] = (l_star[n], l_star[n])
+            continue
+        a = z
+        while a > 0 and ok[a - 1]:
+            a -= 1
+        b = z
+        while b < len(g) - 1 and ok[b + 1]:
+            b += 1
+        # ... and the robust radius, which is what actually holds when the
+        # neighbours move too.  `band_floor` keeps a QP that has to thread a
+        # shrinking corridor from being handed a single point; where it is the
+        # binding term the constraint is a steer, not a guarantee, and the
+        # finished line is measured afterwards.
+        r = max(min(slack[edges[k - 1]], slack[edges[k]]) / 2.0, band_floor)
+        bands[n] = (float(max(g[a], l_star[n] - r)),
+                    float(min(g[b], l_star[n] + r)))
+    short = sorted(e for e in edges if sep[e] < sep_min - 1e-9)
+    if verbose:
+        worst = min(sep.items(), key=lambda kv: kv[1])
+        print(f'  gate separation {sep_min:.2f} m: solved {K} gates, '
+              f'worst pair {worst[0][0]}->{worst[0][1]} {worst[1]:.3f} m, '
+              f'median band {np.median([b - a for a, b in bands.values()]):.3f} m'
+              + (f', {len(short)} pair(s) SHORT: '
+                 + ', '.join(f'{a}->{b} {sep[(a, b)]:.3f}' for a, b in short)
+                 if short else ''))
+    return bands, {'lateral': l_star, 'separation': sep, 'short': short}
+
+
+def gate_reach(reftrack, normvec, checkpoints, w_veh):
+    """`{name: (lo, hi)}` -- lateral offsets at each gate the corridor allows.
+
+    The QP may shift a reference point by alpha along its normal, bounded by
+    the corridor it was handed (`reftrack[:, 2:4]`, minus the vehicle width),
+    and the crossing then sits at `a0 + alpha * g` along the gate.  Both
+    reference points bracketing the plane are bounded, so the reach is the
+    INTERSECTION of what each of them can offer.
+    """
+    out = {}
+    n = len(reftrack)
+    for name, cx, cy, yaw, w in checkpoints:
+        cuts = _plane_cuts(reftrack[:, :2], cx, cy, yaw)
+        if not cuts:
+            continue
+        i = min(cuts, key=lambda c: abs(c[1]))[0]
+        _hd, lat = _gate_axes(yaw)
+        lo, hi = -np.inf, np.inf
+        for j in (i % n, (i + 1) % n):
+            a0 = float((reftrack[j, :2] - np.array([cx, cy])) @ lat)
+            g = float(normvec[j] @ lat)
+            # tph's alpha runs along the normal, which points RIGHT of
+            # travel, so it is bounded ABOVE by the right width and below by
+            # the left one (verified against opt_min_curv's own box).
+            al = -(reftrack[j, 3] - w_veh / 2.0)
+            ah = reftrack[j, 2] - w_veh / 2.0
+            if ah < al:
+                al = ah = 0.5 * (al + ah)
+            if abs(g) < 0.2:
+                continue
+            a, b = sorted((a0 + al * g, a0 + ah * g))
+            lo, hi = max(lo, a), min(hi, b)
+        if np.isfinite(lo) and np.isfinite(hi) and hi >= lo:
+            out[name] = (lo, hi)
+    return out
+
+
+def gate_frames(reftrack, normvec, checkpoints):
+    """`{name: (a0, g)}` -- the reference crossing offset and normal leverage.
+
+    `a0` is where the REFERENCE line cuts the gate, measured along the gate
+    from the box centre, and `g = normal . gate` is how much of a lateral
+    shift of the reference point lands on the gate plane.  Together they turn
+    a wanted crossing into the path deviation it costs: `dev = (l - a0) / g`.
+    """
+    out = {}
+    n = len(reftrack)
+    for name, cx, cy, yaw, w in checkpoints:
+        cuts = _plane_cuts(reftrack[:, :2], cx, cy, yaw)
+        if not cuts:
+            continue
+        i = min(cuts, key=lambda c: abs(c[1]))[0] % n
+        _hd, lat = _gate_axes(yaw)
+        a0 = float((reftrack[i, :2] - np.array([cx, cy])) @ lat)
+        g = float(normvec[i] @ lat)
+        if abs(g) >= 0.2:
+            out[name] = (a0, g)
+    return out
+
+
 def checkpoint_bounds(reftrack, normvec, args):
     """Alpha bounds that hold the path inside every trigger box.
 
@@ -679,6 +1083,10 @@ def checkpoint_bounds(reftrack, normvec, args):
     lo = np.full(n, -np.inf)
     hi = np.full(n, np.inf)
     n_bound = n_skip = 0
+    # OPT-IN on top of the margin: --gate-separation also says WHERE inside
+    # each box the crossing may sit, so that consecutive gate planes stay far
+    # enough apart along the path for the body to leave one trigger before it
+    # enters the next.
     for name, cx, cy, yaw, w in cps:
         half = w / 2.0 - m
         if half <= 0.0:
@@ -708,7 +1116,49 @@ def checkpoint_bounds(reftrack, normvec, args):
     return lo, hi
 
 
-def corridor_of(reftrack, normvec, work, args):
+def gate_bounds(reftrack, normvec, args):
+    """Alpha bounds from --gate-separation, in the SOLVER's own sign.
+
+    tph's `alpha` runs along the normal, which points to the right of travel,
+    so a crossing sits at `a0 + alpha * g` and a band maps straight through.
+    These are kept apart from `checkpoint_bounds` because the two are consumed
+    differently: the checkpoint-MARGIN bounds are symmetric about the
+    reference and so survive `corridor_of`'s mirrored corridor convention
+    (`-w_right, +w_left`), while a gate BAND is one-sided by design -- fed
+    through the mirror it put the QP's alpha 1.4 m the wrong side of its own
+    bound, measured.
+    """
+    cps = load_checkpoints(args.checkpoints)
+    floor = getattr(args, '_gate_relax', None)
+    n = len(reftrack)
+    lo = np.full(n, -np.inf)
+    hi = np.full(n, np.inf)
+    if floor is None:
+        return lo, hi
+    bands = gate_separation_bands(
+        cps, reftrack[:, :2], args.gate_separation, args.checkpoint_margin,
+        limits=gate_reach(getattr(args, '_gate_reach_track', reftrack),
+                          normvec, cps, args.w_veh),
+        geom=gate_frames(reftrack, normvec, cps), band_floor=floor)[0]
+    for name, cx, cy, yaw, w in cps:
+        cuts = _plane_cuts(reftrack[:, :2], cx, cy, yaw)
+        if not cuts:
+            continue
+        i = min(cuts, key=lambda c: abs(c[1]))[0]
+        _hd, lat = _gate_axes(yaw)
+        b_lo, b_hi = bands[name]
+        for j in (i % n, (i + 1) % n):
+            a0 = float((reftrack[j, :2] - np.array([cx, cy])) @ lat)
+            g = float(normvec[j] @ lat)
+            if abs(g) < 0.2:
+                continue
+            a, b = sorted(((b_lo - a0) / g, (b_hi - a0) / g))
+            lo[j] = max(lo[j], a)
+            hi[j] = min(hi[j], b)
+    return lo, hi
+
+
+def corridor_of(reftrack, normvec, work, args, gates=True):
     """(lo, hi) bounds on the lateral shift alpha, as the solver sees them.
 
     `work` is the corridor left by the body-sweep passes and already contains
@@ -729,6 +1179,9 @@ def corridor_of(reftrack, normvec, work, args):
     if (getattr(args, 'min_halfwidth', None) is None
             and getattr(args, 'checkpoints', None) is None):
         return lo, hi
+    if gates and getattr(args, 'gate_separation', None):
+        glo, ghi = gate_bounds(reftrack, normvec, args)
+        lo, hi = np.maximum(lo, glo), np.minimum(hi, ghi)
     if getattr(args, '_extra_bounds', None) is None:
         elo = np.full(len(reftrack), -np.inf)
         ehi = np.full(len(reftrack), np.inf)
@@ -746,6 +1199,49 @@ def corridor_of(reftrack, normvec, work, args):
 
 
 def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
+    """`_sweep_solve`, with the gate bands relaxed until the QP can solve.
+
+    A gate band is a HARD bound at two reference points, and two of them a
+    metre apart can be harder to satisfy than the corridor itself once the
+    curvature rows are in.  Rather than report "corridor exhausted" -- which
+    on a mesh track means shipping the plain centerline -- widen the bands a
+    step at a time and, in the last resort, drop them: the finished line's
+    separations are measured either way, and a line that keeps some of its
+    gate spacing beats one that was never solved.  With no --gate-separation
+    this is a single call and the old behaviour byte for byte.
+    """
+    if not getattr(args, 'gate_separation', None):
+        return _sweep_solve(reftrack, normvec, M, args, dk_bound, quiet)
+    base = args.gate_band_floor
+    kb0 = args.kappa_bound
+    # Order of relaxation: the CURVATURE ceiling first, then the bands.
+    # `--kappa-bound` is shaping -- it keeps the QP off the steering lock and
+    # the finished line's own |kappa| is measured afterwards anyway -- while a
+    # gate band is what stops a lap going uncounted, which costs a whole lap
+    # time.  Measured on cdctf2025: at kappa_bound 1.0-2.2 the QP has no
+    # solution with the bands in, at 3.0 it solves and the finished line
+    # holds 0.74 m of gate separation with |kappa| max 1.82.
+    for floor in (base, 2 * base, 4 * base, None):
+        for kb in (kb0, 2 * kb0, 3 * kb0):
+            args._gate_relax = floor
+            args._extra_bounds = None
+            args.kappa_bound = kb
+            try:
+                return _sweep_solve(reftrack, normvec, M, args, dk_bound,
+                                    quiet)
+            except (ValueError, RuntimeError):
+                if not quiet:
+                    print(f'  gate separation: no QP solution at band floor '
+                          + (f'{floor:.2f} m' if floor is not None else 'OFF')
+                          + f', kappa bound {kb:.2f}; relaxing')
+                if floor is None and kb == 3 * kb0:
+                    args.kappa_bound = kb0
+                    raise
+            if floor is None:
+                break
+
+
+def _sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
     """Optimize / measure body sweep / shrink the corridor / re-optimize.
 
     One pass with a constant w_veh cannot express this because the sweep
@@ -773,20 +1269,66 @@ def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
         keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
         if (getattr(args, 'min_halfwidth', None) is not None
                 or getattr(args, 'checkpoints', None) is not None):
+            if getattr(args, 'gate_separation', None):
+                # The gate bands have to be asked of the corridor that is
+                # LEFT, not the one we started with: the body-sweep passes
+                # take up to 0.3 m of it at a hairpin, and a band the sweep
+                # has already eaten is what makes the QP report "corridor
+                # exhausted".  Re-derived every pass, from `work`.
+                args._gate_reach_track = np.column_stack(
+                    [reftrack[:, :2], keep])
+                args._extra_bounds = None
             # Restate the wall floor as a corridor width, so the QP's own
             # `reftrack[:, 2] - w_veh/2` bound lands exactly on it.
             inf = np.full((len(reftrack), 2), np.inf)
             lo2, hi2 = corridor_of(reftrack, normvec,
                                    np.column_stack([reftrack[:, :2], inf]),
-                                   args)
+                                   args, gates=False)
+            keep_phys = keep.copy()
             keep = np.minimum(keep, np.column_stack([-lo2, hi2])
                               + args.w_veh / 2.0)
-            if getattr(args, 'checkpoints', None) is not None:
+            if getattr(args, 'gate_separation', None):
+                # The gate band bounds tph's OWN alpha, so it is restated the
+                # other way round from the mirrored corridor above:
+                # `dev_right = keep_r - w/2 = b`, `dev_left = keep_l - w/2 =
+                # -a`.
+                glo, ghi = gate_bounds(reftrack, normvec, args)
+                fin = np.isfinite(glo) | np.isfinite(ghi)
+                gk = np.column_stack([
+                    np.where(np.isfinite(ghi), ghi, np.inf) + args.w_veh / 2.0,
+                    args.w_veh / 2.0
+                    - np.where(np.isfinite(glo), glo, -np.inf)])
+                keep[fin] = np.minimum(keep[fin], gk[fin])
+            if (getattr(args, 'checkpoints', None) is not None
+                    and not getattr(args, 'gate_separation', None)):
                 # A gate can sit off the reference line's centre, so its bound
                 # can be one-sided and negative; the QP needs a corridor that
                 # still exists.  Only reached with --checkpoints, so the
                 # min-halfwidth lines are untouched.
+                #
+                # NOT applied under --gate-separation: a gate band is often
+                # entirely to one side of the reference (the whole point is to
+                # move the crossing), which makes one of the two `keep`
+                # entries legitimately negative, and flooring it at 0.05
+                # silently threw that half of the bound away -- measured, the
+                # QP then put alpha at +0.51 where the band said -1.27..-0.79.
+                # The solver only needs the two to SUM to the vehicle width,
+                # which the fallback below guarantees.
                 keep = np.maximum(keep, 0.05)
+            if getattr(args, 'gate_separation', None):
+                # The gate band is derived from the corridor the QP STARTED
+                # with, but the body-sweep passes shrink that corridor by up
+                # to 0.3 m at a hairpin, so the two can stop intersecting.
+                # The corridor wins where they do -- a line that keeps its
+                # gate spacing by driving through a wall is not a line -- and
+                # the finished-line report says what spacing survived.
+                short = keep.sum(axis=1) < args.w_veh + 0.02
+                if short.any():
+                    keep[short] = keep_phys[short]
+                    if not quiet:
+                        print(f'  gate separation: corridor wins at '
+                              f'{int(short.sum())} of {len(keep)} reference '
+                              f'points (band and sweep do not intersect)')
         shrink = float(np.mean(reftrack[:, 2:4] - keep))
         work = np.column_stack([reftrack[:, :2], keep])
         if not quiet:
@@ -871,6 +1413,17 @@ def main():
                          'The line is then constrained to pass inside every '
                          'lap-checkpoint trigger box, so it cannot skip one '
                          'and run a lap the sim refuses to count.')
+    ap.add_argument('--gate-separation', type=float, default=None, metavar='M',
+                    help='OPT-IN, needs --checkpoints. Hold consecutive lap-'
+                         'checkpoint planes at least M metres apart along the '
+                         'line (0.60 = body 0.50 + trigger box 0.10), so the '
+                         'car is never inside two trigger boxes at once and '
+                         'cannot drop a checkpoint. Where the geometry cannot '
+                         'reach M the gates are pushed as far apart as they go.')
+    ap.add_argument('--gate-band-floor', type=float, default=0.12, metavar='M',
+                    help='narrowest lateral band --gate-separation may impose '
+                         'at a gate before the solver widens it (default '
+                         '0.12 m). Only used with --gate-separation.')
     ap.add_argument('--checkpoint-margin', type=float, default=0.25,
                     metavar='M',
                     help='metres of the trigger half-width to keep in hand at '
@@ -1003,6 +1556,11 @@ def main():
         sys.exit('--min-halfwidth needs --min-halfwidth-map')
     if args.checkpoint_margin < 0.0:
         sys.exit('--checkpoint-margin must not be negative')
+    if args.gate_separation is not None:
+        if args.checkpoints is None:
+            sys.exit('--gate-separation needs --checkpoints')
+        if args.gate_separation <= 0.0:
+            sys.exit('--gate-separation must be positive')
     reftrack = np.loadtxt(args.centerline, delimiter=',')
     print(f'centerline: {len(reftrack)} pts')
 
@@ -1163,6 +1721,15 @@ def main():
               f'{_ok[0][1]} (asked {args.checkpoint_margin:.2f}), '
               f'median {np.median([v for v, _ in _ok]):.3f} m'
               + (f'  *** SKIPPED: {_bad} ***' if _bad else ''))
+        if args.gate_separation is not None:
+            _sep = gate_separations(raceline[:, :2], _cps)
+            _w = min(_sep.items(), key=lambda kv: kv[1])
+            _short = sorted(k for k, v in _sep.items()
+                            if v < args.gate_separation - 1e-9)
+            print(f'gate separation: finished line holds '
+                  f'{_w[1]:.3f} m at {_w[0][0]}->{_w[0][1]} '
+                  f'(asked {args.gate_separation:.2f})'
+                  + (f'  *** SHORT: {_short} ***' if _short else ''))
 
     if args.jerk_lat is not None:
         before = float(np.sum(el_lengths / np.maximum(vx, 0.1)))

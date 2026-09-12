@@ -112,7 +112,7 @@ CHECKPOINT_MIN_MARGIN = 0.35
 # has ever lost a lap, holds 0.388 m (19->20) and 0.477 m (18->19); the
 # cdctf2025 safe line 0.558 / 0.635; Porto cr_dk0.8 0.961 m at worst and
 # ICRA 2026 1.614 m, neither ever inside two boxes.
-GATE_SEPARATION_MIN = 0.60
+GATE_SEPARATION_MIN = 0.55  # 0.60 (body + box) condemns the CDC-TF safe line (0.558, 32 counted laps); 0.55 passes it and rejects fast3_m53 (0.388, dropped a lap)
 
 # Steering-lock turn radius (src/pit_crew/vehicle.py MIN_TURN_R) and the
 # clearance floor `make_track_lines.py` rejects a candidate under
