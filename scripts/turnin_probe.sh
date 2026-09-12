@@ -72,7 +72,7 @@ docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew tur
     $POSE_ARG \
     -p v_probe:=${V_PROBE:-3.0} -p amp_rad:=${AMP:-0.15} \
     -p pulse_s:=${PULSE_S:-0.65} -p n_pulses:=${N_PULSES:-3} \
-    -p max_run_s:=${RUN_S} ${PROBE_ARGS:-} > /tmp/turnin.log 2>&1"
+    -p max_run_s:=$(printf "%.1f" "$RUN_S") ${PROBE_ARGS:-} > /tmp/turnin.log 2>&1"
 sleep 6
 docker exec autodrive_roboracer_api /bin/bash -c \
     "grep -hE 'turnin_probe:|Traceback|Error|ERROR' /tmp/turnin.log /tmp/loc.log 2>/dev/null | head -8"
