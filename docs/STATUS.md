@@ -94,6 +94,23 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   32, unique among 61 logs. A checkpoint constraint now exists anyway
   (`--checkpoints`, pick_config reports the margin and exits 2 below
   0.35 m); fast4_cp == fast3_m53 byte for byte.
+- MECHANISM of the missed lap (sim source, Tinker-Twins/AutoDRIVE
+  LapTimer.cs, matches our build): a lap counts only if CheckpointCount
+  reached 20, which needs cp20's ENTER accepted while
+  PreviousCheckpoint == 19; CheckpointFlag is ONE global latch cleared by
+  ANY trigger exit, and PreviousCheckpoint is overwritten on every exit.
+  The car (0.50 m, ~15 colliders each firing its own enter/exit) must be
+  inside at most one gate box at a time. At the CDC-TF hairpin gates
+  17-20 are 0.26 m apart along fast3_m53 (safe line: 0.39-0.41), so the
+  car straddles 2-3 boxes every lap (0.13 s/lap of triple occupancy);
+  one lap in 32 the cp17 exit landed after the cp19 enter and cp20 was
+  dropped. Rule for lines: consecutive gate planes >= 0.60 m apart along
+  the line (car length + box), zero triple occupancy, never re-touch a
+  gate after passing it, especially the last three before the finish.
+  Gate separation collapses with |lateral| (the gates fan out), so the
+  lever is the line's lateral position at converging gates, not speed.
+  An uncounted lap costs ~one lap time (10 s): weight it like a
+  collision. Agent implementing the occupancy metric + constraint.
 - steer_tau x barrier sweep (7488 harness laps): tau 0.02 keeps 88% of
   the tight-track gain and 0.03 keeps 95% while Porto's worst clearance
   goes 0.000 (tau 0.04, bm 0.34) -> 0.075 (0.03, bm 0.40) -> 0.103 (0.02,
