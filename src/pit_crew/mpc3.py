@@ -254,7 +254,7 @@ class MPC3Tracker(Node):
         # Measures the pose period always; only ACTS on it when rate_adaptive.
         self.rate_ctl = RateControl(
             self.mpc, self.act, enabled=bool(v['rate_adaptive']),
-            filt=self.filt, speed_est=self.speed_est,
+            filt=self.filt, speed_est=self.speed_est, thr=self.thr,
             nominal=float(v['rate_nominal']), window=int(v['rate_window']),
             terms=tuple(str(v['rate_terms']).split(',')),
             min_change=float(v['rate_min_change']),

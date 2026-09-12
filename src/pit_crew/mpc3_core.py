@@ -333,12 +333,17 @@ class RateControl:
     """
 
     def __init__(self, mpc, act, enabled=False, filt=None, speed_est=None,
-                 nominal=RATE_NOMINAL, window=20, terms=RATE_TERMS,
+                 thr=None, nominal=RATE_NOMINAL, window=20, terms=RATE_TERMS,
                  min_change=0.002, rate_lo=0.5, rate_hi=1.5, **nominals):
         self.mpc = mpc
         self.act = act
         self.filt = filt
         self.speed_est = speed_est
+        # `ServoThrottle.hold` is "how long one command stays in force", i.e.
+        # one sensor period -- the same machine property everything else here
+        # follows. Inert while the caller passes `lead_max=0.0` (mpc3 does), and
+        # correct rather than accidentally 0.09 s the moment it does not.
+        self.thr = thr
         self.enabled = bool(enabled)
         self.est = RateEstimator(nominal=nominal, window=window)
         self.adapter = RateAdapter(nominal=nominal, terms=terms, **nominals)
@@ -378,6 +383,12 @@ class RateControl:
             self.filt.blend = v['pose_blend']
         if self.speed_est is not None and 0.0 < self.adapter.enc0 < 1.0:
             self.speed_est.alpha = v['enc_alpha']
+        if self.speed_est is not None:
+            # Counts samples, means a hold TIME: 6 samples is 0.624 s at
+            # 0.104 s and 0.528 s at 0.088 s of steering by a stale speed.
+            self.speed_est.reject_max = vehicle.reject_max_for_dt(p)
+        if self.thr is not None:
+            self.thr.hold = p
         return v
 
 
@@ -402,6 +413,26 @@ def corridor_clearance(path: RefPath, i0, e_lat, body_m=0.25):
     left = path.w_left[idx] - e_lat - hw
     right = path.w_right[idx] + e_lat - hw
     return float(min(left.min(), right.min()))
+
+
+def _max_circular_gap(seen) -> int:
+    """Longest run of False in a circular boolean array (all False -> len).
+
+    Rate-free by construction: it measures how much of the LAP was never
+    driven, in bins, where a sparse-but-complete lap leaves only the sampling
+    gaps (a few bins at any sensor period) and a fragment leaves one huge one.
+    """
+    a = np.asarray(seen, dtype=bool)
+    n = a.size
+    if not a.any():
+        return int(n)
+    if a.all():
+        return 0
+    idx = np.flatnonzero(a)
+    # Circular gaps BETWEEN consecutive seen bins, wrapping the last to the
+    # first, minus the seen bin itself.
+    d = np.diff(np.concatenate([idx, [idx[0] + n]])) - 1
+    return int(d.max())
 
 
 class ILC:
@@ -439,7 +470,7 @@ class ILC:
                  clear_target=0.30, clear_band=0.10, clear_loss=0.05,
                  v_down=1.0, v_up=0.005, v_enable=True,
                  v_lo=0.85, v_hi=1.05, leak=0.02, min_count=1, min_cover=0.60,
-                 store=''):
+                 max_gap=0.25, store=''):
         self.total_s = float(total_s)
         self.bin_m = float(bin_m)
         self.nb = max(4, int(round(self.total_s / self.bin_m)))
@@ -484,6 +515,11 @@ class ILC:
         # `invalidate()` is the primary defence but it depends on the encoder
         # noticing the teleport; this is the one that does not.
         self.min_cover = float(min_cover)
+        # Largest unseen arc, as a fraction of the lap, that is still a lap.
+        # 0.25 against a real lap's 3-4 bins (0.03) and the measured fragment's
+        # 0.80: the two populations are two orders of magnitude apart, so this
+        # is not a tuned number.
+        self.max_gap = float(max_gap)
         self.store = str(store)
         span = max(1, int(round(float(q_span_m) / self.bin_m)))
         self.q = np.ones(2 * span + 1) / (2 * span + 1)
@@ -562,7 +598,27 @@ class ILC:
     def finish_lap(self):
         """Fold one lap's measurements into the tables.  Call on an s wrap."""
         seen = self.cnt >= self.min_count
-        if not self.valid or seen.sum() < self.min_cover * self.nb:
+        # Two questions, and `min_cover * nb` used to answer them with one
+        # number that only works at one sensor period.
+        #
+        # *How densely was the lap sampled?*  Coverage is bounded by the SAMPLE
+        # count, not by the bin count, and the sample count is rate dependent:
+        # ~77 poses a lap at 0.104 s against ~91 at 0.088 s, over 114 bins on
+        # Porto, so the achievable coverage is 0.67 on the dev host and 0.80 in
+        # the submission image -- against a 0.60 gate. A normal lap on a slow
+        # host therefore sits a few dropped poses away from silently learning
+        # nothing, and on a fast one the gate can never bind. Judge density
+        # against what the sampling could reach.
+        #
+        # *Was it a whole lap?*  That is what the gate was really for, and
+        # density cannot answer it: a fragment is dense in its own bins. The
+        # rate-free test is the largest circular RUN of unseen bins -- a real
+        # lap at any period leaves gaps of a few bins (0.6-0.7 m of travel
+        # between poses against 0.25 m bins), while a lap cut short by a
+        # teleport leaves one gap the size of the part it never drove.
+        reach = min(float(self.nb), float(self.cnt.sum()))
+        if not self.valid or seen.sum() < self.min_cover * reach \
+                or _max_circular_gap(seen) > self.max_gap * self.nb:
             self._reset_lap()
             self.valid = True
             return None

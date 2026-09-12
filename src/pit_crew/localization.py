@@ -52,7 +52,14 @@ class ParticleFilter(Node):
             ('init_y', 0.0),
             ('init_spread', 0.6),
             ('lost_threshold', 0.22),     # normalized score below = lost
-            ('lost_patience', 5),         # consecutive bad scans before reinit
+            ('lost_patience', 5),         # bad scans AT `rate_nominal`; the
+                                          # count actually used is derived from
+                                          # the measured period so the blind
+                                          # window is fixed in SECONDS
+            ('lost_seconds', 0.0),        # >0 overrides the above, in seconds
+            ('max_step_mps', 0.0),        # >0: speed cap for the motion model;
+                                          # 0 = derive from `max_step_m`
+            ('max_step_m', 0.6),          # m per update AT `rate_nominal`
             # Per-SAMPLE and per-UPDATE constants mean different things at
             # different sensor rates (0.104 s dev host, 0.088 s in the
             # image, 0.097 s at the organisers). Both of these are scaled
@@ -80,6 +87,7 @@ class ParticleFilter(Node):
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
          self.init_spread, self.lost_thresh, self.lost_patience,
+         self.lost_seconds, self.max_step_mps, self.max_step_m,
          self.rate_nominal, self.enc_tau,
          self.throttle_to_mps, self.lidar_offset, self.keep_prior_w,
          self.publish_on_reloc, self.midpoint_heading) = [x.value for x in p]
@@ -95,6 +103,15 @@ class ParticleFilter(Node):
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         self.last_t = None
         self.lost_count = 0
+        # Both of these are SAMPLE counts the code compares against, derived
+        # from a time so that they mean the same thing on a 0.088 s host and a
+        # 0.104 s one. Seeded with the nominal answer for the first scan, when
+        # no period has been measured yet.
+        self._patience = max(1, int(self.lost_patience))
+        # Metres-per-update is a SPEED cap in disguise: 0.6 m is 5.77 m/s at
+        # 0.104 s and 6.82 at 0.088, and the car reaches 6.58 m/s. Cap the
+        # speed, which is a property of the vehicle, not of the host.
+        self._v_cap = self._speed_cap()
         self.score = 0.0
         self.initialized = False
         # Where to seed the particle cloud. The submission entrypoint does NOT
@@ -246,10 +263,9 @@ class ParticleFilter(Node):
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
         self.last_t = t
         # The encoders share the scan's WebSocket frame, so the scan period IS
-        # the encoder sample period: re-point the low pass at it so its lag stays
-        # 0.193 s on a 9.6 Hz host and on an 11.4 Hz one alike.
-        if self.enc_tau > 0.0 and dt > 0.0:
-            self.speed_est.alpha = vehicle.alpha_for_lag(dt, self.enc_tau)
+        # the encoder sample period. Everything per-sample follows it; see
+        # `repoint`.
+        self.repoint(dt)
 
         self.predict(dt)
         self.update(scan)
@@ -261,6 +277,43 @@ class ParticleFilter(Node):
             return
         self._just_relocalized = False
         self.publish(scan.header.stamp)
+
+    def speed_cap(self):
+        """The motion model's cap, as a SPEED.
+
+        `max_step_m` is metres per UPDATE, which is a speed cap in disguise:
+        0.6 m is 5.77 m/s at a 0.104 s period and 6.82 m/s at 0.088 s, either
+        side of the 6.58 m/s the car actually reaches, so the dev host and the
+        submission image silently dead-reckon under different models exactly
+        where the car is fastest. Identity at `rate_nominal`.
+        """
+        if self.max_step_mps > 0.0:
+            return float(self.max_step_mps)
+        return (float(self.max_step_m)
+                / max(self.rate_nominal or vehicle.RATE_NOMINAL, 1e-3))
+
+    def repoint(self, dt):
+        """Re-point every per-SAMPLE constant at the measured scan period.
+
+        The encoders share the scan's WebSocket frame, so the scan period IS
+        the encoder sample period. Each of these counts samples and means a
+        TIME; every formula is the identity at `rate_nominal`.
+        """
+        if not dt > 0.0:
+            return
+        if self.enc_tau > 0.0:
+            # Low-pass lag stays 0.193 s on a 9.6 Hz host and an 11.4 Hz one.
+            self.speed_est.alpha = vehicle.alpha_for_lag(dt, self.enc_tau)
+            # ...and the reject-persistence window stays 0.624 s, rather than
+            # shrinking to 0.528 s of steering by a stale speed at 0.088 s.
+            self.speed_est.reject_max = vehicle.reject_max_for_dt(dt)
+        # How many consecutive bad scans are a lost filter. 5 at 0.104 s is
+        # 0.52 s of blind driving -- 3.1 m at 6 m/s -- and the same 5 is only
+        # 0.44 s at 0.088. Fix the time, derive the count.
+        base = (float(self.lost_seconds) if self.lost_seconds > 0.0
+                else self.lost_patience
+                * (self.rate_nominal or vehicle.RATE_NOMINAL))
+        self._patience = max(1, int(round(base / dt)))
 
     def predict(self, dt):
         yaw = self.imu_yaw
@@ -281,18 +334,25 @@ class ParticleFilter(Node):
         jumped = self.speed_est.consume_jump()
         # Encoder speed when available, throttle estimate as fallback
         v = self.speed_est.speed if self.speed_est.speed > 1e-3 else self.speed_cmd
-        step = 0.0 if jumped else float(np.clip(v * dt, -0.6, 0.6))
+        # The cap is on the SPEED (see `_v_cap`): a per-update distance cap
+        # silently truncates dead reckoning above 0.6/dt m/s, which is 5.77 m/s
+        # on the dev host and 6.82 in the submission image, either side of the
+        # 6.58 m/s the car actually reaches.
+        step = 0.0 if jumped else float(
+            np.clip(v, -self._v_cap, self._v_cap) * dt)
         # Per-update noise is per-TIME noise only at one rate; scale it so the
         # cloud diffuses at the same m/sqrt(s) whatever the host does.
-        noise = (self.noise_xy
-                 * (vehicle.noise_scale_for_dt(dt, self.rate_nominal)
-                    if self.rate_nominal > 0.0 else 1.0)
-                 * (4.0 if jumped else 1.0))
+        ns = (vehicle.noise_scale_for_dt(dt, self.rate_nominal)
+              if self.rate_nominal > 0.0 else 1.0)
+        noise = self.noise_xy * ns * (4.0 if jumped else 1.0)
         if jumped:
             self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
         self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
         self.py += step * np.sin(head) + np.random.normal(0, noise, self.n_p)
-        self.pth += np.random.normal(0, self.noise_th, self.n_p)
+        # The heading-offset walk is per-update too, and scaling only the xy
+        # one would make the RATIO of translational to rotational diffusion
+        # rate-dependent -- worse than either being uniformly wrong.
+        self.pth += np.random.normal(0, self.noise_th * ns, self.n_p)
 
     def update(self, scan: LaserScan):
         r = np.asarray(scan.ranges, dtype=np.float64)
@@ -352,7 +412,7 @@ class ParticleFilter(Node):
             # returning, or the filter dead-reckons away forever.
             self.lost_count += 1
             self.score = 0.0
-            if self.lost_count >= self.lost_patience:
+            if self.lost_count >= self._patience:
                 self.init_particles_global()
             return
         self.w = w / s
@@ -360,7 +420,7 @@ class ParticleFilter(Node):
 
         if self.score < self.lost_thresh:
             self.lost_count += 1
-            if self.lost_count >= self.lost_patience:
+            if self.lost_count >= self._patience:
                 self.init_particles_global()
                 return
         else:

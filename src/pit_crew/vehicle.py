@@ -26,6 +26,14 @@ SPEED_MAX = 9.0             # m/s, largest believable forward wheel speed
 REVERSE_MAX = 3.0           # m/s, largest believable reverse wheel speed
 MAX_ENC_GAP = 0.5           # s, older than this and we re-seed instead
 MAX_CONSEC_REJECT = 6       # rejections before we re-seed rather than hold
+# ...and that count is in SAMPLES, which is a different amount of TIME on every
+# machine: 6 samples is 0.624 s at the 0.104 s period it was tuned at and only
+# 0.528 s at the 0.088 s the submission image measures. The window that decides
+# "isolated glitch" from "sustained motion" -- and therefore how long the
+# controller may steer and brake by a stale speed -- must not shrink because the
+# host got faster. `SpeedEstimator.reject_max` is re-pointed from this, and is
+# the identity at RATE_NOMINAL by construction.
+REJECT_HOLD_S = 0.624       # s, == MAX_CONSEC_REJECT samples at RATE_NOMINAL
 BRAKE_MIN_SPEED = 1.0       # m/s below which a negative command is just reverse
 BRAKE_MAX = 0.45            # largest braking command, magnitude
 # Total vehicle mass. The technical guide gives 3.906 kg = 3.470 sprung +
@@ -142,6 +150,18 @@ def noise_scale_for_dt(dt: float, nominal: float = RATE_NOMINAL) -> float:
     return float(math.sqrt(dt / nominal))
 
 
+def reject_max_for_dt(dt: float, hold_s: float = REJECT_HOLD_S) -> int:
+    """Consecutive-rejection count giving a fixed hold TIME `hold_s`.
+
+    `reject_max_for_dt(0.104) == 6 == MAX_CONSEC_REJECT`, i.e. the identity at
+    the period the constant was tuned at. Floored at 2 so an isolated glitch is
+    still rejected however slow the host is.
+    """
+    if not (dt > 0.0 and hold_s > 0.0):
+        return MAX_CONSEC_REJECT
+    return max(2, int(round(hold_s / dt)))
+
+
 class SpeedEstimator:
     """Vehicle speed from wheel encoder angles.
 
@@ -158,6 +178,11 @@ class SpeedEstimator:
 
     def __init__(self, alpha: float = 0.35):
         self.alpha = alpha          # low-pass factor for the derivative
+        # Consecutive rejections tolerated before a sample is believed. In
+        # SAMPLES, because that is what `update` counts -- but it means a fixed
+        # TIME, so whoever knows the sensor period re-points it with
+        # `reject_max_for_dt`. Identity at RATE_NOMINAL.
+        self.reject_max = MAX_CONSEC_REJECT
         self.speed = 0.0            # m/s, filtered
         self._last = {}             # wheel -> (stamp_sec, position_rad)
         self._per = {}              # wheel -> filtered speed for that wheel
@@ -191,7 +216,7 @@ class SpeedEstimator:
             # stale number. Re-seed after a few consecutive rejections so the
             # worst case is a short gap, not an indefinite lie.
             self._rej[wheel] = self._rej.get(wheel, 0) + 1
-            if self._rej[wheel] >= MAX_CONSEC_REJECT:
+            if self._rej[wheel] >= self.reject_max:
                 # Persisted: this is motion, not a glitch. Believe it, clamped,
                 # so a car that really is reversing hard is reported as
                 # reversing instead of holding a stale forward speed forever.

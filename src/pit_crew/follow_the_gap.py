@@ -34,6 +34,13 @@ class FollowTheGap(Node):
             ('range_clip', 8.0),            # m; ignore structure farther out
             ('steer_sign', 1.0),            # flip if sim convention is mirrored
             ('steer_alpha', 0.5),           # steering low-pass (1.0 = no filter)
+            # ...which is per SCAN, so its lag is `dt*(1-a)/a` -- 0.104 s at the
+            # 0.104 s period it was tuned at and 0.088 s in the submission
+            # image, i.e. the fallback is 15% less damped on a faster host than
+            # in any run it was judged on. Fix the lag in SECONDS and derive
+            # alpha from the measured scan period; `steer_tau` 0.104 with
+            # `steer_alpha` 0.5 is the identity at that period. 0 = per scan.
+            ('steer_tau', vehicle.RATE_NOMINAL * (1.0 - 0.5) / 0.5),
             ('center_gain', 0.25),          # corridor-centering blend [rad]
             ('throttle_gain', 0.040),        # open-loop throttle per m/s
             ('stuck_clearance', 0.45),      # m ahead that counts as stuck
@@ -45,7 +52,7 @@ class FollowTheGap(Node):
         (self.v_max, self.v_min, self.clear_vmax, self.steer_slow,
          self.disp_thresh, self.extend_margin, self.bubble_r,
          fov_deg, self.range_clip, self.steer_sign,
-         self.steer_alpha, self.center_gain, throttle_gain,
+         self.steer_alpha, self.steer_tau, self.center_gain, throttle_gain,
          self.stuck_clearance, self.stuck_seconds,
          self.escape_seconds, self.dir_lock_s, output_ns) = [x.value for x in p]
         # Heading integrated from the gyro, and the heading the car was
@@ -123,6 +130,10 @@ class FollowTheGap(Node):
                 or not math.isfinite(scan.angle_increment)
                 or scan.angle_increment <= 0):
             return
+        # The PREVIOUS accepted scan, kept before it is overwritten: the scan
+        # period is the only thing that says what `steer_alpha` costs in
+        # seconds.
+        prev_scan = self._valid_scan_at
         self._valid_scan_at = stamp
         n = r.size
         angles = self.angles if n == vehicle.LIDAR_N else \
@@ -219,8 +230,12 @@ class FollowTheGap(Node):
         if denom > 1e-3:
             steer_angle += self.center_gain * (d_left - d_right) / denom
 
-        # Low-pass the steering to tame 10 Hz jitter
-        self._steer_filt += self.steer_alpha * (steer_angle - self._steer_filt)
+        # Low-pass the steering to tame 10 Hz jitter, at a lag fixed in
+        # SECONDS rather than in scans (see `steer_tau`).
+        a = self.steer_alpha
+        if self.steer_tau > 0.0 and prev_scan is not None:
+            a = vehicle.alpha_for_lag(stamp - prev_scan, self.steer_tau)
+        self._steer_filt += a * (steer_angle - self._steer_filt)
         steer_angle = self._steer_filt
 
         # Speed from straight-ahead clearance, shed speed while steering

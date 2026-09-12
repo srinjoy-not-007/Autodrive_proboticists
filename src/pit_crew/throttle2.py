@@ -31,8 +31,19 @@ without any other change.
 import math
 import time
 
+try:
+    from pit_crew.vehicle import RATE_NOMINAL
+except ImportError:                                  # running from src/pit_crew
+    from vehicle import RATE_NOMINAL
+
 SERVO_GAIN = 24.6       # m/s of setpoint per unit of throttle (measured)
-CMD_PERIOD = 0.09       # s, the simulator consumes one command per telemetry tick
+# The simulator consumes one command per telemetry tick, so this IS the sensor
+# period -- a property of the MACHINE, not of the throttle law: 0.104 s on the
+# dev host, 0.088 s in the submission image, 0.097 s at the organisers. It was
+# written as a hard 0.09 s, which is a third machine nobody runs on. Default it
+# to the one nominal constant and let whoever measures the real period re-point
+# `hold` (`mpc3_core.RateControl` does, when `rate_adaptive` is on).
+CMD_PERIOD = RATE_NOMINAL
 
 
 class ServoThrottle:
