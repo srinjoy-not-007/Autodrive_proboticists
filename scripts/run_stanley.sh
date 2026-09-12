@@ -16,7 +16,7 @@ echo "map=$MAP line=$LINE scale=$SCALE $EXTRA"
 # run). RATE_MAX_DT / RATE_MIN_DT select an instance in the wanted band by
 # restarting the sim (up to RATE_TRIES times) -- e.g. RATE_MAX_DT=0.095 for
 # a fast (11 Hz) instance, RATE_MIN_DT=0.100 for a slow one.
-if [ -n "${RATE_MAX_DT:-}${RATE_MIN_DT:-}" ]; then
+if [ -n "${RATE_PRE_SELECT:-}" ]; then   # superseded by run_exp.sh (measures with the stack running)
     for try in $(seq 1 "${RATE_TRIES:-5}"); do
         DT=$(docker exec autodrive_roboracer_api /bin/bash -c "source /opt/ros/humble/setup.bash; timeout 8 ros2 topic hz /autodrive/roboracer_1/imu 2>&1 | grep average | tail -1" | awk '{printf "%.4f", 1.0/$3}')
         echo "sensor period ${DT:-?} s (try $try)"

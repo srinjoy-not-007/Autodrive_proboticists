@@ -32,6 +32,35 @@ fi
 sleep 3
 LOG=$(ls -t data/logs/race_*.csv | head -1)
 echo "[$NAME] logging to $LOG"
+# The sensor period only settles once the whole stack is running, and it is
+# a per-start lottery of the simulator. RATE_MAX_DT / RATE_MIN_DT (seconds)
+# measure the logger period after 25 s and restart the run until it is in
+# band (up to RATE_TRIES times).
+if [ -n "${RATE_MAX_DT:-}${RATE_MIN_DT:-}" ]; then
+    for try in $(seq 1 "${RATE_TRIES:-5}"); do
+        sleep 25
+        DT=$(.venv/bin/python - "$LOG" <<'PY'
+import csv, sys, numpy as np
+rows = list(csv.DictReader(open(sys.argv[1])))
+t = np.array([float(r['t']) for r in rows][-150:])
+print('%.4f' % np.median(np.diff(t)) if len(t) > 20 else '1.0')
+PY
+)
+        echo "[$NAME] stack period $DT s (try $try)"
+        OK=1
+        [ -n "${RATE_MAX_DT:-}" ] && awk "BEGIN{exit !($DT > $RATE_MAX_DT)}" && OK=0
+        [ -n "${RATE_MIN_DT:-}" ] && awk "BEGIN{exit !($DT < $RATE_MIN_DT)}" && OK=0
+        [ "$OK" = 1 ] && break
+        [ "$try" = "${RATE_TRIES:-5}" ] && { echo "[$NAME] no instance in band; giving up"; ./scripts/stop_run.sh >/dev/null 2>&1; exit 4; }
+        ./scripts/stop_run.sh >/dev/null 2>&1
+        CONTROLLER="${CONTROLLER:-mpc}" LIDAR_OFFSET="${LIDAR_OFFSET:-0.0}" \
+            ./scripts/run_stanley.sh "$SCALE" "$MAP" "$LINE" $EXTRA > /tmp/run_exp_start.log 2>&1 \
+            || { echo "restart failed"; exit 1; }
+        sleep 3
+        LOG=$(ls -t data/logs/race_*.csv | head -1)
+        echo "[$NAME] logging to $LOG"
+    done
+fi
 
 T0=$(date +%s)
 while true; do
