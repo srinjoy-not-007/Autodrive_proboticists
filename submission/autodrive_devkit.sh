@@ -120,7 +120,7 @@ LOC_ARGS=()
 # A/B (`icra2025_step9`) plus the Porto and ICRA-2026 regressions are back.
 # A FINALS TRACK WITH A LONG STRAIGHT NEEDS THIS -- check the drill's
 # centerline for a stretch where the profile asks for more than 5.8 m/s.
-# LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)
+LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)  # enabled Sept 12: ICRA 2025 4 laps/14 coll -> 32/0; Porto 70.3 s, ICRA 2026 148.9 s unchanged
 # Extra `-p name:=value` parameters for the finals, without editing this file.
 # Word-split ON PURPOSE (the only unquoted expansions here) so
 # PIT_CREW_CONTROLLER_ARGS="-p rate_adaptive:=true -p ilc_enable:=true" works;

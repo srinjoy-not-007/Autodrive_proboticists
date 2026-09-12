@@ -231,8 +231,9 @@ PIT_CREW_LOCALIZATION_ARGS. **Driven: SCALE 0.75 (cap not reached) ->
 32 laps / 0 collisions / 191.2 s; full speed with `max_step_mps:=9.0
 publish_on_reloc:=false` -> 32 laps / 0 collisions / 148.8 s** (the DQ
 run was 4 laps / 14 collisions). Promote after a Porto regression run
-(needs the LOC_ARGS line in the entrypoint uncommented). The
-finals-day risk this exposed is closed.
+Regression: Porto cr_dk0.8 32 laps / 0 / 70.31 s, ICRA 2026 32 / 0 /
+148.9 s (both unchanged or better). **ENABLED in the entrypoint's
+LOC_ARGS (Sept 12).** The finals-day risk this exposed is closed.
 
 **Tight-circuit lines (Sept 12, offline; live A/B queued):** the drill's
 MESH_RACE_KAPPA_MAX 1.0 gate rejected every raceline on both 2025
