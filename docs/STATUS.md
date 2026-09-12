@@ -147,6 +147,12 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   no-stall Xvfb regression (Porto + one circuit, queued in chain8), plus
   a stalls-with-defaults arm for the comparison (the earlier one had no
   stalls injected).
+- **Image test on the real display (the organisers' path: built image,
+  --entrypoint /bin/bash, no mounts, helper clicks; period 0.058):
+  12 laps, 0 collisions, OFFICIAL 70.06 s**, /localization and /mpc3 up,
+  the extra-shell check passed. First image-as-shipped run since today's
+  config; log data/logs/submission_20260912_170708.csv. (The
+  submission_..._074832 log is this morning's test at the older config.)
 - Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
   data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
   0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
