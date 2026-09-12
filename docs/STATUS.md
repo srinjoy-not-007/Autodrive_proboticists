@@ -84,6 +84,13 @@ landed on 0.104 s instances and are therefore not 11 Hz tests (both clean,
 73.1 s official). `RATE_MAX_DT`/`RATE_MIN_DT` on run_exp/run_stanley now
 restart the sim until the period is in the wanted band; every run must be
 read with its dt_p50 (tools/lap_report.py).
+ILC prior (tools/ilc_prior.py): steering-feedforward table learned offline
+from 133 clean laps of the shipping line (data/ilc/prior_porto_mesh_mc0.63_ay6.75.npz;
+peaks at s 4-5.5 and 10.5-12 where the car sits 0.10-0.13 m inside, 17/114
+bins at the 0.071 1/m clamp). The offline harness's own error pattern
+correlates only 0.21 with live, so the prior can only be judged live:
+`-p ilc_enable:=true -p ilc_v_enable:=false -p ilc_store:=<copy>/prior`
+(the node overwrites the table each lap; copy the pristine one per run).
 Cause of the lottery (sim-period agent): the telemetry rate is set by one
 CPU-saturated Unity render thread (~98% of a core, GPU at 19% and idle
 clocks, Xvfb has no refresh so no vsync); ~100 ms of render CPU per tick,
