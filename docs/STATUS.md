@@ -147,6 +147,14 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   no-stall Xvfb regression (Porto + one circuit, queued in chain8), plus
   a stalls-with-defaults arm for the comparison (the earlier one had no
   stalls injected).
+- **stall_base2 (shipping defaults, 8 real stalls of 0.4-1.0 s): 32
+  laps, 0 collisions, longest lap 7.52 s, 70.27 s.** A sim pause freezes
+  physics and telemetry together, so the defaults' 0.35 s coast is
+  harmless live; the harness's dropped-frame collisions do not transfer
+  to this stall shape. gap_predict_s ALONE caused the 13 s stop; the
+  full package was clean; the defaults were clean. **Decision: the gap
+  package stays opt-in (prepared GAP_BLOCK, type-checked test); not
+  shipped** -- no live evidence it helps, one live case it hurt.
 - **Image test on the real display (the organisers' path: built image,
   --entrypoint /bin/bash, no mounts, helper clicks; period 0.058):
   12 laps, 0 collisions, OFFICIAL 70.06 s**, /localization and /mpc3 up,
