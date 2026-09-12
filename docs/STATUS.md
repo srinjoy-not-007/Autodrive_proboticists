@@ -536,7 +536,15 @@ but costs +0.30 s/lap on CDC-TF and +0.23 on ICRA 2025 (not the free
 -0.018 it was on Porto); 0.08 is bit-identical to 0.05 at 0.097 (never
 pay for it). Recommended drill picks: CDC-TF fast3_m53 + lead 0.05 (or
 lead 0 if the live A/B is clean), ICRA 2025 fast2_m50 (+ lead 0.05 as
-margin), safe lines dropped (0.6-0.9 s/lap slower and cut harder). **ICRA 2025 fast2_m50: 32 laps, 0
+margin), safe lines dropped (0.6-0.9 s/lap slower and cut harder).
+**Driven: fast3_m53 32 laps, 0 collisions, laps 10.1-10.4 s -- but ONE
+20.4 s "lap": two start-line crossings with no lap_count increment, i.e.
+a MISSED CHECKPOINT** (rules: the lap timer does not stop until all
+checkpoints are passed). OFFICIAL 112.1 s instead of ~102. No other
+Sept 12 log (40 checked) shows the signature, so it is this line at one
+checkpoint. Finals hazard of the first order: the line generator must
+respect the checkpoint trigger extents (agent on it; pick_config to
+report the minimum checkpoint margin and fail loudly). **ICRA 2025 fast2_m50: 32 laps, 0
 collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
 drill's pick for that circuit under the finals config. **ICRA 2026 with
 steer_tau: 32/0/148.3 s (vs 150.4 without). steer_tau 0.04 SHIPPED in
