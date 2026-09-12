@@ -30,7 +30,10 @@ its expected race is no better than the clean 71.63 s config, so it is NOT
 promoted. Found meanwhile: mpc3's numpy solves ran OpenBLAS at ~1030% CPU
 inside the container in every mpc3 run so far; the entrypoint and
 run_stanley.sh now pin OMP/OPENBLAS/MKL threads to 1. Both configs are
-being re-run for 100 laps with the pin.
+being re-run for 100 laps with the pin. With the pin the ay 6.75 candidate
+is faster (median 7.049, first ten 70.24) but still 3 collisions/100 at the
+s 11.2 hairpin entry: dropped. Next: its smoother-steering parameters on the
+clean ay 6.5 line.
 
 ## September 13 (earlier): mpc3 + wide line PROMOTED, 73.5 s / 100 laps clean
 
