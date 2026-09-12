@@ -43,6 +43,12 @@ repeatable (steering ILC capped at 1.3-1.6x); longitudinal per-arc-length
 learning on the speed ceiling is the valuable learner (Wachter et al.
 2026, F1TENTH, 7.6%). Being implemented with rate-invariant constants and
 a brake-only lead.
+At Ultra on this host the logger period is 0.102-0.105 s (the sim renders
+slower), i.e. the same effective rate as the clean centuries: mpc3 at Ultra
+32 laps, 0 collisions, 72.98 s (median 7.21); legacy at Ultra 32 laps clean,
+78.40 s. The organisers' RTX 4090 at Ultra measured 0.097 s, between the
+clean (0.104) and colliding (0.088-0.091) rates, so rate invariance stays
+mandatory; until then, validate at Ultra (100-lap mpc3 Ultra run queued).
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
