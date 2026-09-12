@@ -1,6 +1,17 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 13: 71.6 s / 100 laps clean)
+## NEXT SESSION — START HERE (September 13: image as shipped 70.8 s, 100 laps clean twice)
+
+**Shipping: mpc3 defaults on `porto_mesh_mc0.60_ay6.5.csv`, mesh map,
+single-threaded BLAS. 100 laps clean at 71.63 s and again at 72.49 s
+(sim timer 72.02); the image raced as the organisers run it: 14 laps, 0
+collisions, 70.82 s on the simulator timer, best 6.98 s.** Baseline main
+89.6 s; winners 65 s. Rejected since: the ay 6.75 line (2-3/100 at the
+s 11.2 hairpin entry) and the CMA "smooth" parameter set on the shipping
+line (5/32, same corner). That entry is the next limit; single-parameter
+isolations of the search's knobs are running.
+
+## September 13: 71.6 s / 100 laps clean
 
 **Shipping config on this branch: mpc3 on `porto_mesh_mc0.60_ay6.5.csv`
 (mesh map, lidar_offset 0.1933). 100 laps on an idle host, 0 collisions,
