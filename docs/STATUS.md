@@ -419,7 +419,15 @@ collisions, OFFICIAL 69.24 s** (best race so far) -- but the hairpin
 margin is NOT improved: most-inside p50 -0.300 / worst -0.333 (16/32
 laps below -0.30) vs bm34+steer_tau -0.297/-0.338 and bm34 alone
 -0.287/-0.313. Clean runs with a thin margin, all three; steer_tau costs
-~0.01 m of it. The barrier 0.40 arm targets exactly this margin. lead45 (thr_lead_mode
+~0.01 m of it. The barrier 0.40 arm targets exactly this margin: **disp_bm40 32/0,
+70.13 s, hairpin most-inside p50 -0.261 / worst -0.296, 0/32 laps below
+-0.30** -- +0.04 m of real margin for 0.8 s of race. For a pass/fail
+qualifier and an unknown final that trade is right on the SAFE lines
+(cap 0.385+); on the fast lines (cap 0.345) 0.40 exceeds the feasible
+margin and the harness says it makes them worse, so the candidate rule
+is: barrier 0.40 on Porto (the qualifier) and on safe lines, 0.34 on the
+fast lines. Porto 100-lap Xvfb regression of 0.40 queued (chain6).
+lead45 (thr_lead_mode
 min, 0.45 s) on the display: 32/0, 72.87 s (median 7.28: +0.33 s/lap),
 hairpin most-inside p50 -0.278 / worst -0.317 (7/32 below -0.30): +0.02 m
 of margin for 3.3 s of race -- not for Porto; the cheap
