@@ -111,7 +111,7 @@ class ParticleFilter(Node):
         # Metres-per-update is a SPEED cap in disguise: 0.6 m is 5.77 m/s at
         # 0.104 s and 6.82 at 0.088, and the car reaches 6.58 m/s. Cap the
         # speed, which is a property of the vehicle, not of the host.
-        self._v_cap = self._speed_cap()
+        self._v_cap = self.speed_cap()
         self.score = 0.0
         self.initialized = False
         # Where to seed the particle cloud. The submission entrypoint does NOT
