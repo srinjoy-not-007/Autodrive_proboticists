@@ -358,6 +358,25 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
+the ay_limit steering cap is identical at both rates to 1.6% (the
+encoder filter is already rate-invariant; the LOGGER's speed column
+lags differently per rate: alpha 0.30 per sample), the plant's
+curvature per radian is 0.92-0.97 at both rates, the pin-release
+sequence is identical. What differs: lap-wide the display car is
+0.03-0.12 m further inside at EVERY corner, and cross-correlating the
+|delta_fb|(s) and |kappa|(s) profiles the display turn-in arrives
+0.12 m (feedback) / 0.22 m (curvature) earlier in arc length -- a
+0.03-0.055 s phase shift, matching the one uncompensated rate term:
+delay_s pinned at 0.180 while pose-to-rack is period + 0.045 (0.103 at
+0.058 vs 0.140 at 0.095: over-compensation 0.077 vs 0.040 s). Opt-in
+`nd_delay_s` (committed) pins nd while `delay_tick` corrects the
+actuator dead time; harness: rescues the clearance collapse delay_tick
+alone causes at 0.058, flattens the pole-plant spread by a third, not a
+full fix (the harness baseline spread is under half the live one).
+One display slot: disp_ndpin (delay_tick + nd_delay_s 0.180) vs
+delay_tick alone.
+
 **Lap-time budget on the finals candidate (Sept 12, display log
 083832, 32 laps, median 6.944):** the car beats its own ideal lap
 (7.036) by 0.096 s by driving 0.857 m LESS track (every segment's median
