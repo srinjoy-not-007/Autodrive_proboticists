@@ -341,9 +341,11 @@ is larger: CDC-TF 2025 safe line 116.7 s with smoothing vs 111.1 s
 without (+0.5 s/lap) -- cmd_tau 0.10 lags the corners; candidates to
 recover it: w_dcmd alone (harness: fastest variant) or steer_tau 0.04
 (harness: buys the tracking back). CDC-TF A/B: **w_dcmd 100 alone: 32
-laps / 0 / 111.2 s** -- the lap cost is entirely cmd_tau. If w_dcmd
-alone is smooth enough on the display it replaces the filter (queued:
-disp_dcmd100, porto_dcmd100). **Full shipping config (smoothing + localization fix) regression,
+laps / 0 / 111.2 s** -- the lap cost is entirely cmd_tau; **smoothing +
+steer_tau 0.04: 32 / 0 / 112.0 s** -- the rack lag in the rollout buys
+back 4.7 of the 5.5 s (as the harness said). If w_dcmd alone is smooth
+enough on the display it replaces the filter (queued: disp_dcmd100,
+porto_dcmd100); otherwise smoothing + steer_tau 0.04 is the candidate. **Full shipping config (smoothing + localization fix) regression,
 Xvfb, 32 laps each, 0 collisions on all four tracks:** Porto 71.17,
 CDC-TF 2025 116.7, ICRA 2025 149.6, ICRA 2026 150.3 s. Also: drop `delay`
 from rate_terms (dead time does not scale with the period); the logger now records the steering command
