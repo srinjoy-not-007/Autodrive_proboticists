@@ -20,7 +20,9 @@ profile (planner --brake 3.5) into that hairpin: 32 laps, 0 collisions,
 71.90 s, median 7.18 -- neutral. Porto has converged at ~71-72 s clean with
 this line and tracker. Wider line w_veh 0.63 at ay 6.75 (0.309 m clearance):
 32 laps, 0 collisions, 71.30 s, median 7.17, best 6.95 -- same time with
-more room; 100-lap validation queued.
+more room; 100-lap validation queued. ICRA-2026 with the pinned mpc3 on its
+centerline: 30 laps, 0 collisions, 148.8 s (90 clean laps total on that
+config across three runs).
 
 ## September 13: 71.6 s / 100 laps clean
 
