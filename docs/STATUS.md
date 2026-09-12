@@ -358,6 +358,24 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Barrier mechanism (Sept 12, offline, 2304 harness laps):** the
+barrier is a corner-ENTRY bias: at the hairpin apex 99% of solves sit at
+the ay_limit steering cap (0.161 rad) and the published command is
+identical for margin 0.24/0.28/0.34/0.40 -- the barrier is clipped out
+there; it acts 1.5-2.5 m earlier (+0.008 rad mean at 0.34, always
+outward), pre-loading an outward offset where the controller still has
+authority. Soft lane-keeping, not a fix of the unmodelled effect. Its
+lookahead is rate-invariant (first step 0.223-0.230 m at all frames);
+the only rate-dependent lookahead is the published knot (+0.064 m from
+0.058 to 0.104). Cost: Porto +0.025/+0.050/+0.086 s/lap at
+0.30/0.34/0.40, lap-time-free on the four tight-circuit lines; above a
+line's feasible cap (min half-width - 0.135: Porto 0.285, fast2_m50
+lines 0.345) the barrier pushes across the line and the fast lines get
+WORSE at 0.40. Rule the data supports: margin = clip(0.34, 0.24, cap +
+0.06) (the +0.06 is fitted to Porto). Period- or error-based rules are
+unsupported. Ship 0.34; 0.40 is the one arm worth a display slot for
+extra hairpin margin (~0.9 s of race).
+
 **Pinch-free fast lines (Sept 12, offline; live A/B queued):**
 `optimize_raceline.py --min-halfwidth M` bounds the path-to-wall
 distance (from the map's distance transform along the normal) at every
