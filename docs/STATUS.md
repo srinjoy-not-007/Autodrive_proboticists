@@ -195,6 +195,12 @@ uncommitted, Porto/ICRA-2026 outputs byte-identical) yields fast lines at
 13.85. Harness (432 laps, 0 collisions): -0.73 and -0.72 s/lap, better
 tracking (|e| p95 0.25 vs 0.37) but driven min clearance 0.07-0.11 m vs
 0.15-0.20 for safe -- the number to watch live. Porto's pick unchanged.
+Driven (cdctf_fast, 0.096 s): **32 laps, 1 collision, median 10.20 vs
+safe 11.13, OFFICIAL 101.9 vs 111.1 s**; the collision was on lap 32 at
+s 15.1 (kappa -0.19, cte +0.40 m outside, est-truth 0.24 m), a single
+event, unattributed. Expected value favours the fast line (-9 s vs ~+3 s
+of expected penalty) but the drill keeps `safe` as the automatic pick
+until a 100-lap run is clean (queued).
 
 **Collision-reset recovery audit (Sept 12, 100 live collisions across 21
 runs):** the reset is the last numbered checkpoint, 0.51 m p50 off the
