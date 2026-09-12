@@ -84,6 +84,16 @@ landed on 0.104 s instances and are therefore not 11 Hz tests (both clean,
 73.1 s official). `RATE_MAX_DT`/`RATE_MIN_DT` on run_exp/run_stanley now
 restart the sim until the period is in the wanted band; every run must be
 read with its dt_p50 (tools/lap_report.py).
+CORRECTION 2 (pose-offset agent): the 0.15 m "forward pose offset" at 11
+Hz is a logging artefact -- the logger writes a one-frame-stale pose, and
+one frame is 0.062 m shorter at 0.088 s. De-staled, the consumed pose is
+rate-invariant to 0.007 m median / 0.02 m worst bin, lateral 0.012 m p50
+at both rates, entry speeds identical. The only real rate term is the
+controller's fixed apply_ahead_s 0.090 s (0.87 period at 0.104, 1.02 at
+0.088): 0.054-0.084 m of extra plan lead at hairpin-approach speeds, same
+corner and sign as the collisions -- exactly the term `rate_adaptive`
+scales. Live A/B at a rate-selected 11 Hz instance queued (ra_fast vs
+ctl_fast).
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
