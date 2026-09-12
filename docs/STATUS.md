@@ -325,7 +325,14 @@ previous published) + `cmd_tau` (rate-invariant first-order filter on
 the published command); harness w_dcmd 50 + cmd_tau 0.10: command step
 p90 down 4.8-6.6x, rack HF rms down 3.7-6x, min clearance up at every
 frame, 0 collisions in 216 laps, lap -0.12..+0.02 s. Display A/B queued
-(`smooth_d50t10`). Also: drop `delay` from rate_terms (dead time does
+(`smooth_d50t10`). **Driven on the display (0.058 s): 27 laps, 10
+collisions, OFFICIAL 69.84 + 10 s; median 6.95 between them; laps 3-11
+a clean stretch.** The observer confirms the car is now smooth; measured
+feedback sign flips on straights 5.5 -> 2.4/s, step p90 0.14 -> 0.041
+rad. Every collision is still the hairpin at s 10.9-11.4, cte -0.34..
+-0.37 at 2.5-2.9 m/s -- the limit cycle was part of the hairpin
+failure, not all of it. Xvfb regression queued (`smooth_xvfb`) before
+shipping the smoothing. Also: drop `delay` from rate_terms (dead time does
 not scale with the period); the logger now records the steering command
 (`cmd` column) next to the actuator feedback (`steering` IS feedback).
 The harness cannot see the display failure (0 collisions at 0.058 with
