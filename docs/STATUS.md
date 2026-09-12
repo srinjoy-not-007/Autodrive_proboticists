@@ -358,6 +358,24 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Cross-track config matrix (Sept 12, harness, 432 laps per config on
+the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
+0.34 is geometrically feasible on every safe line (needs 0.475 m
+half-width, worst available 0.520 at the cdctf S-kink) and costs
+nothing (lap sum -0.02 s, 1 vs 0 collisions in 432); it is infeasible
+on the fast_uni lines and Porto's line (0.40-0.42 m) where it just
+biases toward the centre -- which is what Porto has been running.
+**nd_mode:=period is REJECTED for the finals**: +0.5..+2.2 s/lap on the
+tight circuits and 61/432 collisions on ICRA 2025 with the identified
+actuator (58 in 36 laps at 0.097/pole, four different corners):
+systemic dead-time under-compensation; Porto's +0.05 m does not
+generalise. w_dcmd alone: fastest but worst clearance; steer_tau 0.04:
+clean on safe lines, 8/288 on fast lines. Lines under the shipping
+config: ICRA 2026 safe (race == safe), ICRA 2025 fast_uni (-0.7..-1.2
+s/lap, 0/288), CDC-TF fast_uni is the close call (-1.1 s/lap, 2/288 at
+the 0.40 m pinch). Recommended finals config: shipping + barrier_margin
+0.34 (regression on Xvfb queued before enabling).
+
 **Telemetry-gap ride-out (Sept 12, opt-in, committed):** the stale window
 is 3.37 periods at every rate (0.195 s at 0.058, 0.35 s at 0.104): three
 dropped frames put the car on the coast watchdog (hold steer, zero
