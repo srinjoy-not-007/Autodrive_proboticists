@@ -332,8 +332,12 @@ feedback sign flips on straights 5.5 -> 2.4/s, step p90 0.14 -> 0.041
 rad. Every collision is still the hairpin at s 10.9-11.4, cte -0.34..
 -0.37 at 2.5-2.9 m/s -- the limit cycle was part of the hairpin
 failure, not all of it. Xvfb regression queued (`smooth_xvfb`) before
-shipping the smoothing. Also: drop `delay` from rate_terms (dead time does
-not scale with the period); the logger now records the steering command
+shipping the smoothing. Xvfb regression (0.095 s): **32 laps, 0
+collisions, 71.17 s** (vs 70.31 s without smoothing on the same period
+class: -0.09 s/lap for flips 3.8 -> 1.8/s, step p90 0.107 -> 0.040).
+**SHIPPED in the entrypoint's CTRL_ARGS (Sept 12)**: robustness at an
+unknown period outranks 0.9 s of Xvfb race time. Also: drop `delay`
+from rate_terms (dead time does not scale with the period); the logger now records the steering command
 (`cmd` column) next to the actuator feedback (`steering` IS feedback).
 The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the

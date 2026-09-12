@@ -88,7 +88,11 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # (identity at 0.104 s). Without it mpc3 collided 7/32 laps at the
     # 0.088-0.092 s instances; with it and the cr_dk0.8 line, 100 laps
     # clean at 0.091-0.098 s (70.5 s). Sept 12.
-    CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true)
+    # w_dcmd + cmd_tau (Sept 12): damp the solver's steering limit cycle.
+    # Display (0.058 s): 11 collisions/15 laps -> 10/27 with the first ten
+    # scored laps taking one; Xvfb (0.095 s): 32 laps clean, 71.17 s vs
+    # 70.31 s without (the price of robustness at an unknown period).
+    CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10)
     # --- PREPARED, NOT ENABLED: the fast-display rate fix (Sept 12) ----------
     # The organisers run the simulator WINDOWED ON A REAL DISPLAY at Ultra.
     # Measured on this host that is a 0.058 s telemetry period against the
