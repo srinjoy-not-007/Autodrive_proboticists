@@ -311,15 +311,23 @@ rate and the +10 s penalty in front of you — and remember >10 collisions is a 
   8-10 to p50 0.03 offline but costing 0.6-0.8 s/lap there. The speed-ceiling
   table is a net loss in the harness and is off within the flag.
 
-**There is no `PIT_CREW_*` environment variable for either of these.** Nothing
-in `submission/autodrive_devkit.sh` maps env to mpc3 parameters; the entrypoint
-passes only `raceline_csv`, `speed_scale` and `map_prefix` (via `CTRL_ARGS`).
-Using one in the finals image therefore means **editing the entrypoint** to add
-an explicit `-p` to `start_ctrl`, e.g. appending to `CTRL_ARGS`:
+**Turn either on with `PIT_CREW_CONTROLLER_ARGS`** — do not edit the entrypoint
+or `CTRL_ARGS` any more. Its contents are word-split and appended verbatim to
+`ros2 run pit_crew "$CONTROLLER" --ros-args ...` at **both** launch sites (the
+initial start and the supervisor's restart of a died controller), after the
+built-in `raceline_csv` / `speed_scale` / `map_prefix`, so it can also override
+them:
 
 ```bash
-CTRL_ARGS=(-p map_prefix:="$MAP" -p rate_adaptive:=true)
+docker run ... -e PIT_CREW_CONTROLLER_ARGS="-p rate_adaptive:=true -p ilc_enable:=true" ...
 ```
+
+`PIT_CREW_LOCALIZATION_ARGS` does the same for the `localization` node
+(e.g. `-p n_particles:=1200`). Both default to empty, and empty means the
+shipped command line is byte-for-byte unchanged. Because they are appended at
+the launch *function*, a node the supervisor restarts mid-race comes back with
+the same flags — `tests/test_entrypoint_args.py` asserts that, and that nothing
+else in the script spells out a `ros2 run` of either node.
 
 Test them the same way, with an explicit `-p` after the line argument:
 

@@ -59,17 +59,34 @@ CTRL_ARGS=()
 if [[ "$CONTROLLER" == mpc3 || "$CONTROLLER" == mpc2 ]]; then
     CTRL_ARGS=(-p map_prefix:="$MAP")
 fi
+# Extra `-p name:=value` parameters for the finals, without editing this file.
+# Word-split ON PURPOSE (the only unquoted expansions here) so
+# PIT_CREW_CONTROLLER_ARGS="-p rate_adaptive:=true -p ilc_enable:=true" works;
+# they are appended verbatim at EVERY launch site, initial and supervisor
+# restart, because a node that comes back without its flags is a silent
+# mid-race configuration change.
+EXTRA_CTRL_ARGS=()
+EXTRA_LOC_ARGS=()
+# shellcheck disable=SC2206
+if [[ -n "${PIT_CREW_CONTROLLER_ARGS:-}" ]]; then
+    EXTRA_CTRL_ARGS=(${PIT_CREW_CONTROLLER_ARGS})
+fi
+# shellcheck disable=SC2206
+if [[ -n "${PIT_CREW_LOCALIZATION_ARGS:-}" ]]; then
+    EXTRA_LOC_ARGS=(${PIT_CREW_LOCALIZATION_ARGS})
+fi
 
 LOC_PID=""; CTRL_PID=""; FTG_PID=""
 start_loc() {
     setsid ros2 run pit_crew localization --ros-args \
         -p map_prefix:="$MAP" -p centerline_csv:="$CENTER" \
-        -p lidar_offset:="$LIDAR_OFFSET" &
+        -p lidar_offset:="$LIDAR_OFFSET" "${EXTRA_LOC_ARGS[@]}" &
     LOC_PID=$!
 }
 start_ctrl() {
     setsid ros2 run pit_crew "$CONTROLLER" --ros-args \
-        -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" "${CTRL_ARGS[@]}" &
+        -p raceline_csv:="$LINE" -p speed_scale:="$SCALE" "${CTRL_ARGS[@]}" \
+        "${EXTRA_CTRL_ARGS[@]}" &
     CTRL_PID=$!
 }
 start_ftg() {
