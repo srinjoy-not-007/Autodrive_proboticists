@@ -103,6 +103,11 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   pick_config now takes 0.40 at cap >= 0.385. Display A/B queued: Porto
   steer_tau 0.02 + 0.40 vs the shipped 0.04 + 0.40 (harness: equal lap,
   +0.078 m worst clearance).
+- Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
+  data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
+  0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
+  pose-to-yaw-onset 0.096 s corrected / 0.186 raw = 2.05 periods. The
+  display run is queued for the rate comparison (the robust output).
 
 ### 3. Open, ranked by finals risk
 
