@@ -386,8 +386,10 @@ the lost ideal time was time the car never had; it does not remove the
 commanded overspeed. The lever that does: `thr_lead_mode:=min` +
 `thr_lead_s 0.45` (brake-only lead): overspeed -0.44..-0.65 m/s, |e| p95
 halved, clearance x2-5, for +0.14..+0.32 s/lap (0.30 is non-monotonic
-and collided: never). Next display slots: lon_ax45 vs control, then
-lead45.
+and collided: never). **Driven on the display: lon_ax45_b40 32 laps, 1
+collision, 70.62 s (median 7.06 vs the candidate's 6.95 clean) --
+REJECTED**: the honest ax profile is slower live and did not add margin.
+lead45 next.
 
 **Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
 the ay_limit steering cap is identical at both rates to 1.6% (the
