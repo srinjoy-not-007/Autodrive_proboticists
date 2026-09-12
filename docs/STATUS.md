@@ -147,6 +147,16 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   no-stall Xvfb regression (Porto + one circuit, queued in chain8), plus
   a stalls-with-defaults arm for the comparison (the earlier one had no
   stalls injected).
+- Finals-day rehearsal, offline, fresh slug (SRL 2024 IROS Track): the
+  drill runs in 55 s and pick_config/entrypoint derivation work, but
+  (a) stage 4 had been crashing silently on every track (fixed), (b)
+  pick_config reported raw clearance 0.526 where the line's effective
+  clearance was 0.265 (fixed: both printed, warning below 0.28), (c) the
+  finals slug's racelines now ship via a FINALS_SLUG build ARG, and (d)
+  **the line generator failed on that track: 24/24 raceline candidates
+  rejected (direction reversals / corridor exhausted) and the safe line
+  sits at 0.265 m effective clearance, below the floor** -- on a track
+  like that the drill would ship an unproven line. Open; agent on it.
 - **stall_base2 (shipping defaults, 8 real stalls of 0.4-1.0 s): 32
   laps, 0 collisions, longest lap 7.52 s, 70.27 s.** A sim pause freezes
   physics and telemetry together, so the defaults' 0.35 s coast is
