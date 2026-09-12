@@ -64,6 +64,18 @@ lap 23, s 11.3 lap 99), median 7.20, first ten 73.39 s** -- at the
 organiser-like rate the shipping mpc3 config is ~2%/lap, not clean; its
 expected race (~75 s) still beats the legacy's clean 78.4 s, but the
 rate-adaptive fix is what has to make it clean.
+CORRECTION (harness agent, measured on the logs): the "1.45 m speed lag"
+was the race_logger's own alpha-0.30 speed filter; ground-truth speed lags
+the profile by only 0.22 m (0.104 s) / 0.07 m (0.088 s), the servo is
+first-order K 18 (RMSE 0.087 m/s) and entry speeds are identical on clean
+and colliding laps. The rate effect is a LONGITUDINAL POSE OFFSET: the
+estimate reads ~0.15 m further forward along the car axis at 0.088 s than
+at 0.104 s (est-truth along-axis -0.21/-0.13 m vs -0.03/-0.07 m at the
+hairpin), so the tracker turns in early where kappa ramps. Injected into
+the harness (`--pose-lon-bias 0.15 --frame 0.088 --plant-realistic`) it
+reproduces 64 collisions/100 laps at s 11.1-11.8 and 0/100 at 0.104. So the
+fix is in the pose/latency chain (stamp-to-now prediction, committed
+steps), i.e. the period-scaled terms, not the throttle.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
