@@ -244,6 +244,23 @@ class SpeedEstimator:
         self.speed = float(sum(self._per.values()) / len(self._per))
         return self.speed
 
+    def reset(self) -> None:
+        """Drop everything this estimator holds about where the car *was*.
+
+        Same effect as a consumed teleport, but callable by a detector that
+        saw the teleport some other way (LiDAR / IMU). Opt-in: nothing in the
+        default path calls it, so behaviour is unchanged unless a caller asks.
+        The wheels keep spinning through a checkpoint reset -- measured on 329
+        real collisions, the filtered encoder speed goes 3.15 -> 3.02 m/s while
+        the body's true speed goes 2.85 -> 0.85 -- so the stored positions are
+        about a body that has stopped and must not be differentiated across.
+        """
+        self.speed = 0.0
+        self._last.clear()
+        self._per.clear()
+        self._rej.clear()
+        self.jumped = False
+
     def consume_jump(self) -> bool:
         """True once per detected teleport, clearing the state it invalidated.
 
