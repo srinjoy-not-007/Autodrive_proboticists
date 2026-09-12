@@ -104,7 +104,16 @@ is Gate C and Gate D, not the ideal lap time.
 
 **Gate A — the drill's own output** (step 3a explains each): free fraction
 15-70 %, `source: mesh`, `lidar_offset 0.1933`, and a `race` and a `safe` line
-both reported by `footprint_analysis.py`.
+both reported in stage 4/5's body-sweep table.
+
+Stage 4/5 used to print two tracebacks instead of that table, on every track:
+`tools/footprint_analysis.py <map> <line.csv>` reads a positional CSV with
+`np.genfromtxt(names=True)` and wants an `x`/`y` header, but a raceline's
+header is `# s_m,x_m,y_m,...`. The drill runs under `set +e`, so the gate was
+silently blind. The drill now calls that module's own `load_dist`/`analyse` on
+the line's xy columns; **`footprint_analysis.py` itself is still broken for a
+raceline argument** (the form CLAUDE.md documents) and wants the same
+two-branch fix in `main()`.
 
 **Gate A2 — the drill's pick (stage 5/5).** It writes
 `data/racelines/finals_mesh_pick.json`; read these five numbers out of it
@@ -116,7 +125,10 @@ before anything is driven.
 | `feasible_margin` | `min_halfwidth - 0.135` (car half-width). Above it the barrier pushes the car ACROSS its own line | >= 0.30 m |
 | `barrier_margin` | 0.40 where `feasible_margin` clears 0.40 + 0.02 slack, else 0.34 | 0.34 or 0.40, never anything else |
 | `thr_brake_lead_s` | 0.05 when the line's tightest kappa > 1.2 **or** the corridor min width < 1.3 m, else 0 | never 0.08 — bit-identical to 0.05 at 0.097 s |
-| `clearance` / `ideal_lap` | worst body-corner clearance and the profile's own lap | clearance >= 0.28 m (the mesh floor); ideal lap is context, not a gate |
+| `clearance` / `apex_deviation` / `effective_clearance` | worst body-corner clearance measured off the LINE, how far outside its own line the steering lock pushes the car at the apex (`r_lock - r_line`, zero unless the line is tighter than the 0.561 m lock), and the difference | **read `effective_clearance`, not `clearance`** >= 0.28 m (the mesh floor). `make_track_lines` gates on the effective number and `pick_config` now prints and warns on it — the SRL 2024 IROS rehearsal shipped a line at 0.526 m raw / 0.261 m apex / **0.265 m effective**, i.e. under the floor, and the raw number hid it |
+| `ideal_lap` | the profile's own lap | context, not a gate |
+| `checkpoint_margin_min` | closest the line passes to the edge of any lap-checkpoint trigger box (Gate A2b) | >= 0.35 m, and `checkpoints_skipped` empty — `pick_config` exits 2 otherwise |
+| `gate_sep_min` / `gate_max_occupancy` | along-line distance between consecutive checkpoint planes, and the most trigger boxes the body is inside at once | separation >= 0.60 m and occupancy <= 2 — `pick_config` exits 2 otherwise. `LapTimer.cs` keeps one checkpoint latch, so a straddled gate drops a whole lap |
 
 Measured on the circuits we have, for calibration:
 
@@ -126,6 +138,7 @@ Measured on the circuits we have, for calibration:
 | CDC-TF 2025, drill pick (= `fast3_m53`) | 0.520 | 0.385 | 0.34 | 0.05 | 0.395 | 9.96 s |
 | SRL 2025 ICRA, drill pick | 0.500 | 0.365 | 0.34 | 0.05 | 0.389 | 14.24 s |
 | ICRA 2026 (`safe`) | 0.720 | 0.585 | 0.40 | 0.05 | 0.608 | 14.40 s |
+| SRL 2024 IROS, Sep 12 rehearsal (`safe`; nothing cleared the floor) | 0.720 | 0.585 | 0.40 | 0.05 | 0.526 raw / **0.265 effective** | 14.26 s |
 
 **Gate A2b — checkpoint margin.** A width-using line can pass every clearance
 gate and still miss a **checkpoint trigger**, and the rules do not stop the lap
@@ -279,6 +292,9 @@ day; skip it rather than let it eat Gate C/D time.
 #    centerline AND the one line you validated) and the entrypoint MAP default.
 #    If the validated line is `safe`, either copy it to the derived name or set
 #    PIT_CREW_LINE -- see step 6.
+# 1a. check the drill's own slug end to end BEFORE touching the Dockerfile:
+FINALS_SLUG=finals_mesh .venv/bin/python -m pytest -q \
+    tests/test_submission_assets.py -k FinalsSlug
 # 2. enable barrier_margin (and anything else Gate C/D needed) by uncommenting
 #    the ONE prepared line in CTRL_ARGS -- see step 5D.
 # 3. prove it on the host, in one second, BEFORE a 5-minute build:
@@ -865,9 +881,32 @@ Edit `submission/Dockerfile`:
   Dockerfile change. A **recon** map (step 3b) is not `*_mesh` and **must be
   added by hand**, both `.pgm` and `.yaml`.
 - **Racelines are listed one by one, never globbed** — on purpose, so no
-  undriven candidate is one `PIT_CREW_LINE` typo away from being raced. Add to
-  the existing `COPY data/racelines/... /home/data/racelines/` list, at the
-  marked `ADD THE FINALS LINES HERE` comment:
+  undriven candidate is one `PIT_CREW_LINE` typo away from being raced. The
+  finals slug does not exist until the drill has run, so it cannot be in the
+  list in advance. Two ways to add it, and a wildcard is **not** one of them
+  (`test_no_glob_in_the_raceline_copies` refuses `<slug>_*.csv`; globbing
+  racelines once shipped a line that reversed direction twice):
+
+  * **A build arg (recommended, no edit on the day).** Add, once:
+
+    ```
+    ARG FINALS_SLUG=icra2026_mesh
+    COPY data/racelines/${FINALS_SLUG}_centerline.csv \
+         data/racelines/${FINALS_SLUG}_race.csv \
+         data/racelines/${FINALS_SLUG}_safe.csv \
+         data/racelines/${FINALS_SLUG}_pick.json \
+         /home/data/racelines/
+    ```
+
+    The default names a slug that already ships, so the block is a harmless
+    duplicate today and the tree always builds; on the day the build takes
+    `--build-arg FINALS_SLUG=finals_mesh` and a wrong slug fails the BUILD at
+    the COPY rather than failing the race. `tests/test_submission_assets.py`
+    substitutes `ARG` defaults into COPY sources, so the mechanism is checked
+    on the host. (Verified against a simulated edit, Sep 12: all four derived
+    paths resolve for both controllers.)
+  * **Or the explicit edit**, at the marked `ADD THE FINALS LINES HERE`
+    comment:
   - `data/racelines/finals_mesh_centerline.csv` (**required** — localization
     seeds its whole particle cloud at `centerline[0]` and resamples along it on
     every collision recovery; a missing or wrong-track centerline is a race
@@ -933,6 +972,16 @@ It runs the entrypoint's own shell to derive `MAP`/`LINE`/`CENTER` for each
 controller, asserts every one of them is produced by a Dockerfile `COPY`, and
 runs preflight on the result. The "edited the default, forgot the `COPY`"
 failure cannot survive it.
+
+The default suite can only check slugs that are already in the image. For the
+finals slug, run the opt-in class against the drill's own output — it works
+**before** the Dockerfile is touched, and the one test that stays red until the
+lines are COPYed tells you so by name:
+
+```bash
+FINALS_SLUG=finals_mesh .venv/bin/python -m pytest -q \
+    tests/test_submission_assets.py -k FinalsSlug
+```
 
 ---
 

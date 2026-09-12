@@ -123,11 +123,26 @@ DRILL_LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
     ${LINE_ARGS-$DRILL_LINE_ARGS} || exit 1
 
 stage "4/5 footprint clearance check on both lines we might race"
-for kind in race safe; do
-    echo "--- ${SLUG}_mesh_${kind}.csv"
-    .venv/bin/python tools/footprint_analysis.py "$MAP" \
-        "data/racelines/${SLUG}_mesh_${kind}.csv"
-done
+# `tools/footprint_analysis.py <map> <csv>` cannot read a RACELINE csv: its
+# positional branch is `np.genfromtxt(names=True)`, which wants an `x`/`y`
+# header, and a raceline's header is `# s_m,x_m,y_m,...`.  Every drill run has
+# therefore printed two tracebacks here instead of the report Gate A asks for
+# (pre-existing, all tracks -- `set +e` hid it).  Rather than leave the gate
+# blind, call the module's OWN functions on the line's xy columns, which is
+# exactly what its internal "RACELINE (as planned)" section does.
+.venv/bin/python - "$MAP" "data/racelines/${SLUG}_mesh_race.csv" \
+    "data/racelines/${SLUG}_mesh_safe.csv" <<'PYEOF' || exit 1
+import sys
+sys.path.insert(0, 'tools')
+import numpy as np
+from footprint_analysis import load_dist, analyse
+prefix = sys.argv[1]
+dist, res, ox, oy = load_dist(prefix)
+for path in sys.argv[2:]:
+    print(f'--- {path.split("/")[-1]}')
+    analyse(path.split('/')[-1], np.loadtxt(path, delimiter=',')[:, 1:3],
+            dist, res, ox, oy)
+PYEOF
 
 stage "5/5 the config this line needs (barrier margin and brake lead)"
 # Two of the finals decisions are geometric and were being taken by hand off
@@ -158,7 +173,13 @@ submission/autodrive_devkit.sh -- one line; LINE and CENTER follow the slug:
   MAP="\${PIT_CREW_MAP:-/home/data/maps/${SLUG}_mesh}"
 
 The map itself needs no Dockerfile edit (data/maps/*_mesh.{pgm,yaml} is
-globbed). Verify both with:  .venv/bin/python -m pytest -q tests/test_submission_assets.py
+globbed). Racelines are never globbed; if the Dockerfile carries the
+FINALS_SLUG build arg (docs/FINALS_RUNBOOK.md step 6) there is no edit at all,
+just:  docker build --build-arg FINALS_SLUG=${SLUG}_mesh ...
+
+Verify the whole derivation on the host, BEFORE the Dockerfile is touched:
+  FINALS_SLUG=${SLUG}_mesh .venv/bin/python -m pytest -q \\
+      tests/test_submission_assets.py -k FinalsSlug
 
 To carry the 5/5 pick into the image instead of typing it on the day, add the
 sidecar to the same COPY list and uncomment the PICK block in

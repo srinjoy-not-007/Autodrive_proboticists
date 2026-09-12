@@ -90,6 +90,16 @@ COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
 # nothing depends on how Docker treats a symlink in the build context.
 COPY data/racelines/track_v2_centerline.csv /home/data/racelines/porto_mesh_centerline.csv
 COPY data/racelines/track_v2_safe.csv /home/data/racelines/porto_mesh_safe.csv
+# The finals slug is not known until Sep 16, so it is a build argument: on
+# the day, `docker build --build-arg FINALS_SLUG=finals_mesh ...` copies the
+# four files the entrypoint derives from that slug (a wrong slug fails the
+# COPY, i.e. the build, not the race). The default names a slug that already
+# ships, so every build of this tree succeeds unchanged.
+ARG FINALS_SLUG=icra2026_mesh
+COPY data/racelines/${FINALS_SLUG}_centerline.csv \
+     data/racelines/${FINALS_SLUG}_race.csv \
+     data/racelines/${FINALS_SLUG}_safe.csv \
+     /home/data/racelines/
 
 RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
     cd /home/autodrive_devkit && \

@@ -38,14 +38,59 @@ def entry_src():
         return fh.read()
 
 
+def dockerfile_args():
+    """`ARG NAME=default` -> default, for every build arg with a default.
+
+    The finals slug does not exist when the image is described, only when the
+    drill has run, so the COPY list cannot name it in advance.  The mechanism
+    this supports is a build arg:
+
+        ARG FINALS_SLUG=icra2026_mesh
+        COPY data/racelines/${FINALS_SLUG}_centerline.csv \\
+             data/racelines/${FINALS_SLUG}_race.csv \\
+             data/racelines/${FINALS_SLUG}_safe.csv \\
+             data/racelines/${FINALS_SLUG}_pick.json \\
+             /home/data/racelines/
+
+    -- defaulted to a slug that already ships (so the tree always builds and
+    the default is a no-op duplicate of an existing COPY), and pointed at the
+    finals slug on the day with one `--build-arg FINALS_SLUG=finals_mesh`
+    instead of an edit to the COPY list.  A wrong slug then fails the BUILD at
+    the COPY, loudly, rather than failing the race.  A wildcard
+    (`data/racelines/<slug>_*.csv`) is the other option and is rejected here:
+    `test_no_glob_in_the_raceline_copies` exists because globbing racelines
+    once shipped an undriven line one `PIT_CREW_LINE` typo from being raced.
+    """
+    out = {}
+    for line in open(DOCKERFILE):
+        m = re.match(r'\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$', line)
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def expand_args(path, args):
+    """Substitute `${NAME}` / `$NAME` in a COPY source with its ARG default."""
+    def sub(m):
+        name = m.group(1) or m.group(2)
+        assert name in args, \
+            ('Dockerfile COPY uses $%s, which has no ARG default; this test '
+             'cannot know what the build would substitute' % name)
+        return args[name]
+    return re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)',
+                  sub, path)
+
+
 def dockerfile_copies():
     """Published path -> source path, for every COPY in the Dockerfile.
 
     Handles backslash continuations, the `COPY a b c DEST/` form and the
-    two-argument rename form, and expands the map globs against the repo.
+    two-argument rename form, expands the map globs against the repo, and
+    substitutes ARG defaults so a build-arg-parameterised COPY is checked too.
     """
     import glob as globmod
     text = re.sub(r'\\\n', ' ', open(DOCKERFILE).read())
+    args = dockerfile_args()
     out = {}
     for line in text.splitlines():
         line = line.strip()
@@ -55,6 +100,7 @@ def dockerfile_copies():
         srcs, dest = parts[:-1], parts[-1]
         expanded = []
         for s in srcs:
+            s = expand_args(s, args)
             hits = sorted(globmod.glob(os.path.join(REPO, s)))
             assert hits, 'Dockerfile COPYs a path that does not exist: %s' % s
             expanded += hits
@@ -182,3 +228,67 @@ class TestTheDockerfileStillListsRacelinesOneByOne:
                 continue
             assert os.path.exists(src), src
             assert 'REJECTED' not in path, path
+
+
+# ------------------------------------------------------- the finals slug
+
+FINALS_SLUG = os.environ.get('FINALS_SLUG', '')
+
+
+@pytest.mark.skipif(not FINALS_SLUG,
+                    reason='set FINALS_SLUG=<slug>_mesh after the drill')
+class TestTheFinalsSlugIsRaceable:
+    """The Sep 16 rehearsal in one command.
+
+    ``scripts/finals_drill_mesh.sh <slug>`` writes files the Dockerfile cannot
+    have named in advance, so nothing in the default suite can check them.
+    Run this against the drill's own slug::
+
+        FINALS_SLUG=finals_mesh .venv/bin/python -m pytest -q \\
+            tests/test_submission_assets.py -k FinalsSlug
+
+    The first two tests pass as soon as the drill has run (they check the
+    entrypoint derivation against the files ON DISK, which is the check worth
+    having BEFORE the Dockerfile is touched); the third is the one that only
+    goes green once the finals lines are actually COPYed -- by the
+    ``FINALS_SLUG`` build arg described in ``dockerfile_args`` or by an
+    explicit edit to the raceline list.
+    """
+
+    def repo_path(self, published):
+        """/home/data/... -> the repository file the drill wrote."""
+        return os.path.join(REPO, published.replace('/home/', '', 1))
+
+    @pytest.mark.parametrize('controller', ['mpc3', 'mpc'])
+    def test_the_drill_produced_every_derived_asset(self, controller):
+        mp, line, center = derive(FINALS_SLUG, controller)
+        for path in (mp + '.pgm', mp + '.yaml', line, center):
+            assert FINALS_SLUG in path, (FINALS_SLUG, path)
+            assert os.path.exists(self.repo_path(path)), (
+                '%s is what the entrypoint would load with PIT_CREW_MAP='
+                '/home/data/maps/%s and PIT_CREW_CONTROLLER=%s, but the drill '
+                'wrote no such file. Re-run scripts/finals_drill_mesh.sh, or '
+                '`cp <slug>_safe.csv <slug>_race.csv` if the validated line is '
+                'the safe one.' % (path, FINALS_SLUG, controller))
+
+    @pytest.mark.parametrize('controller', ['mpc3', 'mpc'])
+    def test_the_three_files_describe_one_circuit(self, controller):
+        mp, line, center = derive(FINALS_SLUG, controller)
+        prefix = os.path.splitext(self.repo_path(mp + '.pgm'))[0]
+        args = [prefix, self.repo_path(line), self.repo_path(center), '1.00']
+        off = offset_of(prefix)
+        assert off == '0.1933', \
+            'a mesh map stamps 0.1933; a recon map must be raced at 0'
+        args.append(off)
+        preflight.validate(*args)
+
+    @pytest.mark.parametrize('controller', ['mpc3', 'mpc'])
+    def test_every_derived_asset_would_be_copied(self, controller):
+        mp, line, center = derive(FINALS_SLUG, controller)
+        missing = [p for p in (mp + '.pgm', mp + '.yaml', line, center)
+                   if p not in SHIPPED]
+        assert not missing, (
+            '%s would be loaded by the entrypoint but no Dockerfile COPY '
+            'produces it. Maps ship by glob; racelines are listed one by one. '
+            'Add them with the FINALS_SLUG build arg (see dockerfile_args) or '
+            'at the ADD THE FINALS LINES HERE marker.' % missing)
