@@ -116,8 +116,13 @@ median 7.10**: it converged within two laps (bin mean |e| 0.119 -> 0.053 m).
 Both together with the prior (ilc_store:=/home/data/ilc/run_prior) at a
 0.090 s instance -> 32 laps, **1 collision** (lap 16, at s ~1.2 just after
 the start line, cte 0.04 -> 0.28 m in six samples; cause under offline
-analysis), median 7.17, OFFICIAL 71.48 s. 100 laps of the same running.
-ILC alone (0/32) is so far the cleanest fast-rate config; n is small.
+analysis), median 7.17, OFFICIAL 71.48 s. **100 laps of the same: 7 collisions,
+ALL at s 0.0-1.6 m, just past the start line** (laps 50, 85 x3, 90, 98,
+100; laps 1-49 clean; the period drifted 0.092 -> 0.110 s after lap 50
+because an offline search loaded the host). Not the hairpin: the ILC
+table's behaviour at the lap wrap / per-lap update is the suspect, under
+offline analysis. ILC is NOT promotable until this is explained. ILC alone
+(0/32) remains the cleanest short fast-rate run; n is small.
 
 **Curvature-rate-limited lines (Sept 12, offline, not driven):**
 `optimize_raceline.py --dkappa-max` (opt-in, uncommitted until
