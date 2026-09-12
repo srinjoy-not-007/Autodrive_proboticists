@@ -149,6 +149,46 @@ DEFAULTS = dict(
                               # Raised with the speed: a faster car spends more
                               # of the corridor, and 0.16 put the offline worst
                               # footprint clearance at 0.100 m on seed 3.
+    # output smoothing (OPT-IN; every one of these is 0.0 = off, and 0.0 is
+    # byte-identical to the tune that raced) --------------------------------
+    #
+    # The flutter these exist for is NOT noise: with `pose_noise` 0.0 in
+    # `tools/sim_tracker.py` the published command still alternates by exactly
+    # `steer_rate * step_dt` = 0.192 rad between consecutive frames.  It is a
+    # relay limit cycle -- the free steps of the horizon start at `nd` (0.18 s
+    # of dead time), the FIRST of them carries no jerk cost at all
+    # (`du = u[i] - (u[i-1] if i else u[0])` is identically 0 for i = 0) and
+    # only a small rate cost, so the cheapest way for the solver to answer a
+    # small lateral error is a one-step flick at the slew limit.  The car never
+    # executes the flick -- the command is a zero-order hold for one sensor
+    # period -- so the next solve sees the same error and flicks the other way.
+    # The faster the sensor, the more solves per dead time and the stronger the
+    # cycle: measured at frame 0.058 vs 0.104 in the harness and live.
+    #
+    # `w_dcmd`   the causal fix: a Gauss-Newton residual on (the angle about to
+    #            be published) - (the angle published last frame).  It is the
+    #            missing move-suppression term of a receding-horizon controller
+    #            whose plan is only ever executed one frame at a time.  It is
+    #            NOT a lag: a genuine turn-in ramp is planned over the horizon
+    #            and pays the penalty once per frame, the same as before.
+    # `cmd_tau`  a rate-invariant first-order low pass on the published
+    #            command, `alpha = 1 - exp(-period / tau)` with the period the
+    #            one `RateControl` measures, so its lag is fixed in SECONDS at
+    #            any sensor rate.  Pure output filtering: it adds `tau` of lag.
+    # `cmd_notch` a 2-tap smoother, `cmd <- (1 - b) * cmd + b * prev`.  b = 0.5
+    #            is an exact zero at the Nyquist frequency, which is where the
+    #            relay cycle lives, for a group delay of only half a frame.
+    # `e_dead`   a deadband on the LATERAL residual only: inside it the cost
+    #            and its gradient are exactly zero, so an error the size of the
+    #            localization noise floor (live lateral est-truth p95 0.034-
+    #            0.047 m) buys no steering at all.  Outside it the residual is
+    #            `e - e_dead` with the same weight, so a real excursion is
+    #            tracked with the same gain, only offset -- which is why it
+    #            costs clearance far less than lowering `w_lat` does.
+    w_dcmd=0.0,
+    cmd_tau=0.0,
+    cmd_notch=0.0,
+    e_dead=0.0,
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes
@@ -384,6 +424,10 @@ class RateControl:
     def update(self, t_stamp):
         """One pose stamp.  Returns the values in force (adapted or nominal)."""
         p = self.est.update(t_stamp)
+        # Record the MEASURED period on the solver whether or not adaptivity is
+        # enabled: `cmd_tau` is a lag in seconds and needs it to stay a lag in
+        # seconds at any sensor rate.  Nothing reads it while `cmd_tau` is 0.0.
+        self.mpc.period = p
         if not (self.enabled and self.est.ready):
             return self.values
         if not (self.rate_lo <= p <= self.rate_hi):
@@ -779,6 +823,12 @@ class MPC3:
         # Opt-in extras; both are None in the shipping configuration and every
         # code path that reads them is a no-op while they are.
         self.ilc = None               # see `ILC`; set by the node / harness
+        # The last angle actually PUBLISHED (after the opt-in output filters),
+        # and the measured sensor period `RateControl` last saw.  Both are
+        # inert unless one of `w_dcmd` / `cmd_tau` / `cmd_notch` is non-zero.
+        self.last_cmd = None
+        self.period = float(RATE_NOMINAL)
+        self._apply = (0, 0.0)        # publish knot + fraction, set in solve()
 
 
     # ..................................................................
@@ -1006,11 +1056,21 @@ class MPC3:
         sw_latT = math.sqrt(c['w_lat'] + c['w_lat_T'])
         sw_yawT = math.sqrt(c['w_yaw'] + c['w_yaw_T'])
         zero = np.zeros(nf)
+        e_dead = float(c['e_dead'])
         for k in range(N):
             term = (k == N - 1)
             sw = sw_latT if term else sw_lat
             swy = sw_yawT if term else sw_yaw
-            r.append(sw * e[k + 1])
+            ek = e[k + 1]
+            lat_live = True
+            if e_dead > 0.0:
+                if ek > e_dead:
+                    ek -= e_dead
+                elif ek < -e_dead:
+                    ek += e_dead
+                else:
+                    ek, lat_live = 0.0, False
+            r.append(sw * ek)
             r.append(swy * psi[k + 1])
             r.append(sw_steer * d[k + 1])
             hu = e[k + 1] - hi[k]
@@ -1019,7 +1079,7 @@ class MPC3:
             r.append(sw_bar * (hd if hd > 0 else 0.0))
             if jac is not None:
                 Se, Sp, Sd = jac[k + 1][0], jac[k + 1][1], jac[k + 1][2]
-                J.append(sw * Se)
+                J.append(sw * Se if lat_live else zero)
                 J.append(swy * Sp)
                 J.append(sw_steer * Sd)
                 J.append(sw_bar * Se if hu > 0 else zero)
@@ -1037,6 +1097,24 @@ class MPC3:
                     dk[i - 1] = -1.0
                 J.append(sw_rate * self.dt * ek)
                 J.append(sw_jerk * self.dt * dk)
+        wdc = float(c['w_dcmd'])
+        if wdc > 0.0 and self.last_cmd is not None:
+            # Move suppression ACROSS frames.  `d` is the plan's steering
+            # angle, so the angle that would be published this frame is the
+            # same interpolation `solve` publishes, and its sensitivity to `u`
+            # is the same interpolation of the rollout's own Jacobian rows.
+            ka, fr = self._apply
+            if ka >= N:
+                da = d[N]
+                Sa = jac[N][2] if jac is not None else None
+            else:
+                da = d[ka] + fr * (d[ka + 1] - d[ka])
+                Sa = (jac[ka][2] + fr * (jac[ka + 1][2] - jac[ka][2])
+                      if jac is not None else None)
+            sw_dc = math.sqrt(wdc)
+            r.append(sw_dc * (da - self.last_cmd))
+            if jac is not None:
+                J.append(sw_dc * Sa)
         r = np.asarray(r)
         return (r, np.asarray(J)) if jac is not None else (r, None)
 
@@ -1077,6 +1155,13 @@ class MPC3:
         u = np.clip(np.roll(self.u, -1)[:nf], -rate, rate)
         if nf > 1:
             u[-1] = u[-2]
+
+        # Where the published angle is read out of the plan.  Computed here,
+        # before the solve, because `w_dcmd` costs exactly that angle.
+        _f = nd + max(float(c['apply_floor_steps']),
+                      float(c['apply_ahead_s']) / self.dt)
+        _k = min(int(_f), N)
+        self._apply = (_k, _f - _k)
 
         cost = float('nan')
         it = 0
@@ -1147,11 +1232,21 @@ class MPC3:
         # (|u| <= the slew rate), so that is an angle the actuator can reach and
         # hold for the frame.  Handing it d[nd] -- the angle it is already
         # predicted to hold -- would make the command never change.
-        f = nd + max(float(c['apply_floor_steps']),
-                     float(c['apply_ahead_s']) / self.dt)
-        k = int(f)
-        cmd = d[N] if k >= N else d[k] + (f - k) * (d[k + 1] - d[k])
+        k, frac = self._apply
+        cmd = d[N] if k >= N else d[k] + frac * (d[k + 1] - d[k])
         cmd = float(np.clip(cmd, -cap, cap))
+        cmd_raw = cmd
+        # Opt-in output smoothing; both are the identity at their 0.0 default.
+        if self.last_cmd is not None:
+            b = float(c['cmd_notch'])
+            if b > 0.0:
+                cmd = (1.0 - b) * cmd + b * self.last_cmd
+            tau = float(c['cmd_tau'])
+            if tau > 0.0:
+                a = 1.0 - math.exp(-max(float(self.period), 1e-3) / tau)
+                cmd = self.last_cmd + a * (cmd - self.last_cmd)
+            cmd = float(np.clip(cmd, -cap, cap))
+        self.last_cmd = cmd
 
         vp = self.v_ceiling if self.v_ceiling is not None else self.v_plan
         fk = min(float(c['thr_lead_s']) / self.dt, N - 1e-6)
@@ -1160,6 +1255,7 @@ class MPC3:
         if str(c['thr_lead_mode']) == 'min':
             v_cmd = float(min(v_cmd, vp[:ki + 2].min()))
         info = dict(cost=cost, iters=self.last_iters, delta=d, e=e, psi=psi,
+                    cmd_raw=cmd_raw,
                     v=self.v_plan, v_ceiling=vp, v_cmd=v_cmd, lo=lo, hi=hi,
                     kap=kap, idx=idx, ds=ds, u=u.copy())
         return cmd, info

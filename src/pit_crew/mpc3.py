@@ -129,6 +129,20 @@ class MPC3Tracker(Node):
             # the publish index to an integer plan knot.  Set 0.0 together with
             # `rate_adaptive`.
             ('apply_floor_steps', 1.0),
+            # --- command smoothing (OPT-IN; 0.0 = the tune that raced) -------
+            # The front wheels flutter on straights because the solver's FIRST
+            # free step carries no jerk cost and only a small rate cost, so the
+            # cheapest answer to a small lateral error is a one-step flick at
+            # the slew limit -- which the car never executes, because the
+            # command is held for a whole sensor period.  Measured in
+            # `tools/sim_tracker.py` with the pose noise switched OFF, so it is
+            # a dead-time relay limit cycle, not noise chasing.  See
+            # `mpc3_core.DEFAULTS` for what each knob does; validated together
+            # at `w_dcmd` 50 + `cmd_tau` 0.10.
+            ('w_dcmd', 0.0),
+            ('cmd_tau', 0.0),
+            ('cmd_notch', 0.0),
+            ('e_dead', 0.0),
             ('use_steer_feedback', True),
             ('steer_fb_age', 0.0),
             # --- steering authority ------------------------------------------
@@ -327,6 +341,8 @@ class MPC3Tracker(Node):
             thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             apply_floor_steps=v['apply_floor_steps'],
+            w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],
+            cmd_notch=v['cmd_notch'], e_dead=v['e_dead'],
             steer_rate=v['steer_rate_limit'])
         self.act = Actuator(dead_time=float(v['cmd_dead_time']),
                             rate=float(v['steer_rate_limit']))
