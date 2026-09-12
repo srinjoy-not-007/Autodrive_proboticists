@@ -108,6 +108,12 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
   m/s, a different corner from the hairpin), 70.01 s. With the earlier
   0/32 that is 1/64 display laps for this config; s 19 is inside the
   17.5% of Porto stations where 0.40 exceeds the line's own clearance.
+- Stall arms: data/logs had become root-owned (a container write), so
+  stall_inject.sh could not open its log and injected NOTHING during
+  the `stall_base` arm (32/0, 70.19 s, zero telemetry gaps: it is a
+  second clean control, not a stall test). Ownership fixed; the gap
+  and both arms of chain7 log stalls; the baseline-with-stalls arm is
+  re-queued.
 - Turn-in probe, first valid run (Xvfb, 0.090 s period, 20 pulses,
   data/logs/turnin_20260912_111057.csv): publish-to-rack dead time
   0.094 s (= period + 0.094 raw 0.184), rack-to-yaw lag 0.0004 s, total
