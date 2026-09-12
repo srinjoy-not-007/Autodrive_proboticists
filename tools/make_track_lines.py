@@ -373,6 +373,24 @@ def apex_deviation(line_csv):
     return max(0.0, MIN_TURN_R - 1.0 / kmax)
 
 
+def checkpoint_check(line_csv, cp_csv):
+    """(min margin, its checkpoint, list of skipped checkpoints) for a line.
+
+    The margin is how far inside a lap-checkpoint trigger box the line passes.
+    A skipped checkpoint means the sim will not count the lap at all, which is
+    worth more than any collision penalty -- see the September 12 fast3_m53
+    run, where one lap in 32 took 20.4 s because a checkpoint did not fire.
+    """
+    from optimize_raceline import load_checkpoints, checkpoint_margins
+    cps = load_checkpoints(cp_csv)
+    xy = np.loadtxt(line_csv, delimiter=',')[:, 1:3]
+    mg = checkpoint_margins(xy, cps)
+    skipped = sorted(k for k, v in mg.items() if v is None or v < 0.0)
+    ok = sorted((v, k) for k, v in mg.items() if v is not None)
+    return (ok[0][0] if ok else float('nan'),
+            ok[0][1] if ok else None, skipped)
+
+
 def build(track, tag, extra, cfg):
     """Both lines for one centerline method. Returns None if extraction fails."""
     mp = f'data/maps/{track}'
@@ -442,6 +460,15 @@ def build(track, tag, extra, cfg):
             print(f'  {tag:9s} {label:15s} no solution (corridor exhausted)')
             continue
         bad = drivability(path + '.csv')
+        cp_note = ''
+        cp_min = None
+        if cfg.checkpoints is not None:
+            cp_min, cp_at, cp_skip = checkpoint_check(path + '.csv',
+                                                      cfg.checkpoints)
+            cp_note = f'  cp {cp_min:.3f}@{cp_at}'
+            if cp_skip:
+                bad.append(f'passes OUTSIDE checkpoint(s) {cp_skip} -- the '
+                           f'sim would not count the lap')
         if kind == 'raceline' and is_mesh(mp):
             kmax = float(np.abs(np.loadtxt(path + '.csv', delimiter=',')[:, 4]).max())
             gate = cfg.kappa_gate
@@ -476,10 +503,10 @@ def build(track, tag, extra, cfg):
             if eff < cfg.min_clearance else '')
         note = f' (-{dev:.3f} apex)' if dev > 1e-4 else ''
         print(f'  {tag:9s} {label:15s} clearance {wc:.3f}{note} m  '
-              f'ideal lap {lap:6.2f} s'
+              f'ideal lap {lap:6.2f} s{cp_note}'
               f'{"   REJECTED: " + why if why else ""}')
         rec = {'path': path, 'clearance': eff, 'lap': lap, 'ok': not why,
-               'w_veh': w, 'min_halfwidth': m}
+               'w_veh': w, 'min_halfwidth': m, 'cp_margin': cp_min}
         if kind == 'safe':
             out['safe'] = rec
         elif kind == 'opened':
@@ -581,6 +608,17 @@ def configure(argv=None):
                          'and 0.45 is the last rung before the safe line. '
                          'Each rung is a separate QP solve, so the cost is '
                          'one extra w_veh sweep per rung that fails.')
+    ap.add_argument('--checkpoints', default=None, metavar='CSV',
+                    help='OPT-IN. Lap-checkpoint export (map_from_mesh.py '
+                         'writes <map>_checkpoints.csv). Constrains the '
+                         'width-using candidates to pass inside every trigger '
+                         'box and REJECTS any candidate -- safe line included '
+                         '-- that would skip one. Pass "auto" to use '
+                         'data/maps/<track>_checkpoints.csv when it exists.')
+    ap.add_argument('--checkpoint-margin', type=float, default=0.25,
+                    metavar='M',
+                    help='trigger half-width kept in hand at each checkpoint '
+                         '(default 0.25 m). Only used with --checkpoints.')
     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
                     help='pass --kappa-bound to the QP for the raceline '
                          'candidates (opt-in; off by default).')
@@ -607,6 +645,13 @@ def configure(argv=None):
                      'pass one or the other')
         cfg.min_halfwidth_ladder = [float(x) for x in
                                     cfg.min_halfwidth_ladder.split(',') if x]
+    if cfg.checkpoints == 'auto':
+        auto = f'data/maps/{cfg.track}_checkpoints.csv'
+        cfg.checkpoints = auto if os.path.exists(auto) else None
+        if cfg.checkpoints is None:
+            print(f'--checkpoints auto: no {auto}; lines are unconstrained')
+    if cfg.checkpoints is not None and not os.path.exists(cfg.checkpoints):
+        ap.error(f'--checkpoints {cfg.checkpoints}: no such file')
     cfg.mesh = is_mesh(f'data/maps/{cfg.track}')
     cfg.out_name = cfg.out_name or cfg.track
     if cfg.min_clearance is None:
@@ -631,6 +676,9 @@ def configure(argv=None):
     if cfg.min_halfwidth is not None:
         cfg.race_args += ['--min-halfwidth', f'{cfg.min_halfwidth:g}',
                           '--min-halfwidth-map', f'data/maps/{cfg.track}']
+    if cfg.checkpoints is not None:
+        cfg.race_args += ['--checkpoints', cfg.checkpoints,
+                          '--checkpoint-margin', f'{cfg.checkpoint_margin:g}']
     if cfg.ay is not None:
         cfg.profile[cfg.profile.index('--ay') + 1] = f'{cfg.ay:g}'
     aw = cfg.alpha_smooth if cfg.alpha_smooth is not None else (

@@ -586,6 +586,128 @@ def wall_bounds(reftrack, normvec, args):
     return lo, hi
 
 
+# --------------------------------------------------------------------------
+# lap checkpoints (OPT-IN, September 12)
+# --------------------------------------------------------------------------
+# The sim only counts a lap when the car has passed every checkpoint, and the
+# rules say so explicitly ("Failing to pass all the checkpoints before crossing
+# the finish line ... will not stop the lap timer") while promising that their
+# locations are NOT revealed.  On a track whose scene we can read they are, and
+# `tools/map_from_mesh.py` writes them out: one Unity trigger box per
+# checkpoint, measured a unit cube scaled to `width` laterally, 0.100 m deep
+# along travel and 0.254 m tall, centred on the track.  A generated line that
+# threads a corner outside one of those boxes would run a whole lap for
+# nothing, which is worth more than any collision penalty.
+
+
+def load_checkpoints(path):
+    """`(index, x, y, yaw, width)` for a map's numbered lap checkpoints.
+
+    `width` is the FULL lateral extent of the trigger box, so the box spans
+    +/- width/2 either side of (x, y) along the gate, which is the direction
+    `(sin yaw, -cos yaw)`.  The two named finish lines duplicate numbered
+    checkpoints and are dropped, leaving exactly the sequence the lap counter
+    walks.
+    """
+    rows = []
+    with open(path) as fh:
+        next(fh)
+        for line in fh:
+            if not line.strip():
+                continue
+            kind, name, x, y, yaw, w = line.rstrip('\n').split(',')
+            if kind == 'checkpoint' and name.isdigit():
+                rows.append((int(name), float(x), float(y),
+                             float(yaw), float(w)))
+    if not rows:
+        raise ValueError(f'{path}: no numbered checkpoints')
+    rows.sort()
+    return rows
+
+
+def _gate_axes(yaw):
+    """(travel direction, lateral direction) of a checkpoint gate."""
+    return (np.array([math.cos(yaw), math.sin(yaw)]),
+            np.array([math.sin(yaw), -math.cos(yaw)]))
+
+
+def _plane_cuts(xy, cx, cy, yaw, closed=True):
+    """Indices and interpolated lateral offsets where `xy` cuts a gate plane."""
+    P = np.vstack([xy, xy[:1]]) if closed else np.asarray(xy, float)
+    hd, lat = _gate_axes(yaw)
+    r = P - np.array([cx, cy])
+    d, l = r @ hd, r @ lat
+    out = []
+    for i in np.flatnonzero(np.sign(d[:-1]) != np.sign(d[1:])):
+        f = abs(d[i]) / (abs(d[i]) + abs(d[i + 1]) + 1e-12)
+        out.append((int(i), float(l[i] + f * (l[i + 1] - l[i]))))
+    return out
+
+
+def checkpoint_margins(xy, checkpoints, closed=True):
+    """`{index: margin}` -- how far INSIDE each trigger box the path passes.
+
+    ``margin = width/2 - |lateral offset at the crossing|``.  Negative means
+    the path cuts that checkpoint's plane outside its box: the trigger never
+    fires and the lap does not count.  ``None`` means the path never reaches
+    the plane at all.  Where a path cuts one plane more than once (a gate whose
+    plane extends across another part of the circuit) the crossing nearest the
+    box centre is the one taken.
+    """
+    out = {}
+    for name, cx, cy, yaw, w in checkpoints:
+        cuts = _plane_cuts(xy, cx, cy, yaw, closed)
+        out[name] = (None if not cuts
+                     else w / 2.0 - abs(min((c[1] for c in cuts), key=abs)))
+    return out
+
+
+def checkpoint_bounds(reftrack, normvec, args):
+    """Alpha bounds that hold the path inside every trigger box.
+
+    The QP shifts each reference point by `alpha` along its own normal, so a
+    gate constrains the two reference points that bracket its plane: with
+    `a0` the reference point's own offset from the box centre along the gate
+    and `g = normal . gate`, the path crosses at `a0 + alpha * g`, which must
+    stay inside `width/2 - margin`.  A gate whose plane the normal is nearly
+    parallel to (|g| < 0.2) gives alpha almost no authority there and is left
+    alone rather than bounded by a near-singular division.
+    """
+    cps = load_checkpoints(args.checkpoints)
+    m = args.checkpoint_margin
+    n = len(reftrack)
+    lo = np.full(n, -np.inf)
+    hi = np.full(n, np.inf)
+    n_bound = n_skip = 0
+    for name, cx, cy, yaw, w in cps:
+        half = w / 2.0 - m
+        if half <= 0.0:
+            sys.exit(f'--checkpoint-margin {m:g} leaves nothing of checkpoint '
+                     f'{name}, whose trigger is only {w:.2f} m wide')
+        cuts = _plane_cuts(reftrack[:, :2], cx, cy, yaw)
+        if not cuts:
+            print(f'  checkpoint {name}: the reference line never crosses it '
+                  f'-- not constrained')
+            n_skip += 1
+            continue
+        i = min(cuts, key=lambda c: abs(c[1]))[0]
+        _hd, lat = _gate_axes(yaw)
+        for j in (i % n, (i + 1) % n):
+            a0 = float((reftrack[j, :2] - np.array([cx, cy])) @ lat)
+            g = float(normvec[j] @ lat)
+            if abs(g) < 0.2:
+                continue
+            a, b = sorted(((-half - a0) / g, (half - a0) / g))
+            lo[j] = max(lo[j], a)
+            hi[j] = min(hi[j], b)
+            n_bound += 1
+    tight = np.isfinite(lo) | np.isfinite(hi)
+    print(f'  checkpoints: {len(cps)} gates, margin {m:.2f} m, '
+          f'{n_bound} reference-point bounds on {int(tight.sum())} points'
+          + (f', {n_skip} gate(s) unreachable' if n_skip else ''))
+    return lo, hi
+
+
 def corridor_of(reftrack, normvec, work, args):
     """(lo, hi) bounds on the lateral shift alpha, as the solver sees them.
 
@@ -604,11 +726,20 @@ def corridor_of(reftrack, normvec, work, args):
     and applies it at every stage.
     """
     lo, hi = -work[:, 2], work[:, 3]
-    if getattr(args, 'min_halfwidth', None) is None:
+    if (getattr(args, 'min_halfwidth', None) is None
+            and getattr(args, 'checkpoints', None) is None):
         return lo, hi
-    if getattr(args, '_wall_bounds', None) is None:
-        args._wall_bounds = wall_bounds(reftrack, normvec, args)
-    lo2, hi2 = args._wall_bounds
+    if getattr(args, '_extra_bounds', None) is None:
+        elo = np.full(len(reftrack), -np.inf)
+        ehi = np.full(len(reftrack), np.inf)
+        if getattr(args, 'min_halfwidth', None) is not None:
+            a, b = wall_bounds(reftrack, normvec, args)
+            elo, ehi = np.maximum(elo, a), np.minimum(ehi, b)
+        if getattr(args, 'checkpoints', None) is not None:
+            a, b = checkpoint_bounds(reftrack, normvec, args)
+            elo, ehi = np.maximum(elo, a), np.minimum(ehi, b)
+        args._extra_bounds = (elo, ehi)
+    lo2, hi2 = args._extra_bounds
     lo = np.maximum(lo, lo2)
     hi = np.minimum(hi, hi2)
     return np.minimum(lo, hi), hi
@@ -640,7 +771,8 @@ def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
         # `sweep` already includes the body half-width, so the usable
         # half-corridor for the *path* is the wall distance minus it.
         keep = np.maximum(reftrack[:, 2:4] - sweep[:, None], 0.05)
-        if getattr(args, 'min_halfwidth', None) is not None:
+        if (getattr(args, 'min_halfwidth', None) is not None
+                or getattr(args, 'checkpoints', None) is not None):
             # Restate the wall floor as a corridor width, so the QP's own
             # `reftrack[:, 2] - w_veh/2` bound lands exactly on it.
             inf = np.full((len(reftrack), 2), np.inf)
@@ -649,6 +781,12 @@ def sweep_solve(reftrack, normvec, M, args, dk_bound=None, quiet=False):
                                    args)
             keep = np.minimum(keep, np.column_stack([-lo2, hi2])
                               + args.w_veh / 2.0)
+            if getattr(args, 'checkpoints', None) is not None:
+                # A gate can sit off the reference line's centre, so its bound
+                # can be one-sided and negative; the QP needs a corridor that
+                # still exists.  Only reached with --checkpoints, so the
+                # min-halfwidth lines are untouched.
+                keep = np.maximum(keep, 0.05)
         shrink = float(np.mean(reftrack[:, 2:4] - keep))
         work = np.column_stack([reftrack[:, :2], keep])
         if not quiet:
@@ -728,6 +866,16 @@ def main():
                          '0.365 m of body clearance on the pinch. Collapses '
                          'to the widest reachable point where the track is '
                          'narrower than 2M. Needs --min-halfwidth-map.')
+    ap.add_argument('--checkpoints', default=None, metavar='CSV',
+                    help='OPT-IN. <map>_checkpoints.csv from map_from_mesh.py. '
+                         'The line is then constrained to pass inside every '
+                         'lap-checkpoint trigger box, so it cannot skip one '
+                         'and run a lap the sim refuses to count.')
+    ap.add_argument('--checkpoint-margin', type=float, default=0.25,
+                    metavar='M',
+                    help='metres of the trigger half-width to keep in hand at '
+                         'each checkpoint (default 0.25). Only used with '
+                         '--checkpoints.')
     ap.add_argument('--min-halfwidth-map', default=None, metavar='PREFIX',
                     help='map the --min-halfwidth clearance is measured '
                          'against, e.g. data/maps/cdctf2025_mesh. Separate '
@@ -853,6 +1001,8 @@ def main():
 
     if args.min_halfwidth is not None and not args.min_halfwidth_map:
         sys.exit('--min-halfwidth needs --min-halfwidth-map')
+    if args.checkpoint_margin < 0.0:
+        sys.exit('--checkpoint-margin must not be negative')
     reftrack = np.loadtxt(args.centerline, delimiter=',')
     print(f'centerline: {len(reftrack)} pts')
 
@@ -1003,6 +1153,16 @@ def main():
         _c = np.nan_to_num(clear_at(_d, _r, _ox, _oy, raceline[:, :2]), nan=0.0)
         print(f'min-halfwidth {args.min_halfwidth:.2f} m asked: finished line '
               f'holds {_c.min():.3f} m at s {s_race[int(np.argmin(_c))]:.1f}')
+
+    if args.checkpoints is not None:
+        _cps = load_checkpoints(args.checkpoints)
+        _mg = checkpoint_margins(raceline[:, :2], _cps)
+        _bad = [k for k, v in _mg.items() if v is None or v < 0.0]
+        _ok = sorted((v, k) for k, v in _mg.items() if v is not None)
+        print(f'checkpoints: min margin {_ok[0][0]:.3f} m at checkpoint '
+              f'{_ok[0][1]} (asked {args.checkpoint_margin:.2f}), '
+              f'median {np.median([v for v, _ in _ok]):.3f} m'
+              + (f'  *** SKIPPED: {_bad} ***' if _bad else ''))
 
     if args.jerk_lat is not None:
         before = float(np.sum(el_lengths / np.maximum(vx, 0.1)))

@@ -76,6 +76,25 @@ TIGHT_WIDTH = 1.3
 BRAKE_LEAD_TIGHT = 0.05
 BRAKE_LEAD_OPEN = 0.0
 
+# How much of a lap-checkpoint trigger box the line must keep in hand.  A lap
+# on which one checkpoint does not fire is not scored at all: measured on
+# cdctf2025 fast3_m53 (race_20260912_104735), one lap in 32 read 20.4 s -- the
+# SIM'S OWN lap_time ran straight through the 10.43 s crossing without
+# resetting -- and the race went 112.1 s instead of ~102, which costs more than
+# a collision.
+#
+# The floor is a judgement call, bracketed by measurement, NOT itself measured:
+#   * the narrowest margin any SHIPPED line leaves is 0.518 m (porto_mesh
+#     cr_dk0.8 at checkpoint 1); cdctf2025 fast3_m53 leaves 0.715 m;
+#   * driving gives some of it away -- over 105 checkpoint-runs on the five
+#     CDC-TF logs the driven path loses p50 0.145 m and p95 0.561 m of the
+#     margin its own line had;
+#   * yet 99 clean Porto laps never came closer than 0.304 m to the edge of a
+#     trigger (checkpoint 8), and no log outside 104735 has ever missed one.
+# 0.35 m therefore sits above every driven margin seen on a clean lap and well
+# below every line we ship, so it fires on a genuinely marginal line only.
+CHECKPOINT_MIN_MARGIN = 0.35
+
 
 def geometry(map_prefix, line_csv):
     """Everything the two rules are decided on, measured off the map."""
@@ -106,6 +125,31 @@ def geometry(map_prefix, line_csv):
         'clearance': float(worst.min()),
         'ideal_lap': float(np.sum(np.diff(s) / np.maximum(vx[:-1], 0.1))),
         'v_max': float(vx.max()),
+    }
+
+
+def checkpoint_geometry(line_csv, cp_csv):
+    """Min / median margin the line leaves inside the lap-checkpoint triggers.
+
+    Read straight off the sim scene by `tools/map_from_mesh.py`: each gate is a
+    trigger box `width` metres across, and the margin is `width/2` minus how
+    far off the box centre the line cuts its plane.  Negative (or a plane the
+    line never reaches) means the lap would not be counted at all.
+    """
+    from optimize_raceline import load_checkpoints, checkpoint_margins
+    cps = load_checkpoints(cp_csv)
+    xy = np.loadtxt(line_csv, delimiter=',')[:, 1:3]
+    mg = checkpoint_margins(xy, cps)
+    skipped = sorted(k for k, v in mg.items() if v is None or v < 0.0)
+    ok = sorted((v, k) for k, v in mg.items() if v is not None)
+    return {
+        'checkpoints': cp_csv,
+        'n_checkpoints': len(cps),
+        'checkpoint_margin_min': ok[0][0] if ok else None,
+        'checkpoint_margin_at': ok[0][1] if ok else None,
+        'checkpoint_margin_p50': float(np.median([v for v, _ in ok])) if ok
+        else None,
+        'checkpoints_skipped': skipped,
     }
 
 
@@ -179,6 +223,14 @@ def main(argv=None):
                          'data/racelines/<slug>_pick.json)')
     ap.add_argument('--no-write', action='store_true',
                     help='print the pick without writing the sidecar')
+    ap.add_argument('--checkpoints', default=None, metavar='CSV',
+                    help='lap-checkpoint export (default '
+                         '<map prefix>_checkpoints.csv when it exists)')
+    ap.add_argument('--checkpoint-min-margin', type=float,
+                    default=CHECKPOINT_MIN_MARGIN, metavar='M',
+                    help=f'fail if the line passes closer than M to the edge '
+                         f'of any checkpoint trigger (default '
+                         f'{CHECKPOINT_MIN_MARGIN})')
     ap.add_argument('--barrier-slack', type=float, default=BARRIER_SLACK)
     ap.add_argument('--tight-kappa', type=float, default=TIGHT_KAPPA)
     ap.add_argument('--tight-width', type=float, default=TIGHT_WIDTH)
@@ -187,6 +239,11 @@ def main(argv=None):
     map_prefix = a.map or f'data/maps/{a.slug}'
     line = a.line or default_line(a.slug)
     geo = geometry(map_prefix, line)
+    cp_csv = a.checkpoints or (map_prefix + '_checkpoints.csv')
+    cp = (checkpoint_geometry(line, cp_csv) if os.path.exists(cp_csv)
+          else None)
+    if cp is not None:
+        geo.update(cp)
     pick = decide(geo, a.barrier_slack, a.tight_kappa, a.tight_width)
     args = controller_args(pick)
 
@@ -209,6 +266,24 @@ def main(argv=None):
           f'-- {pick["barrier_why"]}')
     print(f'thr_brake_lead_s    {pick["thr_brake_lead_s"]:.2f}  '
           f'-- {pick["lead_why"]}')
+    cp_fail = None
+    if cp is None:
+        print(f'checkpoint margin    -- no {cp_csv}; NOT CHECKED')
+    elif cp['checkpoints_skipped']:
+        cp_fail = (f'the line passes OUTSIDE checkpoint(s) '
+                   f'{cp["checkpoints_skipped"]}: the sim would not count the '
+                   f'lap at all')
+        print(f'checkpoint margin   *** SKIPS {cp["checkpoints_skipped"]} ***')
+    else:
+        lo = cp['checkpoint_margin_min']
+        print(f'checkpoint margin   {lo:.3f} m at checkpoint '
+              f'{cp["checkpoint_margin_at"]} '
+              f'(median {cp["checkpoint_margin_p50"]:.3f}, '
+              f'{cp["n_checkpoints"]} gates)')
+        if lo < a.checkpoint_min_margin:
+            cp_fail = (f'checkpoint margin {lo:.3f} m at checkpoint '
+                       f'{cp["checkpoint_margin_at"]} is below the '
+                       f'{a.checkpoint_min_margin:.2f} m floor')
     if a.slug == 'porto_mesh':
         print('NOTE: porto_mesh is the QUALIFIER and does not take this pick. '
               'Its shipped config is the documented 0.40 exception on '
@@ -222,6 +297,20 @@ def main(argv=None):
             json.dump(rec, fh, indent=2, sort_keys=True)
             fh.write('\n')
         print(f'wrote {out}')
+    if cp_fail:
+        print()
+        print('*' * 72)
+        print(f'FAIL: {cp_fail}.')
+        print('A lap with a missed checkpoint is not scored -- measured 20.4 s '
+              'against 10.2 (cdctf2025 fast3_m53, 2026-09-12).')
+        print('Regenerate the line with make_track_lines.py --checkpoints '
+              f'{cp_csv} --checkpoint-margin '
+              f'{a.checkpoint_min_margin:.2f}, or pass '
+              '--checkpoint-min-margin to overrule this deliberately.')
+        print('*' * 72)
+        rec['checkpoint_fail'] = cp_fail
+        if argv is None:
+            sys.exit(2)
     return rec
 
 
