@@ -254,6 +254,56 @@ If a run lands off Ultra's expected 0.102-0.105 s, the first suspects are
 script prints a WARN and saves a label crop under `/tmp/sim_quality`) and
 another process on the host.
 
+### Reproducing the organisers' sensor period
+
+The period is **not a property of the host** — it is a per-start lottery. One
+CPU-saturated Unity render thread sets the telemetry rate (the GPU is idle and
+there is no vsync on Xvfb), so which cores that thread lands on decides what the
+whole stack sees: 0.088-0.091 s on some starts, 0.103-0.106 s on others, stable
+within a run. That is the difference between the rate mpc3 collides at and the
+rate every clean century was measured at, and the organisers' ~0.097 s sits
+between them — so "run it again until it looks right" is not a method.
+
+Pinning the sim container turns the lottery into a dial. `SIM_CPUSET` passes
+`--cpuset-cpus` straight through to the sim container in
+`scripts/sim_restart_connect.sh`. On this machine cpus **0-7,16-23** are CCD0
+(fast) and **8-15,24-31** are CCD1 (~5 % slower); a **narrower** set slows the
+render thread further, which is how a period is lengthened toward 0.097 s.
+
+```bash
+./scripts/sim_rate_calibrate.sh 0.097
+```
+
+It starts the shipping stack once per candidate cpuset
+(`CONTROLLER=mpc3 LIDAR_OFFSET=0.1933`, `run_stanley.sh 1.0 porto_mesh
+mc0.63_ay6.75`, Ultra), waits 30 s, measures the logger period exactly as
+`run_exp.sh` does — the median of the last 150 row intervals of the newest
+`data/logs/race_*.csv` — stops the run, and prints a `cpuset -> period` table
+plus whichever set lands closest to the target. A cpuset whose stack fails to
+start (a missed Connection click, a wedged sim) is reported as `skipped`, not
+guessed at. Candidates default to
+`0-7,16-23  8-15,24-31  0-3  8-11  0,16  8,24`; override with `SIM_CPUSETS`.
+Budget ~8 min for the default six.
+
+`SIM_GPU_LOCK=1` runs `sudo nvidia-smi -pm 1 -lgc <GPU_MHZ>` first (default
+1800). It **needs sudo and persists after the script exits** — run
+`sudo nvidia-smi -rgc` when you are done. It is opt-in because the render thread
+is CPU-bound: locking clocks removes a source of drift, it does not move the
+period much.
+
+**Then use the chosen set on every validation run, with the period gate as the
+check, not as the mechanism:**
+
+```bash
+SIM_CPUSET=<chosen> RATE_MIN_DT=0.094 RATE_MAX_DT=0.100 \
+    SIM_QUALITY=ultra CONTROLLER=mpc3 LIDAR_OFFSET=0.1933 \
+    ./scripts/run_exp.sh <name> mc0.63_ay6.75
+```
+
+`SIM_CPUSET` aims the start at the right period; `RATE_MIN_DT`/`RATE_MAX_DT`
+restart the run if it still lands outside the band, and `dt_p50` in 5A confirms
+after the fact what it actually ran at. All three, every scored run.
+
 ### 5B — Scoring: use the OFFICIAL numbers
 
 Every run appends a row to `data/experiments.tsv` and prints
