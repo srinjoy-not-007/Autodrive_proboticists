@@ -358,6 +358,24 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Pinch-free fast lines (Sept 12, offline; live A/B queued):**
+`optimize_raceline.py --min-halfwidth M` bounds the path-to-wall
+distance (from the map's distance transform along the normal) at every
+generation stage; the earlier fast lines' pinch came from the smoothing
+and dkappa stages projecting into the corridor without the body sweep.
+M 0.55 is infeasible on both 2025 circuits; M 0.50 gives cdctf
+fast2_m50 ideal 10.03 / clearance 0.364 / min half-width 0.493 and
+icra2025 fast2_m50 13.84 / 0.348 / 0.481 -- the first fast lines on
+which barrier_margin 0.34 is feasible. Harness (144 laps/line, shipping
++ barrier): CDC-TF fast2_m50 10.68 s, 0 collisions (fast_uni 10.73, 2;
+safe 11.81); ICRA 2025 fast2_m50 14.62, 0 (fast_uni 14.67; safe 15.48).
+Lesson from the m45 family (25 collisions at one corner): easing a
+corner's curvature lets the profile spend it all on speed (2.03 vs
+1.58 m/s minimum) that the tracker cannot deliver at 0.058 -- geometry
+and speed must be capped together. Porto/ICRA 2026 outputs byte-identical
+(52 CSVs). check_pipeline + commit of the tools flags queued on the next
+idle host slot, then live: fast2_m50 on both circuits.
+
 **Cross-track config matrix (Sept 12, harness, 432 laps per config on
 the three non-Porto circuits, both plants, 0.058/0.097):** barrier_margin
 0.34 is geometrically feasible on every safe line (needs 0.475 m
