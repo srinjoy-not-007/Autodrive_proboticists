@@ -192,7 +192,13 @@ fast rate); the bag (data/bags/exp_display_watch_*) is the first sensor
 recording through real collisions, for the teleport detector's IMU
 branch. Human observer: the wiggle on the approach before the hairpin
 appears to seed the early turn-in; collisions happen on the first pass
-too.
+too. **Approach table (display 0.058 vs Xvfb 0.094, medians by s on
+cr_dk0.8):** true speed identical at every bin s 6-10.5 (braking points
+are valid), published steering identical (s 10: -0.141 vs -0.142), but
+lateral offset diverges from s 8.5: -0.08/-0.13/-0.19/-0.24/-0.30 m at s
+8.5-10.5 vs 0.00/-0.03/-0.06/-0.12/-0.18. Same command, same speed, more
+turning: the achieved curvature per command is larger or earlier at
+0.058 s ticks -- a plant (actuator) rate dependence, being identified.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
