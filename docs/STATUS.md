@@ -199,6 +199,11 @@ lateral offset diverges from s 8.5: -0.08/-0.13/-0.19/-0.24/-0.30 m at s
 8.5-10.5 vs 0.00/-0.03/-0.06/-0.12/-0.18. Same command, same speed, more
 turning: the achieved curvature per command is larger or earlier at
 0.058 s ticks -- a plant (actuator) rate dependence, being identified.
+**Ultra on the real display (display_ultra12, quality click verified by
+the label crop): period still 0.058 s** -- graphics quality does not set
+the rate on this host, the GPU/display does; 9 laps / 10 collisions,
+same hairpin. Four display runs of the shipping config have now failed
+identically; no further display runs until the plant mapping exists.
 
 **UNSEEN-TRACK REHEARSAL (Sept 12) -- one pass, one DQ.** Shipping config
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
