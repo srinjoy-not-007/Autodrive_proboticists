@@ -264,10 +264,13 @@ or restarted, and the resume is in an EXIT trap:
     --log data/logs/stall_$(date +%H%M%S).csv
 ```
 
-Run it once with the shipped defaults. If the car collides in the stall windows,
-the opt-in ride-out exists (step 5D) and can be turned on for one A/B without
-rebuilding anything. This gate is optional because nothing has driven it live
-yet; skip it rather than let it eat Gate C/D time.
+Run it once with the shipped defaults. If the car collides — or stalls out —
+in the stall windows, the opt-in ride-out exists (step 5D, `GAP_BLOCK`) and can
+be turned on for one A/B without rebuilding anything. It HAS now been driven
+live (Sept 12, display, 8 pauses of 0.4-0.6 s): defaults + `gap_predict_s`
+alone stopped the car for 13 s, and the full pair ran 32 laps / 0 collisions /
+70.18 s, indistinguishable from the no-stall control. Still optional on the
+day; skip it rather than let it eat Gate C/D time.
 
 ### Sep 18 — bake, build, race the image (~2 h)
 
@@ -789,10 +792,33 @@ its own A/B on the finals track before it goes in the image:
 |---|---|---|---|
 | Brake-phase throttle lead | `-p thr_brake_lead_s:=0.05` | Removes the commanded corner-entry overspeed (the throttle setpoint exceeds the profile on 18-39 % of a braking approach because of the point lead) | Removes 93-100 % of it at −0.018 s/lap on Porto with \|e\| p95 −24..−38 % (288 harness laps, 0 collisions); display 32/0 at 69.94 s. **But +0.30 s/lap on CDC-TF and +0.23 on ICRA 2025** — not free off Porto, so `pick_config.py` only asks for it on a tight circuit. Never 0.08. |
 | Dead-time pin | `-p rate_terms:=apply,thr,predict,enc,pose,delay_tick -p nd_delay_s:=0.180` | Pins the committed-step count while `delay_tick` corrects the actuator dead time (measured pose-stamp-to-rack = period + 0.052 s) | Display 32/0, OFFICIAL **69.244 s** — the best race measured. But the hairpin margin is *not* improved (16/32 laps below −0.30 m), which is what the barrier is for. |
-| Telemetry gaps (controller) | `-p gap_predict_s:=0.6` | Keeps solving on the dead-reckoned pose with a decel ramp instead of dropping to the coast watchdog | Harness with a stall every 5 s, 72 laps per cell: 3-frame gaps 6 → 1 / 19 → 8 collisions; 5-frame 18 → 3 / 46 → 18. One dropped frame is fine either way; no-gap reports byte-identical. Not driven live — see Gate E. |
-| Telemetry gaps (filter) | `-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5` | Two 0.5 s constants coincide by default, so above a 0.5 s gap the filter dead-reckons at the stale pre-gap speed: 0.9 m of phantom travel for a stalled car, 2.25 m error and 9 relocalizations for a 1 s gap | Replayed on the real collision bag, 25 injected stalls x 6 seeds: worst post-gap error 0.46 m. Widening the cloud works; capping the step throws away real motion. |
+| Telemetry gaps, **both lines together** (`GAP_BLOCK`) | `-p gap_predict_s:=0.6` on mpc3 **and** `-p gap_dt:=0.15 -p gap_noise_mult:=3.0 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5` on localization | The controller keeps solving on the dead-reckoned pose with a decel ramp instead of dropping to the coast watchdog, and the filter rides the gap out instead of declaring itself lost — which is what gives the controller a pose to ride on | **Driven live Sept 12** (real display, Ultra, 0.058 s, 8 docker-pause stalls of 0.4-0.6 s from `stall_inject.sh --mode sim`): **32 laps, 0 collisions, longest lap 7.54 s, OFFICIAL 70.18 s** — the same race as the no-stall control (70.13 s). Harness, stall every 5 s, 72 laps/cell: 3-frame gaps 6 → 1 / 19 → 8 collisions, 5-frame 18 → 3 / 46 → 18; no-gap reports byte-identical. Filter side replayed on the real collision bag (25 stalls x 6 seeds): worst post-gap error 0.46 m. Prepared as the `GAP_BLOCK` in the entrypoint — see the enable procedure below. |
+| Telemetry gaps, **controller line alone** — do not | `-p gap_predict_s:=0.6` only | — | **Rejected by the live test.** Same 8 stalls: 32 laps, 0 collisions, but one **21.2 s lap** — 7 s after the second stall the car stopped dead at s 27.1 for **13 s** (throttle 0, steering held, no collision) because localization declared itself lost and, with the shipped `publish_on_reloc:=false`, published no pose at all. It resumed by luck. Enable both lines or neither. |
 | Teleport detector | `-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0 -p teleport_hold_n:=7 -p teleport_reseed:=false` | A collision reset moves the car ~0.88 m and the filter never notices; the scan branch does | On the real collision bag: **9/9 resets detected within one frame, 0 false positives** for any threshold 0.20-0.525 (clean max 0.194). The IMU branch is unusable (1/9, one frame early once) — keep `teleport_imu_g` 0. Reseed helped on 0/9 and costs 0.06 m; hold-only is better, and the image carries no `checkpoints_csv` anyway. Peak post-reset error 0.65 → 0.30-0.38 m. |
 | Long straight beyond 9 m/s | `-p max_step_mps:=12.0` | Only if Gate B says the finals profile asks for more than the shipped cap | Zero lap cost at any cap ≥ 6.4 in the harness. Pair with the caveat that a higher cap also lets the cloud dead-reckon further after a reset (up to 0.89 m). |
+
+**Enabling the telemetry-gap pair (`GAP_BLOCK`).** It is two lines, both
+commented, between the `# GAP_BLOCK_BEGIN` / `# GAP_BLOCK_END` markers in
+`submission/autodrive_devkit.sh` — one `CTRL_ARGS+=(...)`, one
+`LOC_ARGS+=(...)`. To ship it:
+
+1. Uncomment **both** lines (strip the leading `# `). One alone is the 13 s
+   stop in the row above.
+2. `.venv/bin/python -m pytest -q tests/test_gap_block.py` — it lifts the two
+   lines out of the script, uncomments them in a temp copy, runs the real
+   launch functions over it, and constructs both real nodes with exactly those
+   overrides. It is also what catches an **integer written for a double**:
+   `gap_noise_mult` is `3.0`, never `3`, or rclpy rejects the override and the
+   node exits on launch (a turn-in probe lost a run to that on Sept 12).
+3. `bash -n submission/autodrive_devkit.sh`, rebuild the image, and re-race
+   Gate C (no stalls) before Gate E — the pair must cost nothing when nothing
+   stalls.
+
+Without a rebuild, the same thing on the organisers' box is
+`-e PIT_CREW_CONTROLLER_ARGS="-p gap_predict_s:=0.6"` plus
+`-e PIT_CREW_LOCALIZATION_ARGS="-p gap_dt:=0.15 -p gap_noise_mult:=3.0 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5"`,
+and the same environment turns it back **off** (`-p gap_predict_s:=0.0`,
+`-p gap_dt:=0.0`) because the environment's copy is emitted last.
 
 **Rejected — do not re-test on the day.**
 
@@ -813,7 +839,7 @@ positional extras to the controller and `LOC_ARGS` to localization:
 ```bash
 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_bm34_tau race -p barrier_margin:=0.34 -p steer_tau:=0.04
-LOC_ARGS='-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3 \
+LOC_ARGS='-p gap_dt:=0.15 -p gap_noise_mult:=3.0 -p lost_patience_min:=3 \
           -p scan_dt_max:=1.2 -p enc_gap_max:=1.5' \
   SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
   ./scripts/run_exp.sh finals_gaploc race -p gap_predict_s:=0.6

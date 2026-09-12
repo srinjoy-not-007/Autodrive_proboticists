@@ -232,11 +232,35 @@ LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)
 # move, 2.25 m of error and 9 relocalizations for a 1 s telemetry-only gap.
 # Replayed on the real collision bag (25 injected stalls x 6 seeds) these bring
 # the worst post-gap error to 0.46 m. Widening the cloud works; capping the
-# step throws away real motion. Pair with the controller's own `gap_predict_s`
-# (PIT_CREW_CONTROLLER_ARGS="-p gap_predict_s:=0.6"). Neither has been driven
-# live -- run scripts/stall_inject.sh against a live run first.
-# LOC_ARGS+=(-p gap_dt:=0.15 -p gap_noise_mult:=3 -p lost_patience_min:=3
-#            -p scan_dt_max:=1.2 -p enc_gap_max:=1.5)
+# step throws away real motion.
+#
+# DRIVEN LIVE Sept 12 (real display, Ultra, 0.058 s, docker-pause stalls from
+# scripts/stall_inject.sh), and the two halves only work together:
+#   * `gap_predict_s:=0.6` ALONE (`stall_gap` arm, 8 sim pauses of 0.4-0.63 s):
+#     32 laps, 0 collisions -- but one 21.2 s lap. Seven seconds after the
+#     second stall the car STOPPED at s 27.1 for 13 s (throttle 0, steering
+#     held, no collision): localization declared itself lost after the stall
+#     and, with `publish_on_reloc:=false`, published no pose at all, so the
+#     controller had nothing to solve against and resumed only by luck.
+#   * BOTH (`stall_both` arm, 8 sim pauses of 0.4-0.6 s): **32 laps, 0
+#     collisions, longest lap 7.54 s, OFFICIAL 70.18 s** -- i.e. the same race
+#     as the no-stall control (70.13 s). The filter rides the gap out instead
+#     of losing itself, so the controller's ride-out has a pose to ride on.
+# Enable BOTH lines or NEITHER; the controller line alone is the 13 s stop.
+# `gap_noise_mult` is a DOUBLE: it must be written `3.0`, not `3` -- rclpy
+# rejects an integer override for a double parameter and the node exits on
+# launch (a turn-in probe lost a run to exactly that today).
+# The controller line is mpc3-only; the legacy `mpc` does not declare
+# `gap_predict_s` and would refuse to start if it were passed.
+# Uncomment BOTH lines between the markers once chain8's no-stall Xvfb
+# regression (Porto + one 2025 circuit) is clean.
+# tests/test_gap_block.py lifts these two lines, uncomments them and runs the
+# launch functions with them, and instantiates both real nodes with exactly
+# these overrides.
+# GAP_BLOCK_BEGIN
+# CTRL_ARGS+=(-p gap_predict_s:=0.6)
+# LOC_ARGS+=(-p gap_dt:=0.15 -p gap_noise_mult:=3.0 -p lost_patience_min:=3 -p scan_dt_max:=1.2 -p enc_gap_max:=1.5)
+# GAP_BLOCK_END
 #
 # --- PREPARED, NOT ENABLED: teleport detection after a collision reset ------
 # The reset moves the car ~0.88 m and nothing notices: the encoder keeps
