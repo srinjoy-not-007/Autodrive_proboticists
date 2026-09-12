@@ -11,6 +11,22 @@ INIT=$(head -2 data/maps/${MAP}_traj.csv | tail -1 | cut -d, -f2,3)
 IX=$(echo "$INIT" | cut -d, -f1); IY=$(echo "$INIT" | cut -d, -f2)
 echo "map=$MAP line=$LINE scale=$SCALE $EXTRA"
 ./scripts/sim_restart_connect.sh || exit 1
+# The simulator's telemetry period is a per-start lottery on this host
+# (0.088-0.091 s on some starts, 0.103-0.106 s on others, stable within a
+# run). RATE_MAX_DT / RATE_MIN_DT select an instance in the wanted band by
+# restarting the sim (up to RATE_TRIES times) -- e.g. RATE_MAX_DT=0.095 for
+# a fast (11 Hz) instance, RATE_MIN_DT=0.100 for a slow one.
+if [ -n "${RATE_MAX_DT:-}${RATE_MIN_DT:-}" ]; then
+    for try in $(seq 1 "${RATE_TRIES:-5}"); do
+        DT=$(docker exec autodrive_roboracer_api /bin/bash -c "source /opt/ros/humble/setup.bash; timeout 8 ros2 topic hz /autodrive/roboracer_1/imu 2>&1 | grep average | tail -1" | awk '{printf "%.4f", 1.0/$3}')
+        echo "sensor period ${DT:-?} s (try $try)"
+        OK=1
+        [ -n "${RATE_MAX_DT:-}" ] && awk "BEGIN{exit !(${DT:-1} > $RATE_MAX_DT)}" && OK=0
+        [ -n "${RATE_MIN_DT:-}" ] && awk "BEGIN{exit !(${DT:-0} < $RATE_MIN_DT)}" && OK=0
+        [ "$OK" = 1 ] && break
+        ./scripts/sim_restart_connect.sh || exit 1
+    done
+fi
 # SIM_QUALITY=ultra reproduces the organisers' setting (they run Ultra); the
 # sensor cadence differs by quality, and the tracker is sensitive to it.
 if [ "${SIM_QUALITY:-}" = "ultra" ]; then ./scripts/sim_set_quality.sh ultra >/dev/null 2>&1 || echo "WARN: could not set Ultra"; sleep 2; fi
