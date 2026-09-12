@@ -133,7 +133,10 @@ data/racelines/porto_mesh_cr_dk{1.0,0.8,0.6}.csv. In the harness they change
 nothing (0/60 collisions everywhere, lap p50 within 0.01 s); under the
 stress that reproduces the live rate failure (frame 0.088, pose-lon-bias
 0.15) collisions go 80 -> 83/75/69 per 120 laps, a ~1.5 sigma trend. The
-rate failure is not a line-shape problem. Kept as a free option to drive.
+rate failure is not a line-shape problem. Driven: **cr_dk0.8 +
+rate_adaptive at a 0.095 s instance -> 32 laps, 0 collisions, median 7.048,
+OFFICIAL 70.75 s** (best clean fast-rate run so far; the shipping line with
+rate_adaptive was 2/32 at 0.092). 100 laps of the same queued.
 
 **Rejected offline (Sept 12): `control_mode:=timer`** (opt-in, committed,
 default byte-identical). A fixed 20 Hz solve halves the rate spread of
