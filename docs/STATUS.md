@@ -343,6 +343,22 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
+committed; display A/B queued):** `steer_tau` (first-order rack lag
+after the dead time, exact per-step response, analytic Jacobians),
+`model_cmd_tau`, `lead_mode:=spatial` (publish index as metres ahead:
+lead_m0 0 + lead_k 0.09 * v, floor 0.30 m = the shipping 0.090 s as a
+distance). Harness on the identified pole plant, 4 frames x 36 laps:
+smoothing + steer_tau 0.04 + spatial: min clearance 0.168-0.190 (base
+0.079-0.135, smoothing alone 0.125-0.200), |e| p50 0.047-0.071, lap
+7.30-7.35, 0 collisions; the clearance spread across 0.058-0.104 s drops
+0.056 -> 0.022 m (the rate-invariance term). steer_tau must stay at 0.04:
+on a pure-slew plant a modelled lag of 0.06+ is a mismatch that collides.
+Caveat: the hairpin inside excursion does NOT improve in the harness
+(-0.20 -> -0.27 m most-inside). Do not re-derive: ForzaETH's L1 numbers
+(0.6 v - 0.18, min 0.8 m) are a pure-pursuit lookahead, not a plan knot:
+198/210 collisions as a publish lead.
+
 **Why the steering wiggles (research, Sept 12, full report in
 docs/research/steering_smoothness_peer_stacks.md):** every peer stack
 (ForzaETH, TUM, KAIST, Autoware) runs its tracker at a FIXED rate over a
