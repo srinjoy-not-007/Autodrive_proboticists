@@ -71,8 +71,8 @@ OUTDIR="${OUTDIR:-/tmp/sim_quality}"
 DECOR="${DECOR:-35}"
 
 # --- the cycle (UNVERIFIED, see header) --------------------------------------
-CYCLE=6              # number of quality levels in the wrap-around cycle
-CYCLE_TO_ULTRA=4     # clicks from the image's default ("Low") to "Ultra"
+CYCLE=3            # verified 2026-09-13: Low -> High -> Ultra -> (Low)
+CYCLE_TO_ULTRA=2   # from the default Low
 
 MODE=""
 VERIFY=0

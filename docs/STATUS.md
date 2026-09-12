@@ -28,6 +28,11 @@ results.
 At 11 Hz (dt 0.091) on a quiet host: legacy mpc on the centerline (mesh
 map, a_gain 0.02) 32 laps, 0 collisions, 78.21 s, median 7.815 -- the
 rate-proven fallback; mpc3 on the wide line laps 6.98 but 3 collisions/12.
+Sensor rate by graphics quality on this host (Xvfb): Low 11.05 Hz, Ultra
+10.64 Hz (organisers run Ultra; they measured ~10.4). `SIM_QUALITY=ultra`
+on run_exp/run_stanley now sets Ultra after the sim connects
+(`scripts/sim_set_quality.sh`, cycle Low -> High -> Ultra verified).
+Validate at Ultra from here on.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
