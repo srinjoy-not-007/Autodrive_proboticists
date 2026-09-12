@@ -15,9 +15,13 @@
 #   MAP / LINE       default porto_mesh / safe -- NOT the shipping min-curvature
 #                    line, which measured 0.3 m of admissible straight on the
 #                    whole lap because it hugs the inside; the safe line has 4.9 m
-#   V_PROBE          probe speed on the straights, m/s (default 3.0)
-#   AMP / PULSE_S    ramp height in rad and the hold duration (default 0.15 / 0.65)
-#   N_PULSES         trigger points per lap (default 3)
+#   V_PROBE          probe speed on the straights, m/s
+#   AMP / PULSE_S    ramp height in rad and the hold duration
+#   N_PULSES         trigger points per lap (Porto admits only 1, see below)
+#                    -- all three are passed ONLY if set; unset means the
+#                    node's own default, so the two can never drift apart
+#                    again (the first live run got v_probe 3.0 from here
+#                    against the node's 2.5, which resized every window)
 #   RUN_S            wall-clock length of the run (default 240)
 #   PROBE_ARGS       extra "-p name:=value" passed verbatim to the node
 #   NO_LOC=1         skip localization; trigger straight off IPS instead
@@ -66,24 +70,48 @@ else
     sleep 7
 fi
 
+OPT=""
+[ -n "${V_PROBE:-}" ]  && OPT="$OPT -p v_probe:=$(printf '%.3f' "$V_PROBE")"
+[ -n "${AMP:-}" ]      && OPT="$OPT -p amp_rad:=$(printf '%.3f' "$AMP")"
+[ -n "${PULSE_S:-}" ]  && OPT="$OPT -p pulse_s:=$(printf '%.3f' "$PULSE_S")"
+[ -n "${N_PULSES:-}" ] && OPT="$OPT -p n_pulses:=${N_PULSES}"
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew turnin_probe --ros-args \
     -p raceline_csv:=/home/data/racelines/${MAP}_${LINE}.csv \
     -p map_prefix:=/home/data/maps/${MAP} \
-    $POSE_ARG \
-    -p v_probe:=${V_PROBE:-3.0} -p amp_rad:=${AMP:-0.15} \
-    -p pulse_s:=${PULSE_S:-0.65} -p n_pulses:=${N_PULSES:-3} \
-    -p max_run_s:=$(printf "%.1f" "$RUN_S") ${PROBE_ARGS:-} > /tmp/turnin.log 2>&1"
+    $POSE_ARG $OPT \
+    -p max_run_s:=$(printf '%.1f' "$RUN_S") ${PROBE_ARGS:-} > /tmp/turnin.log 2>&1"
 sleep 6
 docker exec autodrive_roboracer_api /bin/bash -c \
     "grep -hE 'turnin_probe:|Traceback|Error|ERROR' /tmp/turnin.log /tmp/loc.log 2>/dev/null | head -8"
 
 echo "probing for ${RUN_S}s ..."
 sleep "$RUN_S"
+# SIGINT first so the node runs its own shutdown (summary line, the
+# "# STOPPED:" trailer in the CSV, zeroed actuators) -- stop_run.sh sends
+# SIGTERM, which Python takes without running `finally`.
+docker exec autodrive_roboracer_api /bin/bash -c \
+    "pkill -INT -f '[i]nstall/pit_crew/lib/pit_crew/turnin_probe' || true"
+sleep 3
 ./scripts/stop_run.sh > /dev/null 2>&1
-docker exec autodrive_roboracer_api /bin/bash -c "grep -cE '^\[INFO\].*pulse ' /tmp/turnin.log" \
-    | sed 's/^/pulses fired: /'
 
 LOG=$(ls -t data/logs/turnin_*.csv 2>/dev/null | head -1)
-if [ -z "$LOG" ]; then echo "no log written; see /tmp/turnin.log"; exit 1; fi
+# Preserve the node's stdout NOW.  The container's /tmp is wiped by the next
+# devkit restart, and the first live run's reason for stopping was lost that
+# way; the copy lands next to the CSV on the host mount.
+if [ -n "$LOG" ]; then
+    NODELOG="${LOG%.csv}.log"
+else
+    NODELOG="data/logs/turnin_$(date +%Y%m%d_%H%M%S).log"
+fi
+docker cp autodrive_roboracer_api:/tmp/turnin.log "$NODELOG" 2>/dev/null \
+    || echo "(could not copy /tmp/turnin.log out of the container)"
+echo "node log: $NODELOG"
+
+echo "--- why it stopped ---"
+{ grep -hE 'STOPPED|ABORT|Traceback|Error|ERROR|turnin_probe:|pulse [0-9]+:' "$NODELOG" 2>/dev/null | tail -12
+  grep -h '^# STOPPED' "$LOG" 2>/dev/null; } | sed 's/^/  /'
+[ -n "$LOG" ] && echo "  pulses fired: $(grep -c '^pose,.*,pulse,' "$LOG" 2>/dev/null || echo 0) pulse-phase rows"
+
+if [ -z "$LOG" ]; then echo "no CSV written; see $NODELOG"; exit 1; fi
 echo "log: $LOG"
-.venv/bin/python tools/turnin_fit.py "$LOG"
+.venv/bin/python tools/turnin_fit.py "$LOG" --per-pulse

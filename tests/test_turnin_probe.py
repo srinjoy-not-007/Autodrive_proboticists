@@ -295,3 +295,137 @@ def test_two_rates_report_the_same_delay(tmp_path):
         out[dt] = float(np.nanmedian([r['total'] for r in recs if r['quiet']]))
     assert abs(out[0.058] - out[0.104]) <= 0.104, (
         f'probe invents a rate dependence: {out}')
+
+
+# ------------------------------------------------- replay of the live run
+
+LIVE_LOG = os.path.join(DATA, 'logs', 'turnin_20260912_110549.csv')
+LIVE_MAP = os.path.join(DATA, 'maps', 'porto_mesh')
+
+
+def replay(node, path):
+    """Push a recorded probe CSV back through the node's own callbacks.
+
+    Only the telemetry is replayed -- what the node publishes goes nowhere,
+    because the car in the recording was not listening.  That is exactly the
+    scope of the question: given this stream, would a pulse have fired?
+    The encoder speed is injected directly (the CSV keeps the filtered speed,
+    not the raw wheel angles it was derived from).
+    """
+    from geometry_msgs.msg import Point, PoseStamped
+    from sensor_msgs.msg import Imu, LaserScan
+    from std_msgs.msg import Float32
+    import csv as _csv
+
+    with open(path) as fh:
+        rows = [r for r in _csv.DictReader(fh)
+                if r.get('src') in ('pose', 'fb', 'imu', 'ips')]
+    rclpy_stub.reset_clock()
+    base = rclpy_stub.now_s()
+    t0 = float(rows[0]['t_recv'])
+    for r in rows:
+        rclpy_stub.advance(base + (float(r['t_recv']) - t0)
+                           - rclpy_stub.now_s())
+        if r['src'] == 'fb':
+            node.stub_deliver('/steering', Float32(data=float(r['steer_fb'])))
+        elif r['src'] == 'imu':
+            imu = Imu()
+            imu.header.stamp = stamp_of(rclpy_stub.now_s())
+            imu.angular_velocity.z = float(r['gyro_z'])
+            node.stub_deliver('/imu', imu)
+        elif r['src'] == 'ips':
+            node.stub_deliver('/ips', Point(x=float(r['ips_x']),
+                                            y=float(r['ips_y']), z=0.0))
+        else:
+            scan = LaserScan()
+            scan.header.stamp = stamp_of(rclpy_stub.now_s())
+            scan.ranges = [float(r['lidar_min'])] * 32
+            node.stub_deliver('/lidar', scan)
+            node.speed_est.speed = float(r['v_enc'])
+            ps = PoseStamped()
+            stamp = base + (float(r['pose_stamp']) - t0)
+            ps.header.stamp = stamp_of(stamp)
+            ps.pose.position.x = float(r['x'])
+            ps.pose.position.y = float(r['y'])
+            yaw = float(r['yaw'])
+            ps.pose.orientation.z = math.sin(yaw / 2.0)
+            ps.pose.orientation.w = math.cos(yaw / 2.0)
+            node.stub_deliver('/pit_crew/pose', ps)
+        node.stub_fire_timers()
+        if node.done:
+            break
+    return rows
+
+
+@pytest.mark.skipif(not os.path.exists(LIVE_LOG), reason='live log not kept')
+def test_live_log_would_fire_a_pulse(tmp_path):
+    """The regression for the first live run, which fired nothing in 30 s.
+
+    `data/logs/turnin_20260912_110549.csv` is 88 poses of clean driving on the
+    real display at 0.0584 s: the car is at the probe speed by 1.1 s, tracks
+    the line to |cte| <= 0.15 m, and passes the one admissible trigger on
+    Porto (s 5.98) at t = 2.39 s with the LiDAR at 0.76 m, the gyro at
+    +0.018 rad/s and 0.002 rad of lock on -- every measurement gate open.  Two
+    shipped defaults stopped it anyway:
+
+      * `warmup_s` was 8.0 s, so that crossing was inside warmup; and
+      * `lidar_stop_m` was 0.40 m, which is not a guard on this track.  The
+        LiDAR minimum falls monotonically to 0.408 m at the hairpin entry
+        (11 of 88 samples under 0.50 m) and the run aborted at 5.13 s.
+
+    This replays that stream through the node's own callbacks and requires a
+    pulse -- with the SHIPPED defaults, not test-friendly ones.
+    """
+    from pit_crew import turnin_probe
+    # Everything shipped except the probe speed, which the RECORDING fixes:
+    # that run was launched at 3.0 m/s (the script used to carry its own copy
+    # of the default -- the drift this also fixes), so the node replaying it
+    # has to be told the same target or its own `v_gate` rejects the car.
+    rclpy_stub.set_overrides(dict(
+        raceline_csv=LINE, map_prefix=LIVE_MAP, out_dir=str(tmp_path),
+        v_probe=3.0))
+    try:
+        node = turnin_probe.TurnInProbe()
+    finally:
+        rclpy_stub.set_overrides({})
+    assert node.triggers, 'no trigger point admissible on the safe line'
+    assert not node.get_logger().errors()
+
+    replay(node, LIVE_LOG)
+
+    assert node.abort is None, f'the run was stopped by: {node.abort}'
+    assert node.pulse_id >= 1, (
+        f'no pulse in the live stream: phase {node.phase}, quiet_run '
+        f'{node.quiet_run}, last s {node.s:.2f}, lidar {node.lidar_min:.2f}')
+    fired_s = [s for _pid, s, _sign in node.fired]
+    assert all(min(abs(s - t), node.total_s - abs(s - t)) < 1.0
+               for s in fired_s for t in [min(node.triggers,
+                                              key=lambda x: abs(x - s))]), \
+        f'fired away from a trigger point: {fired_s} vs {node.triggers}'
+
+
+@pytest.mark.skipif(not os.path.exists(LIVE_LOG), reason='live log not kept')
+def test_old_guards_were_the_bug(tmp_path):
+    """The other half of the regression: the old numbers really were the bug.
+
+    Kept so that putting `warmup_s` back to 8.0 -- or `lidar_stop_m` back to
+    0.40 -- fails here rather than silently costing another sim slot.
+    """
+    from pit_crew import turnin_probe
+    rclpy_stub.set_overrides(dict(
+        raceline_csv=LINE, map_prefix=LIVE_MAP, out_dir=str(tmp_path),
+        v_probe=3.0, warmup_s=8.0))
+    try:
+        node = turnin_probe.TurnInProbe()
+    finally:
+        rclpy_stub.set_overrides({})
+    rows = replay(node, LIVE_LOG)
+    assert node.pulse_id == 0, 'warmup 8.0 s should swallow the only crossing'
+    assert node.phase == 'warmup'
+
+    # And the LiDAR threshold: the stream never gets 0.01 m of margin on 0.40,
+    # which is why the live run ended at 5.13 s on the very next scan.
+    lid = [float(r['lidar_min']) for r in rows if r['src'] == 'pose']
+    assert min(lid) < 0.41, f'LiDAR minimum was {min(lid):.3f} m'
+    assert min(lid) > 0.22, 'the shipped guard must NOT trip on this stream'
+    assert sum(x < 0.50 for x in lid) >= 8, 'sub-0.50 m returns are routine'

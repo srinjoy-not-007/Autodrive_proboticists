@@ -186,7 +186,11 @@ class TurnInProbe(Node):
             ('a_brake', 3.5),           # m/s2 used to plan the corner entries
             ('lookahead_m', 0.70),      # pure pursuit, at v_probe
             ('lookahead_tv', 0.25),     # ...plus this many seconds of travel
-            ('warmup_s', 8.0),          # settle before the first pulse
+            # Measured on the first live run (turnin_20260912_110549): the
+            # car is at the probe speed 1.1 s after the start and reaches the
+            # only admissible trigger on Porto at 2.39 s.  The shipped 8.0 s
+            # meant the first lap's trigger was always inside warmup.
+            ('warmup_s', 1.5),          # settle before the first pulse
             # --- gates and guards --------------------------------------------
             ('kappa_max', 0.15),        # 1/m; a trigger window must be flatter
             ('clear_min', 0.60),        # m of corridor either side, at the pulse
@@ -205,7 +209,16 @@ class TurnInProbe(Node):
             ('steer_gate', 0.10),       # rad of actuator; nor with lock on
             ('settle_s', 0.30),         # s of CONSECUTIVE quiet before a pulse
             ('cte_abort', 0.45),        # m; cut a pulse short beyond this
-            ('lidar_stop_m', 0.40),     # m; stop the whole run
+            # 0.40 m was not a guard, it was a timer.  Measured over 88 poses
+            # of ordinary clean driving on the safe line (no pulse ever fired):
+            # the LiDAR minimum falls to 0.408 m at the hairpin entry, with 11
+            # samples under 0.50 -- so the run aborted 5.1 s in, every time,
+            # before warmup even ended.  The car is 0.270 m wide (0.135 m half
+            # width); 0.22 m sustained is genuinely about to hit something,
+            # 0.40 m is Porto.
+            ('lidar_stop_m', 0.22),     # m; stop the whole run
+            ('lidar_stop_n', 3),        # ...only after this many in a row
+            ('lidar_fire_m', 0.35),     # m; do not START a pulse below this
             ('max_pulses', 400),        # stop after this many
             ('max_run_s', 900.0),
             ('stale_pose_s', 0.50),     # watchdog: coast if the pose dries up
@@ -231,6 +244,7 @@ class TurnInProbe(Node):
         self.gyro_span = V['gyro_span']
         self.settle_s = V['settle_s']
         self.cte_abort, self.lidar_stop = V['cte_abort'], V['lidar_stop_m']
+        self.lidar_stop_n, self.lidar_fire = V['lidar_stop_n'], V['lidar_fire_m']
         self.max_pulses, self.max_run_s = V['max_pulses'], V['max_run_s']
         self.stale_pose_s = V['stale_pose_s']
         out_dir = V['out_dir']
@@ -269,6 +283,7 @@ class TurnInProbe(Node):
         self.ips_wz = 0.0
         self._ips_trail = []
         self.lidar_min = float('inf')
+        self._lidar_run = 0
         self.cmd_steer = 0.0
         self.cmd_thr = 0.0
         self.pulse_base = 0.0
@@ -319,8 +334,18 @@ class TurnInProbe(Node):
         self.get_logger().info(
             f'turnin_probe: {len(self.triggers)} trigger points at s '
             f'{[round(s, 2) for s in self.triggers]} on a {self.total_s:.1f} m '
-            f'line; step {self.amp:+.3f} rad for {self.pulse_s:.2f} s at '
-            f'{self.v_probe:.1f} m/s -> {self.path_csv}')
+            f'line; ramp to {self.amp:+.3f} rad at {self.ramp:.2f} rad/s, '
+            f'held {self.pulse_s:.2f} s, at {self.v_probe:.1f} m/s '
+            f'-> {self.path_csv}')
+        if 0 < len(self.triggers) < int(self.n_pulses):
+            # Porto admits exactly ONE: measured, its longest stretch that is
+            # both flatter than kappa_max and wider than clear_min is 4.9 m.
+            # One pulse a lap is ~9.5 s at the probe speed, so size the run
+            # accordingly rather than wondering why they are rare.
+            self.get_logger().warning(
+                f'only {len(self.triggers)} of {int(self.n_pulses)} trigger '
+                f'points are admissible on this line: expect one pulse per '
+                f'lap per point, not {int(self.n_pulses)}')
         if not self.triggers:
             self.get_logger().error(
                 'no straight is both flatter than kappa_max and wider than '
@@ -559,7 +584,12 @@ class TurnInProbe(Node):
         # cannot be crossed that way.
         if self._gyros and (max(self._gyros) - min(self._gyros)) > self.gyro_span:
             return False
-        if self.lidar_min < max(self.lidar_stop, self.clear_min):
+        # NOT `clear_min`: that is a corridor half-width, already enforced
+        # geometrically offline against the map, and the LiDAR minimum is the
+        # nearest return in ANY direction -- on the same clean run its 10th
+        # percentile was 0.484 m, so gating firing on 0.60 m would have
+        # blocked pulses on stretches the map calls 0.68 m wide.
+        if self.lidar_min < self.lidar_fire:
             return False
         for s_t in sorted(self.armed):
             d = (self.s - s_t) % self.total_s
@@ -656,8 +686,16 @@ class TurnInProbe(Node):
     # -- guards, logging, shutdown ----------------------------------------
 
     def guard(self):
+        # Persistence, not a single scan: one short return off a corner post
+        # is not a reason to end a measurement run, and the LiDAR genuinely
+        # sees the inside wall of the hairpin at under half a metre.
         if self.lidar_min < self.lidar_stop:
-            return f'obstacle at {self.lidar_min:.2f} m'
+            self._lidar_run += 1
+        else:
+            self._lidar_run = 0
+        if self._lidar_run >= self.lidar_stop_n:
+            return (f'obstacle at {self.lidar_min:.2f} m for '
+                    f'{self._lidar_run} scans')
         if self.t_start is not None and self.now() - self.t_start > self.max_run_s:
             return f'time limit {self.max_run_s:.0f} s'
         return None
@@ -694,6 +732,14 @@ class TurnInProbe(Node):
         for _ in range(3):
             self.pub_steer.publish(Float32(data=0.0))
             self.pub_thr.publish(Float32(data=0.0))
+        why = self.abort or 'run complete'
+        if not self.fh.closed:
+            # The container's /tmp log has been lost to a devkit restart once
+            # already. The reason belongs in the artefact that is on the host
+            # mount; `turnin_fit.load` ignores any line that is not a stream.
+            self.fh.write(f'# STOPPED: {why}; pulses {self.pulse_id}; '
+                          f'last s {self.s:.2f} cte {self.cte:+.3f} '
+                          f'lidar {self.lidar_min:.3f} v {self.speed_est.speed:.2f}\n')
         if self.abort:
             self.get_logger().warning(f'STOPPED: {self.abort}')
         self.get_logger().info(
