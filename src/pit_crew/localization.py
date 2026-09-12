@@ -46,13 +46,29 @@ class ParticleFilter(Node):
             ('n_beams', 60),
             ('sigma_hit', 0.06),          # m, likelihood field width
             ('beam_temp', 8.0),           # damping on summed beam log-likelihood
-            ('motion_noise_xy', 0.18),   # m per update
+            ('motion_noise_xy', 0.18),   # m per update AT `rate_nominal`
             ('motion_noise_theta', 0.02), # rad per update
             ('init_x', 0.0),
             ('init_y', 0.0),
             ('init_spread', 0.6),
             ('lost_threshold', 0.22),     # normalized score below = lost
-            ('lost_patience', 5),         # consecutive bad scans before reinit
+            ('lost_patience', 5),         # bad scans AT `rate_nominal`; the
+                                          # count actually used is derived from
+                                          # the measured period so the blind
+                                          # window is fixed in SECONDS
+            ('lost_seconds', 0.0),        # >0 overrides the above, in seconds
+            ('max_step_mps', 0.0),        # >0: speed cap for the motion model;
+                                          # 0 = derive from `max_step_m`
+            ('max_step_m', 0.6),          # m per update AT `rate_nominal`
+            # Per-SAMPLE and per-UPDATE constants mean different things at
+            # different sensor rates (0.104 s dev host, 0.088 s in the
+            # image, 0.097 s at the organisers). Both of these are scaled
+            # by the measured scan period so the filter's lag and its
+            # diffusion are fixed in SECONDS; identity at `rate_nominal`,
+            # which is the period every default here was tuned at. Set
+            # `enc_tau` or `rate_nominal` to 0 to get the old behaviour.
+            ('rate_nominal', vehicle.RATE_NOMINAL),
+            ('enc_tau', vehicle.ENC_TAU),   # s; == alpha 0.35 at 0.104 s
             # Velocity input from the calibrated throttle curve (1/0.040).
             # On slow, small Porto a plain random walk is slightly better
             # (0.093 m vs 0.136 m median) and disabling this was tuned to that
@@ -63,20 +79,127 @@ class ParticleFilter(Node):
             # Keep it on: a small cost on slow tracks buys stability on fast ones.
             ('throttle_to_mps', 25.0),
             ('lidar_offset', 0.0),        # vehicle.LIDAR_FROM_POSE to enable
+            # Review items (Sep 11), each opt-in so it can be measured alone:
+            ('keep_prior_weights', False),  # w_k = w_{k-1} * p(z|x) between resamples
+            ('publish_on_reloc', True),     # False: skip the pose after a global reinit
+            ('midpoint_heading', False),    # propagate with mean(prev, now) IMU yaw
+            # ---- teleport handling (Sep 12), ALL default-off ----------------
+            # A collision returns the car to its last numbered checkpoint, at
+            # rest. Measured over 329 real collisions in data/logs: the body's
+            # true speed goes 2.85 -> 0.85 m/s while the wheel encoders go
+            # 3.15 -> 3.02, i.e. the wheels keep spinning and the encoder
+            # over-reads by +2.12 m/s (p90 +3.06) for ~0.4 s. `SpeedEstimator`
+            # therefore marches the whole cloud forward while the car is
+            # standing still. The reset itself is small -- p50 0.65 m, p90
+            # 1.06 m against 0.28 m of normal travel per scan -- which is why
+            # neither `SpeedEstimator.jumped` nor the lost-score branch ever
+            # sees it. See the measurements in docs/STATUS.md.
+            ('checkpoints_csv', ''),        # <map>_checkpoints.csv; '' = off
+            ('teleport_scan_jump', 0.0),    # m; median |dr| between consecutive
+                                            # scans above this = teleport.
+                                            # 0 = off. 0.25 measured 0 false
+                                            # positives in 3582 scans and
+                                            # catches the 12% of resets that
+                                            # move the car more than ~1.5 m.
+            ('teleport_imu_g', 0.0),        # m/s2; |linear accel| above this is
+                                            # an impact. 0 = off. 15.0 measured
+                                            # 0 false positives in 2980 clean
+                                            # scans (clean max 8.76); its
+                                            # DETECTION rate is unmeasured --
+                                            # no bag exists with IMU across a
+                                            # collision.
+            ('teleport_hold_n', 4),         # scans of zero dead-reckoning after
+                                            # a detection (the encoder's
+                                            # phantom speed lasts ~0.4 s)
+            ('teleport_reseed', True),      # reseed the cloud at the nearby
+                                            # checkpoints (needs checkpoints_csv)
+            # ---- telemetry-gap handling (Sep 12), ALL default-off ----------
+            # A stalled simulator (OBS + rosbag on the organisers' box) stops
+            # physics AND telemetry together, so the car does NOT move while
+            # the filter is blind; a stalled bridge or a delayed socket stops
+            # only the telemetry, and the car keeps driving. The filter cannot
+            # tell them apart from one inflated `dt`, and the shipped answer --
+            # dead-reckon the whole interval at the pre-gap encoder speed, up
+            # to `scan_dt_max` x `max_step_mps` = 4.5 m -- is right for one and
+            # catastrophic for the other. Measured on the real collision bag,
+            # see docs/STATUS.md.
+            ('gap_dt', 0.0),                # s; a scan interval longer than
+                                            # this is a telemetry gap. 0 = off
+                                            # (nothing below is consulted).
+            ('gap_step_cap_m', 0.0),        # m; >0 caps the SINGLE motion step
+                                            # taken across a gap. 0 = uncapped.
+            ('gap_noise_mult', 1.0),        # >1 widens the cloud on the
+                                            # post-gap step instead of trusting
+                                            # dead reckoning; the scan update
+                                            # then pulls the particles in.
+            ('lost_patience_min', 1),       # scans; floor under the count
+                                            # `repoint` derives from the
+                                            # measured period. At dt >= 0.35 s
+                                            # that count is 1, so ONE bad-score
+                                            # scan after a gap declares the
+                                            # filter lost and (with
+                                            # publish_on_reloc false) drops the
+                                            # pose the controller is waiting
+                                            # for.
+            ('scan_dt_max', 0.5),           # s; the motion-step clamp on the
+                                            # measured scan interval.
+            ('enc_gap_max', 0.0),           # s; >0 overrides the encoder's own
+                                            # `MAX_ENC_GAP` 0.5 s ceiling. The
+                                            # two coincide by default, so a gap
+                                            # of 0.5 s or more is dead-reckoned
+                                            # at 100% of the STALE pre-gap
+                                            # speed. Raise BOTH together.
+            ('teleport_cp_radius', 2.5),    # m; only checkpoints this close to
+                                            # the current estimate are seeded.
+                                            # 0 = all of them, which measured
+                                            # WORSE (p90 peak error 2.25 m
+                                            # against 0.32 m) because the cloud
+                                            # can cross to the far side.
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
          self.init_spread, self.lost_thresh, self.lost_patience,
-         self.throttle_to_mps, self.lidar_offset) = [x.value for x in p]
+         self.lost_seconds, self.max_step_mps, self.max_step_m,
+         self.rate_nominal, self.enc_tau,
+         self.throttle_to_mps, self.lidar_offset, self.keep_prior_w,
+         self.publish_on_reloc, self.midpoint_heading,
+         checkpoints_csv, self.tp_scan_jump, self.tp_imu_g,
+         self.tp_hold_n, self.tp_reseed,
+         self.gap_dt, self.gap_step_cap_m, self.gap_noise_mult,
+         self.lost_patience_min, self.scan_dt_max, self.enc_gap_max,
+         self.tp_cp_radius) = [x.value for x in p]
         self.speed_cmd = 0.0
+        # Teleport handler state. Every one of these is inert while both
+        # `teleport_scan_jump` and `teleport_imu_g` are 0.0.
+        self.checkpoints = None
+        self._prev_ranges = None
+        self._tp_hold = 0
+        self._tp_events = 0
+        self.imu_accel = 0.0
+        if checkpoints_csv:
+            self.load_checkpoints(checkpoints_csv)
 
         self.load_map(map_prefix)
         self.load_centerline(centerline_csv)
 
         self.imu_yaw = None
+        self.imu_yaw_prev = None
+        self.imu_received = 0.0
+        self._just_relocalized = False
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
+        if self.enc_gap_max > 0.0:
+            self.speed_est.max_gap = float(self.enc_gap_max)
         self.last_t = None
         self.lost_count = 0
+        # Both of these are SAMPLE counts the code compares against, derived
+        # from a time so that they mean the same thing on a 0.088 s host and a
+        # 0.104 s one. Seeded with the nominal answer for the first scan, when
+        # no period has been measured yet.
+        self._patience = max(1, int(self.lost_patience))
+        # Metres-per-update is a SPEED cap in disguise: 0.6 m is 5.77 m/s at
+        # 0.104 s and 6.82 at 0.088, and the car reaches 6.58 m/s. Cap the
+        # speed, which is a property of the vehicle, not of the host.
+        self._v_cap = self.speed_cap()
         self.score = 0.0
         self.initialized = False
         # Where to seed the particle cloud. The submission entrypoint does NOT
@@ -137,6 +260,98 @@ class ParticleFilter(Node):
         self.grid = img
         self.H, self.W = img.shape
 
+    def load_checkpoints(self, path):
+        """Numbered checkpoints (x, y, yaw) from `<map>_checkpoints.csv`.
+
+        These are read out of the simulator scene OFFLINE by
+        `tools/map_from_mesh.py`, so using them at runtime touches no
+        restricted topic -- it is map data, like the occupancy grid. The car
+        reappears 0.14-0.16 m short of the checkpoint it last passed, heading
+        along the line, which makes them an exact prior for where a reset put
+        the car. Spawn rows and the two named finish lines are skipped: only
+        the numbered ones are reset targets.
+        """
+        import csv as _csv
+        if not os.path.exists(path):
+            self.get_logger().warn(f'no checkpoints at {path}; teleport '
+                                   f'reseed disabled')
+            return
+        rows = []
+        with open(path) as f:
+            for r in _csv.DictReader(f):
+                if r.get('kind') == 'checkpoint' and str(r.get('name', '')).isdigit():
+                    rows.append((float(r['x']), float(r['y']), float(r['yaw'])))
+        if rows:
+            self.checkpoints = np.asarray(rows, dtype=float)
+            self.get_logger().info(
+                f'{len(rows)} numbered checkpoints loaded from {path}')
+
+    def teleport_detected(self, ranges, scan):
+        """True when this scan cannot be explained by having driven here.
+
+        Two independent branches, each off by default, because only one of
+        them is validatable offline:
+
+        * **scan jump** -- the median beam-wise range change between
+          consecutive scans. Measured on the clean 268 s Porto bag
+          (data/bags/exp_ay50_d180_181558): p50 0.052 m, p99 0.107, max 0.139
+          over 2979 scans, so 0.25 m is far outside anything driving produces.
+          Spliced against real checkpoint geometry it fires on 2 of 17
+          synthetic resets with 0 false positives in 3582 scans. The 12% is
+          not a tuning failure: a p50 reset moves the car 0.65 m where one
+          scan period of normal driving already moves it 0.28 m, so most
+          resets are genuinely indistinguishable from driving.
+        * **IMU impact** -- every reset is preceded by hitting a wall, and the
+          clean bag's |linear acceleration| never exceeds 8.76 m/s2 over 2980
+          scans (p99.9 8.42). A threshold of 15 is therefore free of false
+          positives on the only data that exists. Its detection rate is
+          UNMEASURED: no bag has been recorded with IMU through a collision.
+          Record one with BAG=1 before trusting this branch.
+        """
+        if self.tp_imu_g > 0.0 and self.imu_accel > self.tp_imu_g:
+            return 'imu'
+        if self.tp_scan_jump > 0.0 and self._prev_ranges is not None:
+            r0, r1 = self._prev_ranges, ranges
+            if r0.shape == r1.shape:
+                g = (np.isfinite(r0) & np.isfinite(r1)
+                     & (r0 > scan.range_min) & (r0 < scan.range_max * 0.95)
+                     & (r1 > scan.range_min) & (r1 < scan.range_max * 0.95))
+                if np.count_nonzero(g) >= 50:
+                    if float(np.median(np.abs(r1[g] - r0[g]))) > self.tp_scan_jump:
+                        return 'scan'
+        return None
+
+    def seed_at_checkpoints(self):
+        """Resample the cloud at the checkpoints a reset could have used.
+
+        Only checkpoints within `teleport_cp_radius` of the current estimate
+        are candidates: the reset moves the car backwards along the track, not
+        to the far side of it, and seeding all 21 measured worse in the replay
+        harness (p90 peak error 2.25 m against 0.32 m for the gated version).
+        Heading comes from the checkpoint's own yaw, which is exactly what the
+        car reappears with, so the IMU-yaw offset is re-derived rather than
+        carried over.
+        """
+        if self.checkpoints is None or self.imu_yaw is None:
+            return False
+        cx, cy = self.checkpoints[:, 0], self.checkpoints[:, 1]
+        ex = float(np.average(self.px, weights=self.w))
+        ey = float(np.average(self.py, weights=self.w))
+        if self.tp_cp_radius > 0.0:
+            sel = np.flatnonzero(np.hypot(cx - ex, cy - ey) <= self.tp_cp_radius)
+            if sel.size == 0:
+                sel = np.array([int(np.argmin(np.hypot(cx - ex, cy - ey)))])
+        else:
+            sel = np.arange(len(cx))
+        j = sel[np.random.randint(0, sel.size, self.n_p)]
+        self.px = cx[j] + np.random.normal(0, 0.20, self.n_p)
+        self.py = cy[j] + np.random.normal(0, 0.20, self.n_p)
+        self.pth = (self.checkpoints[j, 2] - self.imu_yaw
+                    + np.random.normal(0, 0.12, self.n_p))
+        self.w = np.ones(self.n_p) / self.n_p
+        self.lost_count = 0
+        return True
+
     def load_centerline(self, path):
         if os.path.exists(path):
             c = np.loadtxt(path, delimiter=',')
@@ -173,6 +388,7 @@ class ParticleFilter(Node):
         self.w = np.ones(self.n_p) / self.n_p
         self.initialized = True
         self.lost_count = 0
+        self._just_relocalized = True
         self.get_logger().warn('RELOCALIZING (centerline-wide resample)')
 
     # -------------------------------------------------------------- sensors
@@ -195,7 +411,12 @@ class ParticleFilter(Node):
         q = msg.orientation
         if not all(math.isfinite(v) for v in (q.x, q.y, q.z, q.w)):
             return
+        if self.tp_imu_g > 0.0:
+            a = msg.linear_acceleration
+            self.imu_accel = math.hypot(a.x, a.y)
         self.imu_yaw = yaw_from_quat(msg.orientation)
+        if self.imu_yaw_prev is None:
+            self.imu_yaw_prev = self.imu_yaw
         self.imu_received = self.get_clock().now().nanoseconds * 1e-9
 
     def on_scan(self, scan: LaserScan):
@@ -222,15 +443,92 @@ class ParticleFilter(Node):
             return
         if self.last_t is not None and t <= self.last_t:
             return
-        dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.5)
+        dt = 0.0 if self.last_t is None else min(
+            max(t - self.last_t, 0.0), float(self.scan_dt_max))
         self.last_t = t
+        # The encoders share the scan's WebSocket frame, so the scan period IS
+        # the encoder sample period. Everything per-sample follows it; see
+        # `repoint`.
+        self.repoint(dt)
+
+        # Teleport handling, ahead of the motion model because what it changes
+        # is the motion model's input. Inert unless a detector is enabled.
+        if self.tp_scan_jump > 0.0 or self.tp_imu_g > 0.0:
+            full = np.asarray(scan.ranges, dtype=float)
+            why = self.teleport_detected(full, scan)
+            if why:
+                self._tp_events += 1
+                self._tp_hold = max(1, int(self.tp_hold_n))
+                # The encoders hold a body that has stopped: drop the filtered
+                # speed AND the stored wheel angles, or the next derivative is
+                # taken across the standstill.
+                self.speed_est.reset()
+                seeded = self.tp_reseed and self.seed_at_checkpoints()
+                self.get_logger().warn(
+                    f'TELEPORT detected ({why}); hold {self._tp_hold} scans, '
+                    f'reseeded={seeded}')
+            self._prev_ranges = full
 
         self.predict(dt)
         self.update(scan)
+        self.imu_yaw_prev = self.imu_yaw
+        if self._just_relocalized and not self.publish_on_reloc:
+            # The centroid of a track-wide cloud is not a pose; let the
+            # controller's stale gate cover one missing update instead.
+            self._just_relocalized = False
+            return
+        self._just_relocalized = False
         self.publish(scan.header.stamp)
 
+    def speed_cap(self):
+        """The motion model's cap, as a SPEED.
+
+        `max_step_m` is metres per UPDATE, which is a speed cap in disguise:
+        0.6 m is 5.77 m/s at a 0.104 s period and 6.82 m/s at 0.088 s, either
+        side of the 6.58 m/s the car actually reaches, so the dev host and the
+        submission image silently dead-reckon under different models exactly
+        where the car is fastest. Identity at `rate_nominal`.
+        """
+        if self.max_step_mps > 0.0:
+            return float(self.max_step_mps)
+        return (float(self.max_step_m)
+                / max(self.rate_nominal or vehicle.RATE_NOMINAL, 1e-3))
+
+    def repoint(self, dt):
+        """Re-point every per-SAMPLE constant at the measured scan period.
+
+        The encoders share the scan's WebSocket frame, so the scan period IS
+        the encoder sample period. Each of these counts samples and means a
+        TIME; every formula is the identity at `rate_nominal`.
+        """
+        if not dt > 0.0:
+            return
+        if self.enc_tau > 0.0:
+            # Low-pass lag stays 0.193 s on a 9.6 Hz host and an 11.4 Hz one.
+            self.speed_est.alpha = vehicle.alpha_for_lag(dt, self.enc_tau)
+            # ...and the reject-persistence window stays 0.624 s, rather than
+            # shrinking to 0.528 s of steering by a stale speed at 0.088 s.
+            self.speed_est.reject_max = vehicle.reject_max_for_dt(dt)
+        # How many consecutive bad scans are a lost filter. 5 at 0.104 s is
+        # 0.52 s of blind driving -- 3.1 m at 6 m/s -- and the same 5 is only
+        # 0.44 s at 0.088. Fix the time, derive the count.
+        base = (float(self.lost_seconds) if self.lost_seconds > 0.0
+                else self.lost_patience
+                * (self.rate_nominal or vehicle.RATE_NOMINAL))
+        # ...with a floor in SCANS: at dt >= 0.35 s the derived count is 1, so
+        # a single bad-score scan immediately after a gap -- exactly when one
+        # is most likely -- declares the filter lost.
+        self._patience = max(int(getattr(self, 'lost_patience_min', 1)),
+                             int(round(base / dt)))
+
     def predict(self, dt):
-        head = self.imu_yaw + self.pth
+        yaw = self.imu_yaw
+        if self.midpoint_heading and self.imu_yaw_prev is not None:
+            # The step covers [t_prev, t_now]; using the end-of-interval yaw
+            # biases every step in a corner by half the heading change.
+            d = (self.imu_yaw - self.imu_yaw_prev + math.pi) % (2 * math.pi) - math.pi
+            yaw = self.imu_yaw_prev + 0.5 * d
+        head = yaw + self.pth
         # Cap per-update travel: a bad speed sample must not fling the whole
         # particle set off the map (from which there is no recovery).
         # A checkpoint reset teleports the car, so the motion model has nothing
@@ -240,15 +538,52 @@ class ParticleFilter(Node):
         # checkpoint rather than fighting a confident wrong prior. The existing
         # lost-score relocalization still covers the case where it does not.
         jumped = self.speed_est.consume_jump()
+        # A detected teleport does the same thing for several scans: the
+        # encoder over-reads by +2.12 m/s (p50, measured on 329 real
+        # collisions) for ~0.4 s after the reset, so dead reckoning must sit
+        # still for that long rather than march the cloud forward.
+        # getattr: the rate-invariance tests lift `predict` onto a synthetic
+        # namespace that carries only the fields it is testing.
+        if getattr(self, '_tp_hold', 0) > 0:
+            self._tp_hold -= 1
+            jumped = True
         # Encoder speed when available, throttle estimate as fallback
         v = self.speed_est.speed if self.speed_est.speed > 1e-3 else self.speed_cmd
-        step = 0.0 if jumped else float(np.clip(v * dt, -0.6, 0.6))
-        noise = self.noise_xy * (4.0 if jumped else 1.0)
+        # The cap is on the SPEED (see `_v_cap`): a per-update distance cap
+        # silently truncates dead reckoning above 0.6/dt m/s, which is 5.77 m/s
+        # on the dev host and 6.82 in the submission image, either side of the
+        # 6.58 m/s the car actually reaches.
+        step = 0.0 if jumped else float(
+            np.clip(v, -self._v_cap, self._v_cap) * dt)
+        # A telemetry gap: the interval is far longer than a scan period, so
+        # this ONE step carries the whole blind window at the pre-gap encoder
+        # speed. If the SIMULATOR stalled, the car did not move at all and the
+        # step is pure error; if only the telemetry stalled, it is roughly
+        # right. Inert while `gap_dt` is 0.
+        gap = getattr(self, 'gap_dt', 0.0) > 0.0 and dt > self.gap_dt
+        if gap:
+            cap = getattr(self, 'gap_step_cap_m', 0.0)
+            if cap > 0.0:
+                step = float(np.clip(step, -cap, cap))
+        # Per-update noise is per-TIME noise only at one rate; scale it so the
+        # cloud diffuses at the same m/sqrt(s) whatever the host does.
+        ns = (vehicle.noise_scale_for_dt(dt, self.rate_nominal)
+              if self.rate_nominal > 0.0 else 1.0)
+        noise = self.noise_xy * ns * (4.0 if jumped else 1.0)
+        # ...and a gap is a reason to be LESS certain, not to relocalize: widen
+        # the cloud over the blind window and let the scan update pick the pose
+        # out of it.
+        gm = float(getattr(self, 'gap_noise_mult', 1.0)) if gap else 1.0
+        if gm > 1.0:
+            noise = max(noise, self.noise_xy * ns * gm)
         if jumped:
             self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
         self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
         self.py += step * np.sin(head) + np.random.normal(0, noise, self.n_p)
-        self.pth += np.random.normal(0, self.noise_th, self.n_p)
+        # The heading-offset walk is per-update too, and scaling only the xy
+        # one would make the RATIO of translational to rotational diffusion
+        # rate-dependent -- worse than either being uniformly wrong.
+        self.pth += np.random.normal(0, self.noise_th * ns * gm, self.n_p)
 
     def update(self, scan: LaserScan):
         r = np.asarray(scan.ranges, dtype=np.float64)
@@ -287,6 +622,11 @@ class ParticleFilter(Node):
         logw = -0.5 * np.sum((d / self.sigma_hit) ** 2, axis=1) / self.beam_temp
         logw -= logw.max()
         w = np.exp(logw)
+        if self.keep_prior_w:
+            # Proper SIR: between resampling steps the prior weight carries
+            # the evidence of earlier scans; discarding it makes every
+            # non-resampled update a one-scan estimator.
+            w = w * self.w
 
         # Particles inside a wall or off the map are impossible
         pgx = ((self.px - self.ox) / self.res).astype(np.int32)
@@ -303,7 +643,7 @@ class ParticleFilter(Node):
             # returning, or the filter dead-reckons away forever.
             self.lost_count += 1
             self.score = 0.0
-            if self.lost_count >= self.lost_patience:
+            if self.lost_count >= self._patience:
                 self.init_particles_global()
             return
         self.w = w / s
@@ -311,7 +651,7 @@ class ParticleFilter(Node):
 
         if self.score < self.lost_thresh:
             self.lost_count += 1
-            if self.lost_count >= self.lost_patience:
+            if self.lost_count >= self._patience:
                 self.init_particles_global()
                 return
         else:

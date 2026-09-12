@@ -10,10 +10,18 @@ Topology-based (no clean lap required):
 
 Output: TUMFTM-format CSV (x_m,y_m,w_tr_right_m,w_tr_left_m) + QC plot.
 
+`<prefix>_traj.csv` is the recon drive. When there is none -- a map rasterised
+straight from the simulator's collision mesh has no recon behind it -- one is
+synthesised from `<prefix>_checkpoints.csv`, the scene's own ordered lap
+definition. `--dilate 0` turns off the wall sealing those exact maps do not
+need.
+
 Usage: .venv/bin/python tools/extract_centerline.py data/maps/track_v1 [out_prefix]
+       .venv/bin/python tools/extract_centerline.py data/maps/porto_mesh out --dilate 0
 """
 
 import math
+import os
 import sys
 
 import numpy as np
@@ -41,6 +49,64 @@ def load_map(prefix):
 def load_traj(csv_path):
     d = np.genfromtxt(csv_path, delimiter=',', names=True)
     return d['x'], d['y']
+
+
+def traj_from_checkpoints(cp_csv, step=0.10):
+    """A synthetic recon trajectory from the simulator's own lap definition.
+
+    Everything downstream wants a driven trajectory, but all it is ever used
+    for is evidence of where the car may go and which way round: flood-fill
+    seeds, waypoint anchors for the skeleton trace, the anchor the
+    trajectory-anchored method centres, and the direction check at the end.
+
+    `map_from_mesh.py` already pulls the track's Checkpoints out of the Unity
+    scene, and they are exactly that evidence -- an ordered ring of gates in
+    the racing direction, on the drivable surface, straight from the scene
+    that defines the lap. Verified on all seven circuits in the 2026 image:
+    every numbered checkpoint lands in free space, and both the chord chain
+    and the periodic spline through them stay 100% inside the flood-filled
+    corridor (largest gap between consecutive gates 3.76 m, on ICRA-2026).
+
+    That removes the recon lap from the unseen-track drill entirely: no blind
+    Follow-the-Gap run, no teleports from a colliding recon, no partial map.
+    """
+    import csv as _csv
+    rows = [r for r in _csv.DictReader(open(cp_csv))
+            if r['kind'] == 'checkpoint' and r['name'].lstrip('-').isdigit()]
+    if len(rows) < 8:
+        raise SystemExit(f'{cp_csv}: only {len(rows)} numbered checkpoints; '
+                         'not enough to define a lap')
+    rows.sort(key=lambda r: int(r['name']))
+    xy = np.array([[float(r['x']), float(r['y'])] for r in rows])
+    tck, _ = splprep([xy[:, 0], xy[:, 1]], s=0, per=True)
+    ring = np.column_stack(splev(np.linspace(0, 1, 4000, endpoint=False), tck))
+    seg = np.hypot(*np.diff(np.vstack([ring, ring[:1]]), axis=0).T)
+    s_cum = np.concatenate([[0.0], np.cumsum(seg)])
+    want = np.arange(0.0, s_cum[-1], step)
+    tx = np.interp(want, s_cum, np.append(ring[:, 0], ring[0, 0]))
+    ty = np.interp(want, s_cum, np.append(ring[:, 1], ring[0, 1]))
+    return tx, ty, s_cum[-1], len(rows)
+
+
+def ensure_traj(prefix):
+    """Path to `<prefix>_traj.csv`, synthesising it from checkpoints if absent.
+
+    Written to disk rather than kept in memory because the launch scripts read
+    the first row of it for the initial pose.
+    """
+    path = prefix + '_traj.csv'
+    if os.path.exists(path):
+        return path
+    cp = prefix + '_checkpoints.csv'
+    if not os.path.exists(cp):
+        raise SystemExit(f'{path} not found and no {cp} to synthesise it from')
+    tx, ty, loop, n = traj_from_checkpoints(cp)
+    yaw = np.arctan2(np.gradient(ty), np.gradient(tx))
+    t = np.arange(len(tx)) * 0.05          # a plausible 20 Hz stamp, unused
+    np.savetxt(path, np.column_stack([t, tx, ty, yaw]), delimiter=',',
+               fmt='%.4f', header='t,x,y,yaw', comments='')
+    print(f'  synthesised {path} from {n} checkpoints ({loop:.1f} m ring)')
+    return path
 
 
 def prune_to_cycle(skel):
@@ -321,10 +387,21 @@ def main():
     out = sys.argv[2] if len(sys.argv) > 2 else prefix + '_centerline'
 
     free, occ, res, ox, oy = load_map(prefix)
-    tx, ty = load_traj(prefix + '_traj.csv')
+    tx, ty = load_traj(ensure_traj(prefix))
 
-    # Seal wall gaps and flood the drivable corridor from trajectory seeds
-    solid = ndimage.binary_dilation(occ, iterations=3)
+    # Seal wall gaps and flood the drivable corridor from trajectory seeds.
+    #
+    # The dilation is a RECON-map repair: a LiDAR-built map has gaps in its
+    # walls where no ray happened to land, and a flood fill leaks through
+    # them, so three cells (0.075 m) of sealing buys a corridor that is
+    # closed at the cost of being 0.075 m narrower per side. A map rasterised
+    # from the simulator's own collision mesh has no gaps -- the boundaries
+    # are closed solid tubes 0.254 m thick -- so on those the dilation only
+    # throws away 0.15 m of usable track width. `--dilate 0` keeps it.
+    dil = 3
+    if '--dilate' in sys.argv:
+        dil = int(sys.argv[sys.argv.index('--dilate') + 1])
+    solid = ndimage.binary_dilation(occ, iterations=dil) if dil else occ
     corridor_all = free & ~solid
     lbl, n = ndimage.label(corridor_all)
     seeds = []

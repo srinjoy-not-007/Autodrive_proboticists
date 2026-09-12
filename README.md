@@ -58,25 +58,46 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-Shipping config = safe centerline + MPC, ay 5.0 / ax 6.5 / brake 4.0, with the
-controller capping its own steering by the lateral grip that exists at the
-current speed and `brake_gain` 0.3 giving it real braking. Measured:
+Shipping config (Sep 12) = **mpc3** on the curvature-rate-limited mesh raceline
+`porto_mesh_cr_dk0.8.csv`, with `rate_adaptive` (timing terms scaled by the
+measured sensor period), `w_dcmd` 50 + `cmd_tau` 0.10 (steering limit-cycle
+damping), `steer_tau` 0.04 (rack lag in the rollout) and a corridor barrier at
+`barrier_margin` 0.34 — 0.40 on Porto's own line — over localization with
+`max_step_mps` 9.0 and `publish_on_reloc` off. Everything ships as an
+uncommented default in `submission/autodrive_devkit.sh`. The sensor period the
+organisers' box delivers is unknown, so every number below is quoted with the
+period it was measured at (OFFICIAL race = simulator lap timer + 10 s/collision):
 
-| Track | Result |
-|---|---|
-| Porto (practice) | **40 laps, 0 collisions**, best **9.01 s**, 10-lap race **91.4 s** |
-| ICRA — never tuned on | **29 laps, 0 collisions**, median **16.53 s/lap** |
-| Follow-the-Gap alone, any track | 11 laps, 0 collisions, 33.43 s — clears qualification |
+| Track | Real display, 0.058 s | Xvfb, 0.09-0.10 s |
+|---|---|---|
+| Porto (qualifier) | **32 laps, 0 collisions, 70.13 s** (69.36 s at margin 0.34) | **100 laps, 0 collisions, 71.91 s** |
+| SRL 2025 CDC-TF — never tuned on | — | 32 laps, **2** collisions, 101.9 s (fast line; the roomier `fast3` line is collision-free but missed a checkpoint once) |
+| SRL 2025 ICRA — never tuned on | — | 32 laps, 0 collisions, **140.4 s** (fast line) |
+| ICRA 2026 — never tuned on | — | 32 laps, 0 collisions, 148.3 s |
+| Legacy `mpc` on the safe line (fallback) | never driven | 32 laps, 0 collisions, 78.4 s |
 
-The published winning lap on this same Porto track is 6.53 s (65.41 s race).
+Baseline on `main` is 89.6 s. Four real-display runs of earlier configurations
+failed identically (10-11 collisions, always the same hairpin entry) before the
+corridor barrier; the display, not Xvfb, is the gate. See `docs/STATUS.md`,
+"NEXT SESSION", and `docs/FINALS_RUNBOOK.md` for the finals procedure.
+
+The fastest published lap on this same Porto track is **6.46 s** (VAUL, ICRA
+2026 qualification), for a ~65 s race. Our median display lap is 6.94-7.00 s and
+our best 6.87 s, so the gap is now ~7 %. It is not the line — 76 swept
+candidates span 0.10 s/lap — and not the tracker: of the plan-side gap, ~90 % is
+the lateral-acceleration cap (planning at the winners' ay 9.0 alone takes the
+ideal lap 7.04 → 6.35 s) and ~10 % is longitudinal, where the simulator's own
+speed servo saturates at 4.2-4.7 m/s² against the profile's 6.5. See
+`docs/STATUS.md`, "NEXT SESSION".
 
 Until 2026-08-28 this section said the remaining gap was a grip cliff, and that
 the ceiling had been "demonstrated four independent ways". That was wrong: all
 four were measured while the controller had **no braking authority** — the
 braking branch was unreachable, so the car shed speed only by coasting while the
 velocity profile assumed 4 m/s² of deceleration. Fixing it took the usable
-lateral-acceleration cap from 3.5 to 5.0 and the race from 97.2 to 91.4 s.
-`docs/reviews/deepak-g.md` has the ladder.
+lateral-acceleration cap from 3.5 to 5.0 (later re-tuned to 4.5 alongside the
+jerk-limiter fix) and the race from 97.2 to 91.4 s. `docs/reviews/deepak-g.md`
+has the ladder.
 
 `run_race_stack.sh` also exists but starts the arbiter, which measurably makes
 things *worse* — see `docs/STATUS.md`.

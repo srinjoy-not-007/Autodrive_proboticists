@@ -63,7 +63,7 @@ class MPCTracker(Node):
             ('use_measured_speed', False),   # encoder speed for prediction
             ('rate_limited_rollout', False), # actuator limit inside the horizon
             ('windowed_index', False),   # local path search instead of global
-            ('ay_limit', 4.5),           # m/s2 the tyres deliver; 0 disables
+            ('ay_limit', 7.8),           # 1.3x the planned ay: correction headroom; 0 disables
             ('grip_watchdog', False),    # shed speed when the tyres let go
             ('grip_ratio_min', 0.60),    # achieved/asked curvature below this = sliding
             ('grip_cut', 0.75),          # speed multiplier applied per bad sample
@@ -76,13 +76,20 @@ class MPCTracker(Node):
             ('n_candidates', 9),         # first-step options searched per cycle
             ('control_hz', 50.0),
             ('steer_rate_limit', 3.2),   # rad/s, the actuator's real limit
-            ('pose_blend', 0.55),
+            ('pose_blend', 1.0),         # 0.55 lagged the pose ~0.07 s; measured no benefit
+            ('cmd_delay_s', 0.18),       # actuator dead time to predict through; 0 = off
+            ('delay_model', 'bicycle'),  # 'gyro': measured yaw rate + change in commanded curvature
+            ('frenet_progress', False),  # advance the reference by ds*cos(e_yaw)/(1-kappa*e_lat)
+            ('blend_gate_m', 0.0),       # innovation above this takes the measurement whole; 0 = off
+            ('rollout_profile_speed', False),  # advance v along the horizon from the profile
+            ('kappa_span_m', 0.5),       # half-width of the kappa/yaw reference smoothing
+            ('pose_qos_depth', 10),      # 1 = never replay a backlog of stale poses
             ('max_predict_s', 0.35),
             ('brake_horizon_s', 0.35),
             ('throttle_gain', 0.040),
             ('brake_gain', 0.05),        # real braking; 0 disables (see below)
             ('throttle_kp', 0.0),        # close the speed loop; 0 = open loop
-            ('throttle_a_gain', 0.0),    # throttle per m/s2 of planned accel
+            ('throttle_a_gain', 0.02),   # throttle per m/s2 of planned accel (0.04: 10 coll/100 laps)
         ])
         (raceline_csv, self.speed_scale, self.N, self.dt, self.min_step_m,
          self.stuck_seconds, self.stuck_distance, self.escape_seconds,
@@ -93,7 +100,9 @@ class MPCTracker(Node):
          self.grip_ratio_min, self.grip_cut, self.grip_recover,
          self.grip_floor,
          self.w_lat, self.w_yaw, self.w_steer, self.w_rate, self.n_cand,
-         control_hz, self.steer_rate, self.pose_blend, self.max_predict,
+         control_hz, self.steer_rate, self.pose_blend, self.cmd_delay,
+         self.delay_model, self.frenet_progress, self.blend_gate, self.rollout_profile_speed, kappa_span_m,
+         pose_qos_depth, self.max_predict,
          self.brake_horizon, throttle_gain, brake_gain,
          throttle_kp, throttle_a_gain) = [x.value for x in p]
         self.control_dt = 1.0 / control_hz
@@ -107,7 +116,7 @@ class MPCTracker(Node):
         self.a_prof = rl[:, 6] if rl.shape[1] > 6 else np.zeros(len(rl))
         seg = np.hypot(np.diff(self.xy[:, 0]), np.diff(self.xy[:, 1]))
         self.spacing = float(np.median(seg)) if len(seg) else 0.1
-        span = max(1, int(round(0.5 / max(self.spacing, 1e-3))))
+        span = max(1, int(round(kappa_span_m / max(self.spacing, 1e-3))))
         fwd = np.roll(self.xy, -span, axis=0) - np.roll(self.xy, span, axis=0)
         self.path_yaw = np.arctan2(fwd[:, 1], fwd[:, 0])
         self.kappa = ndimage.uniform_filter1d(rl[:, 4], size=2 * span + 1,
@@ -139,6 +148,7 @@ class MPCTracker(Node):
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         self.steer = 0.0
         self._trail = []            # (t, x, y) of the localized pose
+        self._cmd_hist = []         # (t, steer) as published, for delay prediction
         self._escape_until = None
         self._escape_steer = 0.0
         self._stuck_count = 0
@@ -150,7 +160,8 @@ class MPCTracker(Node):
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
-        self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 10)
+        self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose,
+                                 int(pose_qos_depth))
         self.create_subscription(Imu, f'{ns}/imu', self.on_imu, qos)
         for side in ('left', 'right'):
             self.create_subscription(
@@ -255,6 +266,8 @@ class MPCTracker(Node):
             return
         px, py, pyaw = self.predicted_state()
         a = self.pose_blend
+        if self.blend_gate > 0.0 and math.hypot(mx - px, my - py) > self.blend_gate:
+            a = 1.0          # a big innovation is a correction, not jitter
         self.pose = (px + a * (mx - px), py + a * (my - py),
                      pyaw + a * wrap(myaw - pyaw), t)
         # Measured travel, for stuck detection. `self.speed` is the *commanded*
@@ -312,6 +325,70 @@ class MPCTracker(Node):
                 y + v * math.sin(yaw_mid) * dt,
                 yaw + self.gyro_z * dt)
 
+    def record_cmd(self, steer):
+        t = self.now()
+        self._cmd_hist.append((t, float(steer)))
+        keep = t - max(self.cmd_delay, 0.0) - 0.5
+        while len(self._cmd_hist) > 2 and self._cmd_hist[0][0] < keep:
+            self._cmd_hist.pop(0)
+
+    def predict_through_delay(self, x, y, yaw):
+        """Where the car will be when the command chosen NOW takes effect.
+
+        Measured (latency_probe.py): a steering command needs a median 0.135 s
+        before the actuator feedback moves at all, because the devkit bridge is
+        request/response -- it hands the simulator whatever we last published,
+        once per ~11 Hz frame. During that dead time the car keeps driving on
+        the commands already in flight. Optimising from the *current* pose
+        therefore chooses a steering angle for a place the car has already
+        left: at 3.4 m/s that is 0.46 m, which is 40% of the curvature ramp at
+        the one corner that produces every collision.
+
+        Integrate the kinematic bicycle forward by `cmd_delay` using, at each
+        sub-step, the command that will be acting on the actuator then -- the
+        one published `cmd_delay` earlier. The candidate search then starts
+        from the last published angle, which is what the actuator will hold
+        when the new one arrives.
+
+        Swept on Porto, 32 laps each, same session (Sep 11): 0 -> 89.61 s,
+        0.09 -> 88.32, 0.135 -> 88.03, **0.18 -> 87.32**, 0.24 -> 88.00, all
+        zero collisions. 0.18 is the measured 0.135 s plus ~0.04 s of
+        estimation lag, which is where a review put the effective delay too.
+        Re-measure with latency_probe.py on any image whose sensor rate
+        differs (the -compete images are reported to run faster).
+        """
+        v = max(self.measured_speed(), 0.4)
+        now = self.now()
+        n = max(1, int(round(self.cmd_delay / 0.01)))
+        dt = self.cmd_delay / n
+        hist = self._cmd_hist
+        j = 0
+        kap0 = None
+        for k in range(n):
+            t_eff = now + k * dt - self.cmd_delay
+            while j + 1 < len(hist) and hist[j + 1][0] <= t_eff:
+                j += 1
+            delta = hist[j][1] if hist else self.steer
+            kap = (vehicle.achieved_curvature(delta)
+                   if self.delay_model == 'understeer'
+                   else math.tan(delta) / vehicle.WHEELBASE)
+            if self.delay_model == 'gyro':
+                # The bicycle model over-rotates at large steering angles
+                # (measured: hairpin cross-track p50 0.07 -> 0.15 m when the
+                # pure model was used here). The gyro says what the car is
+                # really doing under the command acting now; add only the
+                # change the in-flight commands will make on top of that.
+                if kap0 is None:
+                    kap0 = kap
+                yaw_rate = self.gyro_z + v * (kap - kap0)
+            else:
+                yaw_rate = v * kap
+            yaw_mid = yaw + 0.5 * yaw_rate * dt
+            x += v * math.cos(yaw_mid) * dt
+            y += v * math.sin(yaw_mid) * dt
+            yaw = wrap(yaw + yaw_rate * dt)
+        return x, y, yaw
+
     def rollout_cost(self, delta0, e_lat, e_yaw, i0, v):
         """Cost of holding delta0 first, then relaxing towards the path.
 
@@ -336,6 +413,11 @@ class MPCTracker(Node):
         # the two, so fast tracks are unaffected.
         ds = max(v * self.dt, self.min_step_m)
         for k in range(self.N):
+            if self.rollout_profile_speed and k > 0:
+                # The car brakes into corners: hold the preview to the path
+                # it will actually cover in each step, not a constant speed.
+                vk = min(v, float(self.v_prof[idx % len(self.v_prof)]) * self.speed_scale)
+                ds = max(vk * self.dt, self.min_step_m)
             kap = float(self.kappa[idx % len(self.kappa)])
             denom = max(1.0 - kap * e_lat, 0.2)
             e_lat = e_lat + math.sin(e_yaw) * ds
@@ -351,6 +433,14 @@ class MPCTracker(Node):
                      + self.w_steer * delta ** 2
                      + self.w_rate * (delta - prev) ** 2)
             prev = delta
+            if self.frenet_progress:
+                # Path progress is not car travel: inside a corner the
+                # reference advances faster than the car by 1/(1-kappa*e_lat).
+                # Without this the rollout reads the reference up to 0.27 m
+                # too far back at the hairpin exit (measured on the shipping
+                # line at e_lat -0.2 m), believes the curvature persists, and
+                # keeps steering into an opening corner: the inside cut.
+                s_travelled += ds * math.cos(e_yaw) / denom - ds
             # after the first step, relax towards the feedforward steer
             # Relax towards the curvature feedforward, but no faster than the
             # actuator can actually move. The old fixed 50% step let the rollout
@@ -385,6 +475,8 @@ class MPCTracker(Node):
         self._stale_warned = False
 
         x, y, yaw = self.predicted_state()
+        if self.cmd_delay > 0.0:
+            x, y, yaw = self.predict_through_delay(x, y, yaw)
 
         i0 = self.nearest_index(x, y)
         path_yaw = float(self.path_yaw[i0])
@@ -487,6 +579,7 @@ class MPCTracker(Node):
                       if self.speed >= here - 1e-3 else 0.0)
 
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
+        self.record_cmd(self.steer)
         v_fb = (self.speed_est.speed
                 if self.brake_gain > 0.0 or self.throttle_ctl.kp > 0.0 else None)
         self.pub_throttle.publish(
@@ -497,6 +590,7 @@ class MPCTracker(Node):
     def publish(self, steer, throttle):
         self.steer = float(np.clip(steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
+        self.record_cmd(self.steer)
         self.pub_throttle.publish(Float32(data=float(throttle)))
 
 

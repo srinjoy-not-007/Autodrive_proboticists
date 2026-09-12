@@ -10,6 +10,11 @@ import math
 import numpy as np
 import yaml
 
+try:
+    from pit_crew import vehicle
+except ImportError:                                  # running from src/pit_crew
+    import vehicle
+
 
 DEFAULTS = dict(
     n_particles=800,
@@ -21,7 +26,13 @@ DEFAULTS = dict(
     init_spread=0.6,
     lost_threshold=0.22,
     lost_patience=5,
+    # `max_step` is metres per UPDATE, which is a SPEED cap in disguise:
+    # 0.6 m is 5.77 m/s at a 0.104 s period and 6.82 m/s at 0.088 s, either
+    # side of the 6.58 m/s the car actually reaches. `predict` therefore caps
+    # the speed at `max_step / rate_nominal` -- the identity at 0.104 s, the
+    # period both this default and the live node's were tuned at.
     max_step=0.6,
+    rate_nominal=vehicle.RATE_NOMINAL,
     resample_frac=0.8,
 )
 
@@ -104,7 +115,10 @@ class ParticleFilterCore:
     def predict(self, speed, dt, imu_yaw):
         n = self.p['n_particles']
         head = imu_yaw + self.pth
-        step = float(np.clip(speed * dt, -self.p['max_step'], self.p['max_step']))
+        v_cap = (float(self.p['max_step'])
+                 / max(float(self.p.get('rate_nominal')
+                             or vehicle.RATE_NOMINAL), 1e-3))
+        step = float(np.clip(speed, -v_cap, v_cap) * dt)
         self.px += step * np.cos(head) + np.random.normal(0, self.p['motion_noise_xy'], n)
         self.py += step * np.sin(head) + np.random.normal(0, self.p['motion_noise_xy'], n)
         self.pth += np.random.normal(0, self.p['motion_noise_theta'], n)

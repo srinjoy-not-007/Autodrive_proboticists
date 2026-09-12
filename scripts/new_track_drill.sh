@@ -109,7 +109,12 @@ done
 stage "3/5 racing lines from each map, keep whichever is drivable and faster"
 BEST=""; BEST_T=99999
 for VARIANT in "" "_c"; do
-    OUT=$(.venv/bin/python tools/make_track_lines.py "${TRACK}${VARIANT}" 2>&1)
+    # MTL_ARGS: opt-in extra flags for the line generator, empty by default so
+    # the drill is unchanged without it. The finals recipe on a tight circuit
+    # (measured Sept 12 on both 2025 tracks) is
+    #   MTL_ARGS="--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 \
+    #             --kappa-gate safe --min-halfwidth 0.50"
+    OUT=$(.venv/bin/python tools/make_track_lines.py "${TRACK}${VARIANT}" ${MTL_ARGS:-} 2>&1)
     echo "$OUT" | sed "s/^/  [${TRACK}${VARIANT}] /"
     T=$(echo "$OUT" | sed -n 's/.*race line: .* ideal \([0-9.]*\) s.*/\1/p' | tail -1)
     if [ -n "$T" ] && awk "BEGIN{exit !($T < $BEST_T)}"; then BEST="$VARIANT"; BEST_T="$T"; fi

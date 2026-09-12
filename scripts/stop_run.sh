@@ -17,3 +17,6 @@ pkill -INT -f '[r]os2 bag record' || true
 wait "$ZERO_T" "$ZERO_S" || true
 STOP
 echo "Run stopped; zero commands published on both actuator topics."
+# Keep the simulator's own log per run: it is destroyed with the --rm container
+# and it is where a fast start and a slow start can be told apart.
+docker cp autodrive_roboracer_sim:/home/unity.log "$(dirname "$0")/../data/logs/unity_$(date +%Y%m%d_%H%M%S).log" 2>/dev/null || true

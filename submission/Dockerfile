@@ -21,22 +21,84 @@ RUN pip3 install --no-cache-dir "numpy<2" "scipy==1.10.1" pyyaml
 # Our racing package (never touches autodrive_roboracer)
 COPY src /home/autodrive_devkit/src/pit_crew
 
-# Track artefacts: map, centerline and the lines we are prepared to race. Baked
-# in so the container is self-sustaining with no mounted volumes.
+# Track artefacts: maps, centerlines and the lines we are prepared to race.
+# Baked in so the container is self-sustaining with no mounted volumes.
 #
-# Only the three canonical names per track, deliberately. This used to copy the
-# whole directory, which meant every rejected candidate and every intermediate
-# variant shipped too -- including an ICRA raceline that reversed direction
-# twice and asked for a 0.327 m turn radius against a 0.561 m steering lock.
-# Gated out of race.csv, but one PIT_CREW_LINE typo away from being driven in
-# the final. A line nobody has cleared should not be reachable inside the
-# submission at all.
-COPY data/maps/track_v2.pgm data/maps/track_v2.yaml \
-     data/maps/icra2026.pgm data/maps/icra2026.yaml /home/data/maps/
+# MAPS are globbed over `*_mesh` (plus the legacy recon track_v2) precisely so
+# that a finals map produced by `scripts/finals_drill_mesh.sh` ships without an
+# edit here -- the commonest way to lose a race is an asset that did not make
+# it into the image. A map with no line is unreachable: nothing loads a map
+# that PIT_CREW_MAP does not name, and the entrypoint's LINE default follows
+# the map's slug, so a slug with no line fails by NAME rather than by racing
+# another circuit's geometry. The glob therefore also sweeps up scratch maps
+# (`drill_*_mesh`) -- harmless, and cheaper than an explicit list that someone
+# forgets to extend on the finals day. ~3.6 MB total.
+COPY data/maps/track_v2.pgm data/maps/track_v2.yaml /home/data/maps/
+COPY data/maps/*_mesh.pgm data/maps/*_mesh.yaml /home/data/maps/
+
+# RACELINES are listed one by one, never globbed, and that is deliberate. This
+# used to copy the whole directory, which meant every rejected candidate and
+# every intermediate variant shipped too -- including an ICRA raceline that
+# reversed direction twice and asked for a 0.327 m turn radius against a
+# 0.561 m steering lock. Gated out of race.csv, but one PIT_CREW_LINE typo away
+# from being driven in the final. A line nobody has cleared should not be
+# reachable inside the submission at all.
+#
+# Every line here has been driven clean; the entrypoint picks the shipping one.
+# At the time of writing that is `porto_mesh_cr_dk0.8` (mc0.63_ay6.75 with its
+# hairpin-entry curvature ramp halved: 100 laps / 0 collisions / 70.5 s at the
+# fast sensor rate with rate_adaptive). Also here: mc0.60_ay6.0 (the earlier
+# line, 100 laps / 0 collisions / 73.46 s with mpc3), mc0.63_ay6.75 and
+# mc0.60_ay6.5, track_v2_safe (100 laps clean with the legacy mpc) and the
+# ICRA-2026 set (60 laps / 0 collisions) as an unseen-track regression fixture.
+#
+# ADD THE FINALS LINES HERE after the drill has produced and driven them. Two
+# files, both required, both named for the map's slug because the entrypoint
+# derives them from it:
+#
+#      data/racelines/finals_mesh_centerline.csv
+#      data/racelines/finals_mesh_race.csv
+#
+# (each continued with a trailing backslash, like the lines below)
+#
+# NAMES MATTER MORE THAN CONTENT HERE. The entrypoint derives
+# `<slug>_race.csv` (mpc3) and `<slug>_safe.csv` (legacy mpc) from
+# PIT_CREW_MAP, so a line generated with `make_track_lines.py --out-name` --
+# anything shaped like `<slug>_fast_race.csv`, `<slug>_mesh_fast_uni.csv` or
+# `<slug>_mesh_fast2_*.csv` -- is a file the image cannot find by default, even
+# once it is COPYed. Generate the SHIPPING line with the drill's DEFAULT naming
+# (no `--out-name`, so it lands on `<slug>_race.csv`), or copy the validated
+# candidate onto the derived name before the build. `_raceline.csv`, `_raceline_REJECTED.csv`, the
+# per-`w_veh` candidates and the `_skeleton`/`_anchored` intermediates the
+# drill leaves behind are never shipped.
+#
+# The centerline is NOT optional and NOT a diagnostic: localization seeds its
+# whole particle cloud at centerline[0] and resamples along it on every
+# collision recovery. `tests/test_submission_assets.py` fails on the host, in
+# under a second, if any entrypoint default is missing from this list -- run it
+# before starting a five-minute build.
 COPY data/racelines/track_v2_safe.csv data/racelines/track_v2_race.csv \
      data/racelines/track_v2_centerline.csv \
-     data/racelines/icra2026_safe.csv data/racelines/icra2026_race.csv \
-     data/racelines/icra2026_centerline.csv \
+     data/racelines/porto_mesh_mc0.60_ay6.0.csv data/racelines/porto_mesh_mc0.60_ay6.5.csv \
+     data/racelines/porto_mesh_mc0.63_ay6.75.csv data/racelines/porto_mesh_cr_dk0.8.csv \
+     data/racelines/icra2026_mesh_centerline.csv \
+     data/racelines/icra2026_mesh_safe.csv \
+     data/racelines/icra2026_mesh_race.csv \
+     /home/data/racelines/
+# porto_mesh_{centerline,safe} are symlinks to the track_v2 files in the repo;
+# copy the targets under the names the entrypoint derives from PIT_CREW_MAP, so
+# nothing depends on how Docker treats a symlink in the build context.
+COPY data/racelines/track_v2_centerline.csv /home/data/racelines/porto_mesh_centerline.csv
+COPY data/racelines/track_v2_safe.csv /home/data/racelines/porto_mesh_safe.csv
+# The finals slug is not known until Sep 16, so it is a build argument: on
+# the day, `docker build --build-arg FINALS_SLUG=finals_mesh ...` copies the
+# four files the entrypoint derives from that slug (a wrong slug fails the
+# COPY, i.e. the build, not the race). The default names a slug that already
+# ships, so every build of this tree succeeds unchanged.
+ARG FINALS_SLUG=icra2026_mesh
+COPY data/racelines/${FINALS_SLUG}_centerline.csv \
+     data/racelines/${FINALS_SLUG}_race.csv \
+     data/racelines/${FINALS_SLUG}_safe.csv \
      /home/data/racelines/
 
 RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
