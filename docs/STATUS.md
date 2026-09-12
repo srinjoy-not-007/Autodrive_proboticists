@@ -453,6 +453,13 @@ best official race time so far.** Hairpin most-inside per lap p50
 the combination with nd_mode:=period (harness +0.05 m) is queued
 (disp_nd_bm34), then regression of barrier_margin 0.34 on the tight
 circuits (a 0.34 m margin in a 1.75 m corridor may not be free).
+**Second clean display run: barrier 0.34 + steer_tau 0.04: 32 laps, 0
+collisions, OFFICIAL 69.36 s** (best race of the project). Finals
+candidate = shipping + barrier_margin 0.34 + steer_tau 0.04 (steer_tau
+also recovers the smoothing's lap cost on tight circuits: CDC-TF 112.0
+vs 116.7). nd_mode display runs dropped (rejected on the tight circuits
+offline). Regression of the barrier on the three circuits + Porto 100
+running; steer_tau + barrier on the circuits to follow.
 
 **Rack lag in the rollout + spatial publish lead (Sept 12, opt-in,
 committed; display A/B queued):** `steer_tau` (first-order rack lag
