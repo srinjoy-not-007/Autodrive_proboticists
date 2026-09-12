@@ -93,7 +93,13 @@ docker exec pit_helper /bin/bash -c "$R && ros2 daemon stop >/dev/null 2>&1; ros
 # second shell must not add a node. (Run AFTER the daemon restart, or the two
 # node lists are not comparable.)
 nodes() { docker exec pit_helper /bin/bash -c "$R && ros2 node list 2>/dev/null | sort | tr '\n' ' '"; }
-BEFORE="$(nodes)"
+# Sample only once the stack is up: the nodes take a variable time to appear
+# in discovery, and a BEFORE taken mid-startup fails the check spuriously.
+for i in $(seq 1 30); do
+    BEFORE="$(nodes)"
+    case "$BEFORE" in *mpc*|*follow_the_gap*|*stanley*) break ;; esac
+    sleep 2
+done
 docker exec autodrive_roboracer_api bash -lc 'true' >/dev/null 2>&1
 sleep 3
 AFTER="$(nodes)"
