@@ -356,6 +356,18 @@ The harness cannot see the display failure (0 collisions at 0.058 with
 shipping params) -- do not tune against it for that; the display is the
 gate.
 
+**Telemetry-gap ride-out (Sept 12, opt-in, committed):** the stale window
+is 3.37 periods at every rate (0.195 s at 0.058, 0.35 s at 0.104): three
+dropped frames put the car on the coast watchdog (hold steer, zero
+throttle; a 1.0 s gap = collision). `gap_predict_s:=0.6` keeps solving
+on the dead-reckoned pose with a decel ramp: harness with a stall every
+5 s, 72 laps per cell: 3-frame gaps 6 -> 1 (slew) / 19 -> 8 (pole)
+collisions at 0.104, 5-frame 18 -> 3 / 46 -> 18; one dropped frame 0
+everywhere; no-gap reports byte-identical. Not yet driven live (needs a
+stall injector); localization's own post-gap behaviour (patience -> 1
+scan at dt >= 0.35, one 4.5 m motion step) is unmodelled and is the
+remaining risk. The harness gained --drop-every/--drop-n.
+
 **Dead-time law settled (Sept 12):** command-to-feedback fits on six
 logs give pose-stamp-to-rack delay = **period + 0.052 s** (RMS 0.006 s;
 `bridge + period/2` fits at RMS 0.014 with all the error on the 0.058
