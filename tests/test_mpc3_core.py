@@ -25,7 +25,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), 'src'))
 
 from pit_crew import vehicle                                    # noqa: E402
-from pit_crew.mpc3_core import MPC3, Actuator, PoseFilter, RefPath, wrap  # noqa: E402
+from pit_crew.mpc3_core import (ILC, MPC3, RATE_ALL_TERMS,        # noqa: E402
+                                RATE_NOMINAL, RATE_TERMS,
+                                Actuator, PoseFilter, RateAdapter,
+                                RateControl, RateEstimator, RefPath,
+                                corridor_clearance, wrap)
 
 
 # --------------------------------------------------------------------------
@@ -558,3 +562,435 @@ class TestDeriveMapPrefix:
         loose = root / 'finals_mesh_race.csv'
         loose.write_text('')
         assert derive(str(loose)) == ''
+
+
+# --------------------------------------------------------------------------
+# 9. rate adaptivity
+# --------------------------------------------------------------------------
+#
+# The point of every test here is the same one: the shipping configuration has
+# `rate_adaptive` false and must be bit-identical to what raced, and switching
+# it on at the period the tracker was validated at must ALSO be identical.  A
+# feature that can only be trusted when it is off is worth nothing, and one
+# that silently changes the shipping tune is worse than nothing.
+
+class TestRateEstimator:
+
+    def test_median_not_mean(self):
+        """One dropped pose doubles an interval; the estimate must not move."""
+        e = RateEstimator(nominal=0.104, window=20)
+        t = 0.0
+        for k in range(30):
+            t += 0.176 if k == 15 else 0.088     # one dropped frame
+            e.update(t)
+        assert e.ready
+        assert abs(e.period - 0.088) < 1e-6
+
+    def test_ignores_implausible_intervals(self):
+        e = RateEstimator(nominal=0.104)
+        t = 0.0
+        for k in range(20):
+            t += 0.097
+            e.update(t)
+            e.update(t + 1e-4)                   # a duplicate: not evidence
+        assert abs(e.period - 0.097) < 1e-6
+
+    def test_not_ready_before_min_samples(self):
+        e = RateEstimator(nominal=0.104, min_samples=8)
+        t = 0.0
+        for _ in range(4):
+            t += 0.088
+            e.update(t)
+        assert not e.ready
+        assert e.period == 0.104                 # falls back to the nominal
+
+    def test_nonfinite_stamp_is_inert(self):
+        e = RateEstimator(nominal=0.104)
+        assert e.update(float('nan')) == 0.104
+
+
+class TestRateAdapter:
+
+    def test_identity_at_nominal(self):
+        a = RateAdapter()
+        v = a.values(RATE_NOMINAL)
+        assert v['cmd_dead_time'] == pytest.approx(0.135)
+        assert v['delay_s'] == pytest.approx(0.180)
+        assert v['apply_ahead_s'] == pytest.approx(0.090)
+        assert v['thr_lead_s'] == pytest.approx(0.225)
+        assert v['enc_alpha'] == pytest.approx(0.35)
+
+    def test_monotone_in_the_period(self):
+        a = RateAdapter(terms=RATE_ALL_TERMS)    # incl. `delay`, non-default
+        lo, hi = a.values(0.088), a.values(0.104)
+        for k in ('cmd_dead_time', 'delay_s', 'apply_ahead_s', 'thr_lead_s',
+                  'max_predict_s', 'stale_pose_s', 'enc_alpha'):
+            assert lo[k] < hi[k], k
+
+    def test_dead_time_is_half_a_frame_plus_the_bridge(self):
+        a = RateAdapter(terms=RATE_ALL_TERMS)    # incl. `delay`, non-default
+        assert a.values(0.088)['cmd_dead_time'] == pytest.approx(
+            a.bridge + 0.044)
+
+    def test_encoder_alpha_holds_its_lag_in_seconds(self):
+        """alpha is per SAMPLE; (1-alpha) per unit time is what must be fixed."""
+        a = RateAdapter()
+        v = a.values(0.052)                      # exactly half the period
+        assert (1.0 - v['enc_alpha']) ** 2 == pytest.approx(1.0 - 0.35)
+
+    def test_terms_select(self):
+        a = RateAdapter(terms=('apply',))
+        v = a.values(0.088)
+        assert v['apply_ahead_s'] != 0.090
+        assert v['delay_s'] == 0.180 and v['thr_lead_s'] == 0.225
+
+    def test_delay_is_not_a_default_term(self):
+        """It double-counts the half-frame `apply` already scales, and nd
+        quantisation hides that in the whole realistic band."""
+        assert 'delay' not in RATE_TERMS
+        assert 'delay' in RATE_ALL_TERMS
+        v = RateAdapter().values(0.088)
+        assert v['cmd_dead_time'] == pytest.approx(0.135)
+        assert v['delay_s'] == pytest.approx(0.180)
+
+    def test_predict_and_stale_never_grow(self):
+        """Both are SAFETY gates: a slower sensor must not buy a longer
+        open-loop dead-reckon or a later pose-loss coast.  Unclamped, the
+        slowest period the estimator admits (0.39 s) gave 1.31 s of each."""
+        a = RateAdapter()
+        fast = a.values(0.088)
+        assert fast['max_predict_s'] < 0.35 and fast['stale_pose_s'] < 0.35
+        for p in (0.104, 0.150, 0.250, 0.390):
+            v = a.values(p)
+            assert v['max_predict_s'] <= 0.35 + 1e-12, p
+            assert v['stale_pose_s'] <= 0.35 + 1e-12, p
+        assert a.values(0.390)['max_predict_s'] == pytest.approx(0.35)
+
+    def test_blend_one_stays_one(self):
+        """mpc3 ships pose_blend 1.0 -- 'take every sample whole' has no lag
+        to rescale, and rescaling it would quietly introduce a filter."""
+        assert RateAdapter(pose_blend=1.0).values(0.088)['pose_blend'] == 1.0
+
+
+class TestSetRate:
+
+    def test_nd_follows_delay(self, tmp_path):
+        m = make_mpc(RefPath(circle_path(tmp_path)), delay_s=0.180,
+                     step_dt=0.060)
+        assert m.nd == 3
+        assert m.set_rate(delay_s=0.300) == 5
+        assert m.set_rate(delay_s=0.180) == 3
+
+    def test_nd_cannot_eat_the_horizon(self, tmp_path):
+        m = make_mpc(RefPath(circle_path(tmp_path)), horizon=6, step_dt=0.060)
+        assert m.set_rate(delay_s=10.0) == 4       # N - 2
+        assert len(m.u) == 6                       # warm start keeps its shape
+
+    def test_solve_survives_a_rate_change(self, tmp_path):
+        p = RefPath(circle_path(tmp_path, R=6.0, v=3.0))
+        m = make_mpc(p)
+        for delay in (0.180, 0.240, 0.120, 0.180):
+            m.set_rate(delay_s=delay, apply_ahead_s=0.09, thr_lead_s=0.225)
+            cmd, info = m.solve(0.05, 0.0, 0.0, 0, 3.0,
+                                committed=[0.0] * m.nd)
+            assert math.isfinite(cmd)
+            assert math.isfinite(info['v_cmd'])
+
+
+class TestRateControl:
+
+    def _rc(self, tmp_path, **kw):
+        m = make_mpc(RefPath(circle_path(tmp_path)))
+        return m, RateControl(m, Actuator(dead_time=0.135), **kw)
+
+    def test_disabled_changes_nothing(self, tmp_path):
+        m, rc = self._rc(tmp_path, enabled=False)
+        t = 0.0
+        for _ in range(40):
+            t += 0.088
+            rc.update(t)
+        assert rc.est.ready and abs(rc.est.period - 0.088) < 1e-6
+        assert m.cfg['apply_ahead_s'] == 0.090    # measured, not acted on
+        assert m.cfg['delay_s'] == 0.180
+        assert rc.act.dead_time == 0.135
+
+    def test_enabled_at_nominal_changes_nothing(self, tmp_path):
+        m, rc = self._rc(tmp_path, enabled=True)
+        t = 0.0
+        for _ in range(40):
+            t += RATE_NOMINAL
+            rc.update(t)
+        assert m.cfg['apply_ahead_s'] == pytest.approx(0.090)
+        assert m.cfg['delay_s'] == pytest.approx(0.180)
+        assert m.nd == 3
+
+    def test_enabled_follows_a_faster_sensor(self, tmp_path):
+        m, rc = self._rc(tmp_path, enabled=True, terms=RATE_ALL_TERMS)
+        t = 0.0
+        for _ in range(40):
+            t += 0.088
+            rc.update(t)
+        assert m.cfg['apply_ahead_s'] == pytest.approx(0.090 * 0.088 / 0.104)
+        assert m.cfg['thr_lead_s'] == pytest.approx(0.225 * 0.088 / 0.104)
+        assert rc.act.dead_time < 0.135
+        assert m.nd == 3                          # still 3 steps at 0.060 s
+
+    def test_a_wild_period_is_clamped_to_the_trust_band(self, tmp_path):
+        """A stalled sim, a clock step or a bridge hiccup that survives the
+        median must not extrapolate the whole tune: outside
+        [0.5, 1.5] x nominal the validated numbers are the better answer."""
+        m, rc = self._rc(tmp_path, enabled=True, terms=RATE_ALL_TERMS)
+        t = 0.0
+        for _ in range(40):
+            t += 0.300                          # ~3 Hz, far outside the band
+            rc.update(t)
+        assert rc.est.period == pytest.approx(0.300)   # still MEASURED
+        assert rc.clamped > 0
+        assert rc.applied == pytest.approx(1.5 * RATE_NOMINAL)
+        assert m.cfg['apply_ahead_s'] == pytest.approx(0.090 * 1.5)
+        assert rc.values['stale_pose_s'] == pytest.approx(0.35)
+        assert rc.values['max_predict_s'] == pytest.approx(0.35)
+
+    def test_an_impossibly_fast_period_is_clamped_too(self, tmp_path):
+        m, rc = self._rc(tmp_path, enabled=True)
+        t = 0.0
+        for _ in range(40):
+            t += 0.035
+            rc.update(t)
+        assert rc.applied == pytest.approx(0.5 * RATE_NOMINAL)
+        assert m.cfg['apply_ahead_s'] == pytest.approx(0.090 * 0.5)
+
+    def test_min_change_suppresses_chatter(self, tmp_path):
+        m, rc = self._rc(tmp_path, enabled=True, min_change=0.010)
+        t = 0.0
+        for _ in range(40):
+            t += 0.100                            # 4 ms off nominal
+            rc.update(t)
+        assert m.cfg['apply_ahead_s'] == 0.090
+
+    def test_speed_estimator_alpha_is_retimed(self, tmp_path):
+        class Est:
+            alpha = 0.35
+        est = Est()
+        m = make_mpc(RefPath(circle_path(tmp_path)))
+        rc = RateControl(m, Actuator(), enabled=True, speed_est=est,
+                         enc_alpha=0.35)
+        t = 0.0
+        for _ in range(40):
+            t += 0.088
+            rc.update(t)
+        assert est.alpha == pytest.approx(1.0 - (1.0 - 0.35) ** (0.088 / 0.104))
+
+
+# --------------------------------------------------------------------------
+# 10. iterative learning control
+# --------------------------------------------------------------------------
+
+class TestILC:
+
+    def _ilc(self, **kw):
+        base = dict(total_s=28.6, bin_m=0.25, store='')
+        base.update(kw)
+        return ILC(**base)
+
+    def test_starts_at_identity(self):
+        il = self._ilc()
+        assert np.all(il.kappa_ff == 0.0)
+        assert np.all(il.v_scale == 1.0)
+        assert il.kappa_offset(np.array([0.0, 5.0])).tolist() == [0.0, 0.0]
+
+    def test_solver_with_an_identity_table_is_the_shipping_solver(self, tmp_path):
+        """The gate on shipping this at all: attaching an untrained ILC must
+        not move a single command."""
+        p = RefPath(circle_path(tmp_path, R=6.0, v=3.0))
+        a, b = make_mpc(p), make_mpc(p)
+        b.ilc = self._ilc()
+        for _ in range(5):
+            ca, _ = a.solve(0.08, 0.02, 0.0, 10, 3.0, committed=[0.0] * a.nd)
+            cb, _ = b.solve(0.08, 0.02, 0.0, 10, 3.0, committed=[0.0] * b.nd)
+            assert ca == pytest.approx(cb)
+
+    def test_learns_against_the_error(self):
+        """A lap spent LEFT of the line must produce a RIGHT-hand offset."""
+        il = self._ilc(k_gain=0.3, v_enable=False)
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        st = il.finish_lap()
+        assert st is not None
+        assert il.kappa_ff.max() < 0.0
+        assert il.kappa_ff.min() == pytest.approx(-0.03, abs=5e-3)
+
+    def test_offset_is_clamped_both_ways(self):
+        il = self._ilc(k_gain=5.0, v_enable=False)
+        for lap in range(5):
+            for k in range(200):
+                il.observe(28.6 * k / 200.0, +1.0, 1.0)
+            il.finish_lap()
+        assert np.abs(il.kappa_ff).max() <= il.k_clamp + 1e-12
+        # the lateral-shift clamp is the binding one at the shipping numbers
+        assert il.k_clamp == pytest.approx(2 * 0.08 / 1.5 ** 2)
+
+    def test_leak_makes_it_forget_a_bias_that_is_gone(self):
+        il = self._ilc(k_gain=0.3, leak=0.1, v_enable=False)
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        il.finish_lap()
+        peak = float(np.abs(il.kappa_ff).max())
+        for _ in range(20):                       # now perfectly on line
+            for k in range(200):
+                il.observe(28.6 * k / 200.0, 0.0, 1.0)
+            il.finish_lap()
+        assert np.abs(il.kappa_ff).max() < 0.3 * peak
+
+    def test_speed_scale_is_bounded_and_slows_where_it_is_tight(self):
+        il = self._ilc(clear_target=0.30, clear_loss=0.0)
+        for k in range(200):
+            s = 28.6 * k / 200.0
+            il.observe(s, 0.0, 0.10 if 10.0 <= s < 11.0 else 1.0)
+        il.finish_lap()
+        b = int(10.5 / il.bin_m)
+        assert il.v_scale[b] < 1.0
+        assert il.v_scale.min() >= il.v_lo and il.v_scale.max() <= il.v_hi
+
+    def test_a_tight_corner_does_not_slow_the_whole_lap(self):
+        """The first version eroded the CUMULATIVE table, so one tight hairpin
+        pulled all 114 bins to the floor over 29 laps and cost 1.2 s/lap."""
+        il = self._ilc(clear_target=0.30, clear_loss=0.0)
+        for _ in range(30):
+            for k in range(200):
+                s = 28.6 * k / 200.0
+                il.observe(s, 0.0, 0.10 if 10.0 <= s < 11.0 else 1.0)
+            il.finish_lap()
+        far = il.v_scale[int(20.0 / il.bin_m)]
+        assert far >= 1.0
+        assert il.v_scale[int(10.5 / il.bin_m)] == pytest.approx(il.v_lo)
+
+    def test_target_never_exceeds_what_the_line_offers(self):
+        """A line whose own corridor is 0.25 m must not be slowed every lap
+        for failing to reach a 0.30 m target it can never reach."""
+        il = self._ilc(clear_target=0.30, clear_loss=0.05)
+        il.nominal_clear = np.full(il.nb, 0.25)
+        for _ in range(10):
+            for k in range(200):
+                il.observe(28.6 * k / 200.0, 0.0, 0.24)
+            il.finish_lap()
+        assert il.v_scale.min() >= 1.0
+
+    def test_sparse_laps_are_interpolated_not_zero_filled(self):
+        """At 10 Hz a 28.6 m lap is ~70 poses: most bins are never visited."""
+        # `min_cover` is deliberately relaxed here: the subject is `_fill`,
+        # not the fragment gate, and 286 bins cannot be covered in one lap.
+        il = self._ilc(bin_m=0.10, k_gain=0.3, v_enable=False, min_cover=0.15)
+        for k in range(70):
+            il.observe(28.6 * k / 70.0, +0.10, 1.0)
+        st = il.finish_lap()
+        assert st is not None and st['cover'] < 0.35
+        # every bin learned, including the ones no pose landed in
+        assert np.abs(il.kappa_ff).min() > 0.5 * np.abs(il.kappa_ff).max()
+
+    def test_a_lap_fragment_is_not_a_lap(self):
+        """A collision teleport cuts a lap short.  `_fill` then interpolates
+        the 80% of bins that were never driven from the 20% that were, so a
+        fragment carrying a constant error pins the ENTIRE table to the clamp
+        -- measured, all 114 bins to -0.0711 1/m off one fragment."""
+        il = self._ilc(v_enable=False)
+        for s_m in np.arange(0.0, 0.20 * 28.6, 0.25):
+            il.observe(float(s_m), +0.30, 0.5)
+        assert il.finish_lap() is None
+        assert np.all(il.kappa_ff == 0.0)
+        assert il.laps == 0
+
+    def test_a_full_lap_is_still_a_lap(self):
+        """The fragment gate must not reject the thing it is protecting."""
+        il = self._ilc(v_enable=False)
+        for s_m in np.arange(0.0, 28.6, 0.20):      # a 10 Hz lap is coarser
+            il.observe(float(s_m), +0.10, 1.0)
+        st = il.finish_lap()
+        assert st is not None and st['cover'] >= il.min_cover
+        assert il.laps == 1 and np.all(il.kappa_ff < 0.0)
+
+    def test_a_torn_store_file_does_not_stop_the_car(self, tmp_path):
+        """`save` runs in the control callback at a lap boundary; a run killed
+        there used to leave a half-written zip that raised BadZipFile out of
+        `MPC3Tracker.__init__` -- no tracker, no race."""
+        store = str(tmp_path / 'ilc.npz')
+        trained = self._ilc(store=store)
+        trained.observe(0.0, 0.1, 1.0)
+        trained.save()
+        raw = open(store, 'rb').read()
+        assert len(raw) > 0
+        for corrupt in (raw[:len(raw) // 2], b'', b'not a zip at all'):
+            with open(store, 'wb') as f:
+                f.write(corrupt)
+            il = ILC(total_s=28.6, bin_m=0.25, store=store)   # must not raise
+            assert il.laps == 0
+            assert np.all(il.kappa_ff == 0.0) and np.all(il.v_scale == 1.0)
+
+    def test_save_is_atomic_and_leaves_no_debris(self, tmp_path):
+        il = self._ilc(store=str(tmp_path / 'ilc.npz'))
+        il.save()
+        il.save()
+        names = sorted(q.name for q in tmp_path.iterdir())
+        assert names == ['ilc.npz']              # no *.tmp.npz left behind
+        assert ILC(total_s=28.6, bin_m=0.25,
+                   store=str(tmp_path / 'ilc.npz')).laps == 0
+
+    def test_an_empty_lap_is_not_evidence(self):
+        il = self._ilc()
+        for k in range(5):
+            il.observe(0.1 * k, 1.0, 1.0)
+        assert il.finish_lap() is None
+        assert np.all(il.kappa_ff == 0.0)
+
+    def test_invalidate_drops_the_lap(self):
+        il = self._ilc(v_enable=False)
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        il.invalidate()
+        assert il.finish_lap() is None
+        assert np.all(il.kappa_ff == 0.0)
+        # ...and the next lap learns normally again
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        assert il.finish_lap() is not None
+
+    def test_persists_and_reloads(self, tmp_path):
+        store = str(tmp_path / 'ilc')
+        il = self._ilc(store=store, v_enable=False)
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        il.finish_lap()
+        back = ILC(total_s=28.6, bin_m=0.25, store=store, v_enable=False)
+        assert back.laps == 1
+        assert np.allclose(back.kappa_ff, il.kappa_ff)
+
+    def test_a_table_for_another_line_is_refused(self, tmp_path):
+        store = str(tmp_path / 'ilc')
+        il = self._ilc(store=store, v_enable=False)
+        for k in range(200):
+            il.observe(28.6 * k / 200.0, +0.10, 1.0)
+        il.finish_lap()
+        other = ILC(total_s=56.7, bin_m=0.25, store=store)
+        assert other.laps == 0
+        assert np.all(other.kappa_ff == 0.0)
+
+    def test_a_missing_store_starts_from_identity(self, tmp_path):
+        il = ILC(total_s=28.6, store=str(tmp_path / 'nothing-here'))
+        assert il.laps == 0 and np.all(il.v_scale == 1.0)
+
+
+class TestCorridorClearance:
+
+    def test_infinite_without_a_map(self, tmp_path):
+        p = RefPath(circle_path(tmp_path))
+        assert corridor_clearance(p, 0, 0.0) == float('inf')
+
+    def test_shrinks_as_the_car_moves_off_line(self, tmp_path):
+        p = RefPath(circle_path(tmp_path))
+        p.w_left = np.full(p.n, 0.6)
+        p.w_right = np.full(p.n, 0.6)
+        p.has_corridor = True
+        on = corridor_clearance(p, 10, 0.0)
+        off = corridor_clearance(p, 10, 0.2)
+        assert on == pytest.approx(0.6 - 0.5 * vehicle.CAR_WIDTH)
+        assert off == pytest.approx(on - 0.2)

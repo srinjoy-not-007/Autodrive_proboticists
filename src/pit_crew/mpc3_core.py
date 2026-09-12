@@ -58,6 +58,7 @@ What is new, and why
 """
 
 import math
+import os
 
 import numpy as np
 
@@ -68,7 +69,10 @@ except ImportError:                                  # running from src/pit_crew
     import vehicle
     from mpc2_core import Actuator, PoseFilter, RefPath, wrap
 
-__all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS']
+__all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS',
+           'RateEstimator', 'RateAdapter', 'RateControl', 'ILC',
+           'corridor_clearance', 'RATE_NOMINAL', 'RATE_TERMS',
+           'RATE_ALL_TERMS']
 
 
 DEFAULTS = dict(
@@ -101,6 +105,18 @@ DEFAULTS = dict(
     k_e=2.0,                  # speed cut per metre of error beyond e_free
     v_mod_min=0.55,           # never cut the profile speed below this fraction
     thr_lead_s=0.225,         # plan speed at the time the command is in force
+    # How the lead is taken.  'point' is what raced: the ceiling AT
+    # `thr_lead_s`, which both brakes early and ACCELERATES early.  Measured on
+    # our own logs, 61% of the speed error is a pure spatial lag of 1.45 m
+    # (0.33 s) at 9.6 Hz and 1.15 m at 11.4 Hz -- the tune was validated with
+    # that lag acting as a free corner-entry brake, and at 11 Hz it shrinks,
+    # the peak speed rises 6.01 -> 6.18, and the car arrives at the hairpin too
+    # fast (corr(speed excess 3.25 m earlier, inside offset) = -0.82).  The
+    # honest fix is a LONGER lead that is brake-only: 'min' takes the MINIMUM
+    # of the ceiling over [0, thr_lead_s], so a drop ahead is anticipated and a
+    # rise ahead is not.  A symmetric 0.30 s lead already failed live (7/32).
+    thr_lead_mode='point',
+    thr_enc_tau=0.19,         # encoder-filter lag, s, for the 'sum' rate rule
     # cost ------------------------------------------------------------------
     w_lat=24.0,
     w_yaw=3.0,
@@ -141,6 +157,516 @@ def _sat_curvature(delta, k_max, knee, gain):
     return gain * math.copysign(f, k), gain * dk * e
 
 
+# --------------------------------------------------------------------------
+# rate adaptivity  (OPT-IN: `rate_adaptive`, default off everywhere)
+# --------------------------------------------------------------------------
+#
+# mpc3's constants are not all in seconds by accident.  Several of them are
+# really "some number of SENSOR PERIODS", and the sensor period is not a
+# property of the tracker at all -- it is a property of the machine the
+# simulator happens to be running on.  Measured on the same line
+# (`porto_mesh_mc0.63_ay6.75`), same map, same tracker:
+#
+#   logger dt 0.104 s  ->  100 laps, 0 collisions,  |cte| p50 0.068  p95 0.208
+#   logger dt 0.088 s  ->   20 laps, 11 collisions, |cte| p50 0.093  p95 0.305
+#
+# and the offline harness driven at those two periods reproduces the p50
+# almost exactly (0.067 / 0.090) with nothing else changed.  So the tracker is
+# not "tuned for 9.6 Hz" by choice; it is tuned for 9.6 Hz by accident, and the
+# organisers' machine measured 0.097 s.
+#
+# The dominant term, isolated in the harness at fixed 0.088 s frames, is
+# `apply_ahead_s`: the command that is published is held for exactly one sensor
+# period, so the angle worth publishing is the plan's angle about one period
+# after the command bites.  Sweeping it at three periods, the optimum tracks
+# the period (best p50/p95 at 0.070-0.078 s for a 0.088 s frame, 0.085 s for
+# 0.097, 0.090 s for 0.104) -- i.e. a constant 0.87 of a period, which is
+# exactly what the validated 0.090 s is at the 0.104 s rate it was validated
+# at.  Everything else here is the same argument applied to the other
+# implicitly-per-period constants, and each is separately switchable so the
+# isolation can be redone.
+RATE_NOMINAL = 0.104          # the period mpc3's defaults were validated at
+# `apply` is the only term whose optimum was actually SWEPT against the period,
+# and it was swept with `delay` held fixed.  `delay` is therefore NOT in the
+# default set, for two reasons that compound:
+#
+#   * it double-counts the half-frame.  `delay` puts 0.5p into
+#     `cmd_dead_time`, and `apply` then adds 0.87p on top of it, so the total
+#     lead handed to `_indices` scales as `bridge + est_lag + 1.37p` where the
+#     argument (dead time + half a hold window) only supports 1.0p; and
+#   * today that is INVISIBLE rather than wrong, which is worse.  The solver
+#     lead is `nd * step_dt + apply`, and `nd = round(delay_s / step_dt)` is 3
+#     for every period from 0.060 s to 0.160 s -- so in the whole realistic
+#     band `delay` moves only `Actuator.dead_time`, and at 0.200 s `nd` goes
+#     3 -> 4 and the lead jumps 0.060 s in one step.
+#
+# Pass `rate_terms=apply,thr,delay,predict,enc,pose` to re-enable it, but
+# isolate it first: `rate_terms=delay` alone against `rate_terms=apply` alone.
+RATE_ALL_TERMS = ('apply', 'thr', 'delay', 'predict', 'enc', 'pose')
+RATE_TERMS = ('apply', 'thr', 'predict', 'enc', 'pose')
+
+
+class RateEstimator:
+    """Robust online estimate of the pose period.
+
+    Median of the last ``window`` inter-arrival times, which is what makes it
+    survive the thing a mean does not: a dropped pose doubles one interval, and
+    a burst of two poses in one frame halves the next.  Intervals outside
+    ``[lo, hi]`` are not evidence about the rate at all and are dropped.
+    """
+
+    def __init__(self, nominal=RATE_NOMINAL, window=20, lo=0.03, hi=0.40,
+                 min_samples=8):
+        self.nominal = float(nominal)
+        self.window = int(window)
+        self.lo, self.hi = float(lo), float(hi)
+        self.min_samples = int(min_samples)
+        self._prev = None
+        self._d = []
+        self.period = float(nominal)
+        self.ready = False
+        self.n_seen = 0
+
+    def update(self, t):
+        """One pose stamp.  Returns the current period estimate."""
+        if not math.isfinite(t):
+            return self.period
+        if self._prev is None:
+            self._prev = t
+            return self.period
+        dt = t - self._prev
+        if dt < self.lo:
+            # A duplicate or an out-of-order stamp. Do NOT advance the anchor:
+            # the estimator would then measure the NEXT interval short too,
+            # which is the same trap `vehicle.SpeedEstimator` documents.
+            return self.period
+        self._prev = t
+        if dt <= self.hi:
+            self._d.append(dt)
+            self.n_seen += 1
+            if len(self._d) > self.window:
+                self._d.pop(0)
+            if len(self._d) >= self.min_samples:
+                self.period = float(np.median(self._d))
+                self.ready = True
+        return self.period
+
+
+class RateAdapter:
+    """The period-dependent constants, as ratios of the validated period.
+
+    Every formula here is the identity at ``nominal``, so switching adaptivity
+    on at the rate the tracker was validated at changes nothing -- that is the
+    property that makes this safe to ship behind a flag.  ``terms`` selects
+    which families adapt, so any one of them can be isolated.
+    """
+
+    def __init__(self, cmd_dead_time=0.135, delay_s=0.180, apply_ahead_s=0.090,
+                 thr_lead_s=0.225, max_predict_s=0.35, stale_pose_s=0.35,
+                 enc_alpha=0.35, pose_blend=1.0, enc_tau=0.19,
+                 nominal=RATE_NOMINAL, terms=RATE_TERMS):
+        self.nominal = float(nominal)
+        self.terms = tuple(terms)
+        self.dead0 = float(cmd_dead_time)
+        self.delay0 = float(delay_s)
+        self.apply0 = float(apply_ahead_s)
+        self.thr0 = float(thr_lead_s)
+        self.predict0 = float(max_predict_s)
+        self.stale0 = float(stale_pose_s)
+        self.enc0 = float(enc_alpha)
+        self.blend0 = float(pose_blend)
+        self.enc_tau = float(enc_tau)
+        # The bridge's own dead time, i.e. what is left of the measured
+        # command-to-movement delay once the half-frame the latched command
+        # waits at the pickup boundary is taken out.
+        self.bridge = self.dead0 - 0.5 * self.nominal
+        self.est_lag = self.delay0 - self.dead0
+
+    def values(self, period):
+        p = float(period)
+        r = p / self.nominal
+        v = dict(cmd_dead_time=self.dead0, delay_s=self.delay0,
+                 apply_ahead_s=self.apply0, thr_lead_s=self.thr0,
+                 max_predict_s=self.predict0, stale_pose_s=self.stale0,
+                 enc_alpha=self.enc0, pose_blend=self.blend0)
+        if 'delay' in self.terms:
+            v['cmd_dead_time'] = self.bridge + 0.5 * p
+            v['delay_s'] = v['cmd_dead_time'] + self.est_lag
+        if 'apply' in self.terms:
+            v['apply_ahead_s'] = self.apply0 * r
+        if 'thr_sum' in self.terms:
+            # The transport lag of the speed loop, built rather than scaled:
+            # command dead time + one command hold + the encoder filter's own
+            # lag.  ~0.43 s at 0.104 s, which is only usable with
+            # `thr_lead_mode` 'min' -- as a symmetric point lead it accelerates
+            # early out of every corner.
+            v['thr_lead_s'] = v['cmd_dead_time'] + p + self.enc_tau
+        elif 'thr' in self.terms:
+            v['thr_lead_s'] = self.thr0 * r
+        if 'predict' in self.terms:
+            # ONE-SIDED, and that asymmetry is the whole point: these two are
+            # safety gates, not tuning constants.  A faster sensor earns a
+            # tighter open-loop dead-reckon and a tighter stale gate; a slower
+            # one must not earn a looser one.  Unclamped, a 0.39 s period (the
+            # most `RateEstimator.hi` admits) gave max_predict_s = 1.31 s --
+            # 7.9 m of open-loop extrapolation at 6 m/s handed to the solver,
+            # and 1.31 s before the watchdog coasts.
+            v['max_predict_s'] = self.predict0 * min(r, 1.0)
+            v['stale_pose_s'] = self.stale0 * min(r, 1.0)
+        if 'enc' in self.terms and 0.0 < self.enc0 < 1.0:
+            # A per-SAMPLE low pass has a per-sample memory; holding the same
+            # alpha at a different rate silently changes its lag in seconds.
+            # Matching `(1 - alpha)` per unit TIME keeps the lag fixed.
+            v['enc_alpha'] = 1.0 - (1.0 - self.enc0) ** r
+        if 'pose' in self.terms and 0.0 < self.blend0 < 1.0:
+            v['pose_blend'] = 1.0 - (1.0 - self.blend0) ** r
+        return v
+
+
+class RateControl:
+    """Estimator + adapter + the objects that have to follow them.
+
+    One object so that the node and ``tools/sim_tracker.py``'s ``MPC3Sim``
+    cannot drift apart: what the harness measures is literally what races.
+    Disabled (``enabled=False``) it touches nothing at all -- ``update`` still
+    measures the period, so the rate can be LOGGED without being acted on.
+    """
+
+    def __init__(self, mpc, act, enabled=False, filt=None, speed_est=None,
+                 nominal=RATE_NOMINAL, window=20, terms=RATE_TERMS,
+                 min_change=0.002, rate_lo=0.5, rate_hi=1.5, **nominals):
+        self.mpc = mpc
+        self.act = act
+        self.filt = filt
+        self.speed_est = speed_est
+        self.enabled = bool(enabled)
+        self.est = RateEstimator(nominal=nominal, window=window)
+        self.adapter = RateAdapter(nominal=nominal, terms=terms, **nominals)
+        self.min_change = float(min_change)
+        # Trust band on the MEASURED period, as a ratio of the validated one.
+        # Every adapted constant is linear or exponential in the period, so an
+        # estimate that is wrong (a stalled sim, a clock change, a bridge
+        # hiccup that survives the median) moves all of them together and in
+        # the same, dangerous direction.  Nothing outside [0.5, 1.5] x nominal
+        # has ever been measured on any machine we have run on -- 0.088, 0.097
+        # and 0.104 s -- so outside that band the right answer is the tune that
+        # was validated, not an extrapolation of it.
+        self.rate_lo = float(rate_lo) * float(nominal)
+        self.rate_hi = float(rate_hi) * float(nominal)
+        self.clamped = 0
+        self.applied = float(nominal)
+        self.values = self.adapter.values(nominal)
+
+    def update(self, t_stamp):
+        """One pose stamp.  Returns the values in force (adapted or nominal)."""
+        p = self.est.update(t_stamp)
+        if not (self.enabled and self.est.ready):
+            return self.values
+        if not (self.rate_lo <= p <= self.rate_hi):
+            self.clamped += 1
+            p = min(max(p, self.rate_lo), self.rate_hi)
+        if abs(p - self.applied) < self.min_change:
+            return self.values
+        self.applied = p
+        v = self.adapter.values(p)
+        self.values = v
+        self.mpc.set_rate(delay_s=v['delay_s'],
+                          apply_ahead_s=v['apply_ahead_s'],
+                          thr_lead_s=v['thr_lead_s'])
+        self.act.dead_time = v['cmd_dead_time']
+        if self.filt is not None and 0.0 < self.adapter.blend0 < 1.0:
+            self.filt.blend = v['pose_blend']
+        if self.speed_est is not None and 0.0 < self.adapter.enc0 < 1.0:
+            self.speed_est.alpha = v['enc_alpha']
+        return v
+
+
+# --------------------------------------------------------------------------
+# iterative learning control over arc length  (OPT-IN: `ilc_enable`)
+# --------------------------------------------------------------------------
+
+def corridor_clearance(path: RefPath, i0, e_lat, body_m=0.25):
+    """Room left between the car body and the corridor walls, at ``i0``.
+
+    A proxy for ``tools/footprint_analysis``'s footprint clearance that can be
+    evaluated LIVE, from the two things the tracker already has: the corridor
+    half-widths the barrier is built from and its own lateral error.  The
+    minimum is taken over the arc the body spans so that a body-length before a
+    pinch point already counts as tight.  Returns ``inf`` without a corridor.
+    """
+    if not path.has_corridor:
+        return float('inf')
+    n = max(1, int(round(body_m / max(path.spacing, 1e-3))))
+    idx = (np.arange(i0 - n, i0 + n + 1)) % path.n
+    hw = 0.5 * vehicle.CAR_WIDTH
+    left = path.w_left[idx] - e_lat - hw
+    right = path.w_right[idx] + e_lat - hw
+    return float(min(left.min(), right.min()))
+
+
+class ILC:
+    """P-type iterative learning control over arc length.
+
+    The car drives the same 28.6 m every lap, so the error at a given ``s`` is
+    not noise -- it is a repeatable consequence of the plant's lag against that
+    piece of geometry, and a feedback tracker re-discovers it from scratch
+    every lap.  Two tables over ``s``, both identity until a lap has been
+    driven:
+
+    ``kappa_ff``  a curvature offset ADDED to the reference curvature the
+                  optimiser tracks.  Positive reference curvature is a left
+                  turn, so a lap spent left of the line (``e_lat > 0``) is
+                  corrected by a negative offset: ``kff -= gain * mean(e)``.
+                  It is clamped twice -- to ``k_max`` outright, and to the
+                  curvature that would shift the car ``shift_max_m`` over
+                  ``shift_len_m`` of preview, which is the tighter of the two
+                  at the shipping numbers.
+    ``v_scale``   a multiplier on the speed CEILING.  Driven by the worst
+                  corridor clearance seen in the bin, not by the error: the
+                  thing that ends a race is contact, and clearance is the
+                  quantity that measures it.  Down fast where the lap came
+                  closer than ``clear_target``, up slowly and only where it was
+                  comfortably clear.
+
+    Both are passed through a Q-filter (a circular box average over
+    ``q_span_m``) before they are used, which is what keeps a bin-to-bin
+    ripple -- the classic ILC failure -- from being learned and amplified.
+    The learning gains are well under 1, so the iteration is a contraction.
+    """
+
+    def __init__(self, total_s, bin_m=0.25, k_gain=0.30, q_span_m=0.50,
+                 k_max=0.15, shift_max_m=0.08, shift_len_m=1.50,
+                 clear_target=0.30, clear_band=0.10, clear_loss=0.05,
+                 v_down=1.0, v_up=0.005, v_enable=True,
+                 v_lo=0.85, v_hi=1.05, leak=0.02, min_count=1, min_cover=0.60,
+                 store=''):
+        self.total_s = float(total_s)
+        self.bin_m = float(bin_m)
+        self.nb = max(4, int(round(self.total_s / self.bin_m)))
+        self.k_gain = float(k_gain)
+        self.k_clamp = min(float(k_max),
+                           2.0 * float(shift_max_m) / max(float(shift_len_m), 1e-3) ** 2)
+        self.clear_target = float(clear_target)
+        self.clear_band = float(clear_band)
+        # The speed table must punish clearance the TRACKER gives away, not
+        # clearance the LINE never had.  Measured: with a flat 0.30 m target on
+        # `porto_mesh_mc0.63_ay6.75` -- whose corridor is under 0.30 m at the
+        # hairpins by construction -- every bin scored "tight" every lap and
+        # the multiplicative cut ratcheted the whole lap to the 0.85 floor:
+        # error still converged (p50 0.077 -> 0.013) but the lap went
+        # 7.11 -> 8.28 s.  The target is therefore capped at the line's own
+        # clearance less `clear_loss`, which is zero-cost wherever the line is
+        # already tight and still defends the absolute floor where it is not.
+        self.clear_loss = float(clear_loss)
+        self.v_enable = bool(v_enable)
+        self.nominal_clear = None
+        self.v_down, self.v_up = float(v_down), float(v_up)
+        self.v_lo, self.v_hi = float(v_lo), float(v_hi)
+        # Leakage.  A pure integrator over a table with a hard clamp winds up:
+        # measured without it, the steering table converged to |e| p50 0.032 m
+        # by lap 11 and then drifted back to 0.075 and hunted, with most bins
+        # pinned at the clamp.  `kff <- (1 - leak) * kff - gain * e` is the
+        # standard fix and makes the iteration a strict contraction.
+        self.leak = float(leak)
+        self.min_count = int(min_count)
+        # A lap at 10 Hz is only ~70 poses over 28.6 m, i.e. one sample every
+        # 0.41 m.  0.1 m bins are therefore NOT observable in one lap however
+        # attractive they look: measured, 286 bins saw 68 samples and the
+        # update never fired at all.  The table is kept fine-grained and the
+        # gaps are interpolated across instead -- the Q-filter smooths over
+        # 0.5 m anyway, so nothing finer than that survives regardless.
+        # ...and a FRAGMENT of a lap is not a lap.  `_fill` interpolates the
+        # unseen bins circularly, which is right for the 10 Hz sampling gaps it
+        # was written for and a lie for a lap cut short by a collision
+        # teleport: measured, a 20%-covered fragment carrying a constant
+        # +0.30 m error drove all 114 bins to the -0.0711 1/m clamp, i.e. a
+        # full-clamp curvature bias round the entire lap, from one collision.
+        # `invalidate()` is the primary defence but it depends on the encoder
+        # noticing the teleport; this is the one that does not.
+        self.min_cover = float(min_cover)
+        self.store = str(store)
+        span = max(1, int(round(float(q_span_m) / self.bin_m)))
+        self.q = np.ones(2 * span + 1) / (2 * span + 1)
+        self.kappa_ff = np.zeros(self.nb)
+        self.v_scale = np.ones(self.nb)
+        self.laps = 0
+        self.valid = True
+        self._reset_lap()
+        if self.store:
+            self.load()
+
+    # .................................................................. state
+    def _reset_lap(self):
+        self.sum_e = np.zeros(self.nb)
+        self.cnt = np.zeros(self.nb)
+        self.min_clear = np.full(self.nb, np.inf)
+
+    def invalidate(self):
+        """This lap is not evidence (a teleport, a stuck escape, a restart)."""
+        self.valid = False
+
+    def set_nominal_clearance(self, path, body_m=0.25):
+        """The clearance the LINE itself has, per bin, with the car ON it."""
+        if not path.has_corridor:
+            self.nominal_clear = None
+            return None
+        c = np.array([corridor_clearance(path, i, 0.0, body_m)
+                      for i in range(path.n)])
+        b = (path.s / self.bin_m).astype(int) % self.nb
+        out = np.full(self.nb, np.inf)
+        np.minimum.at(out, b, c)
+        self.nominal_clear = self._fill(np.where(np.isfinite(out), out, 0.0),
+                                        np.isfinite(out))
+        return self.nominal_clear
+
+    # .................................................................. use
+    def _bins(self, s):
+        return (np.asarray(s) / self.bin_m).astype(int) % self.nb
+
+    def kappa_offset(self, s):
+        return self.kappa_ff[self._bins(s)]
+
+    def speed_scale(self, s):
+        return self.v_scale[self._bins(s)]
+
+    # .................................................................. learn
+    def observe(self, s, e_lat, clearance=None):
+        b = int(s / self.bin_m) % self.nb
+        self.sum_e[b] += float(e_lat)
+        self.cnt[b] += 1.0
+        if clearance is not None and math.isfinite(clearance):
+            self.min_clear[b] = min(self.min_clear[b], float(clearance))
+
+    def _fill(self, a, seen):
+        """Circularly interpolate a per-bin quantity across the unseen bins.
+
+        Zero-filling would be a lie in the other direction: an unseen bin is
+        not a bin with no error, it is a bin the 10 Hz sensor did not land in.
+        """
+        if seen.all():
+            return np.asarray(a, float)
+        i = np.flatnonzero(seen)
+        if not len(i):
+            return np.zeros(self.nb)
+        x = np.arange(self.nb, dtype=float)
+        # wrap one sample round each end so the interpolation is periodic
+        xp = np.concatenate([i - self.nb, i, i + self.nb]).astype(float)
+        fp = np.concatenate([a[i], a[i], a[i]])
+        return np.interp(x, xp, fp)
+
+    def _q_filter(self, a):
+        k = len(self.q) // 2
+        pad = np.concatenate([a[-k:], a, a[:k]])
+        return np.convolve(pad, self.q, mode='valid')
+
+    def finish_lap(self):
+        """Fold one lap's measurements into the tables.  Call on an s wrap."""
+        seen = self.cnt >= self.min_count
+        if not self.valid or seen.sum() < self.min_cover * self.nb:
+            self._reset_lap()
+            self.valid = True
+            return None
+        mean_e = self._fill(np.where(seen, self.sum_e / np.maximum(self.cnt, 1.0),
+                                     0.0), seen)
+        kff = (1.0 - self.leak) * self.kappa_ff - self.k_gain * mean_e
+        kff = np.clip(self._q_filter(kff), -self.k_clamp, self.k_clamp)
+
+        vs = self.v_scale.copy()
+        tgt = np.full(self.nb, self.clear_target)
+        if self.nominal_clear is not None:
+            tgt = np.minimum(tgt, self.nominal_clear - self.clear_loss)
+        clr = self._fill(np.where(np.isfinite(self.min_clear), self.min_clear,
+                                  0.0), np.isfinite(self.min_clear))
+        tight = clr < tgt
+        roomy = clr > tgt + self.clear_band
+        # THIS LAP'S multiplier, then the table.  Eroding the cumulative table
+        # instead (the first version) walks the minimum two bins further round
+        # the lap every lap: after 29 laps one tight hairpin had pulled all 114
+        # bins to the 0.85 floor and the lap time went 7.11 -> 8.28 s while the
+        # error converged.  Eroding the INCREMENT spreads a cut to the metre
+        # around the tight spot and no further, and a bin that is not tight
+        # this lap gets a multiplier of exactly 1.
+        m = np.ones(self.nb)
+        m[tight] = 1.0 - self.v_down * (tgt[tight] - clr[tight])
+        m[roomy] = 1.0 + self.v_up
+        m = np.minimum.reduce([np.roll(m, k) for k in (-2, -1, 0, 1, 2)])
+        m = self._q_filter(m)
+        if self.v_enable:
+            vs = np.clip(vs * m, self.v_lo, self.v_hi)
+
+        stats = dict(lap=self.laps + 1,
+                     mean_abs_e=float(np.abs(mean_e[seen]).mean()),
+                     max_abs_e=float(np.abs(mean_e[seen]).max()),
+                     kff_max=float(np.abs(kff).max()),
+                     d_kff=float(np.abs(kff - self.kappa_ff).max()),
+                     v_scale_min=float(vs.min()), v_scale_max=float(vs.max()),
+                     v_target_min=float(tgt.min()),
+                     cover=float(seen.mean()),
+                     min_clear=float(clr.min()))
+        self.kappa_ff, self.v_scale = kff, vs
+        self.laps += 1
+        self._reset_lap()
+        if self.store:
+            self.save()
+        return stats
+
+    # .................................................................. disk
+    def store_path(self):
+        return self.store if self.store.endswith('.npz') else self.store + '.npz'
+
+    def save(self):
+        """Write the tables ATOMICALLY.
+
+        `np.savez` straight onto the live path is a torn write waiting to
+        happen: this is called from inside the control callback at every lap
+        boundary, and a run killed there (which is what `stop_run.sh` does)
+        leaves a half-written zip that the NEXT run then tries to load --
+        measured, `BadZipFile` on a truncated file and `EOFError` on an empty
+        one, neither of which `load` used to catch, both of which unwound
+        `MPC3Tracker.__init__` and left the race with no tracker at all.
+        Writing to a pid-unique temporary and `os.replace`-ing it also makes
+        two concurrent runs of the same line each other's problem no longer.
+        """
+        final = self.store_path()
+        tmp = f'{final}.{os.getpid()}.tmp.npz'
+        try:
+            np.savez(tmp, kappa_ff=self.kappa_ff, v_scale=self.v_scale,
+                     laps=self.laps, total_s=self.total_s, bin_m=self.bin_m)
+            os.replace(tmp, final)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def load(self):
+        """Restore a table only if it describes THIS line at THIS resolution.
+
+        A stored table is a CONVENIENCE; the car must start regardless.  So the
+        failure mode here is `return False` for anything at all -- a truncated
+        zip, an empty file, a table from another numpy, a pickled surprise --
+        and never an exception, because this runs in the node's constructor.
+        """
+        try:
+            z = np.load(self.store_path())
+            if (len(z['kappa_ff']) != self.nb
+                    or abs(float(z['bin_m']) - self.bin_m) > 1e-9
+                    or abs(float(z['total_s']) - self.total_s) > 0.5):
+                return False
+            kff = np.clip(np.asarray(z['kappa_ff'], float),
+                          -self.k_clamp, self.k_clamp)
+            vs = np.clip(np.asarray(z['v_scale'], float), self.v_lo, self.v_hi)
+            laps = int(z['laps'])
+        except Exception:                                       # noqa: BLE001
+            return False
+        # Commit only once everything parsed: a half-restored table is worse
+        # than none, and `load` is allowed to be a no-op.
+        if not (np.isfinite(kff).all() and np.isfinite(vs).all()):
+            return False
+        self.kappa_ff, self.v_scale, self.laps = kff, vs, laps
+        return True
+
+
 class MPC3:
     """Gauss-Newton over a steering-rate sequence, with a coupled speed plan.
 
@@ -175,6 +701,29 @@ class MPC3:
         self.k_cmd = np.zeros(self.N)
         self.last_cost = float('nan')
         self.last_iters = 0
+        # Opt-in extras; both are None in the shipping configuration and every
+        # code path that reads them is a no-op while they are.
+        self.ilc = None               # see `ILC`; set by the node / harness
+
+
+    # ..................................................................
+    def set_rate(self, delay_s=None, apply_ahead_s=None, thr_lead_s=None):
+        """Re-point the period-dependent constants at a measured period.
+
+        Only ``delay_s`` changes the solver's STRUCTURE (``nd``, the number of
+        horizon steps whose steering is already committed).  ``self.u`` keeps
+        its length ``N``, so a change in ``nd`` mid-run only re-slices the warm
+        start, which is what should happen.
+        """
+        if delay_s is not None:
+            self.cfg['delay_s'] = float(delay_s)
+            self.nd = max(0, min(self.N - 2,
+                                 int(round(float(delay_s) / self.dt))))
+        if apply_ahead_s is not None:
+            self.cfg['apply_ahead_s'] = float(apply_ahead_s)
+        if thr_lead_s is not None:
+            self.cfg['thr_lead_s'] = float(thr_lead_s)
+        return self.nd
 
     # ..................................................................
     def _indices(self, i0, v):
@@ -204,6 +753,8 @@ class MPC3:
         P = self.path
         N = self.N
         v_lim = P.v_prof[idx].astype(float).copy()
+        if self.ilc is not None:
+            v_lim *= self.ilc.speed_scale(P.s[idx])
 
         e = np.abs(self.e_pred[:N + 1])
         mod = np.clip(1.0 - c['k_e'] * np.maximum(0.0, e - c['e_free']),
@@ -462,6 +1013,13 @@ class MPC3:
             self.v_plan = self._speed_plan(idx, ds, v0)
             idx, ds = self._indices(i0, v0)
             kap = self.path.kappa[idx[:N]]
+            if self.ilc is not None:
+                # The learned offset is added to the REFERENCE the rollout is
+                # judged against, not to the command: the solver then plans a
+                # feasible, rate-limited way of delivering it, and every cap
+                # (`cap`, the grip saturation, the corridor barrier) still
+                # applies on top.
+                kap = kap + self.ilc.kappa_offset(self.path.s[idx[:N]])
             lo, hi = self._bounds(idx)
 
             e, psi, d, S = self._rollout(u, z0, ds, kap, self.v_plan, cap,
@@ -523,6 +1081,8 @@ class MPC3:
         fk = min(float(c['thr_lead_s']) / self.dt, N - 1e-6)
         ki = int(fk)
         v_cmd = float(vp[ki] + (fk - ki) * (vp[ki + 1] - vp[ki]))
+        if str(c['thr_lead_mode']) == 'min':
+            v_cmd = float(min(v_cmd, vp[:ki + 2].min()))
         info = dict(cost=cost, iters=self.last_iters, delta=d, e=e, psi=psi,
                     v=self.v_plan, v_ceiling=vp, v_cmd=v_cmd, lo=lo, hi=hi,
                     kap=kap, idx=idx, ds=ds, u=u.copy())

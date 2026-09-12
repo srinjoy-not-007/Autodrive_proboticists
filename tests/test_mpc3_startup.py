@@ -195,6 +195,69 @@ class TestEscapeIsGatedOnTheEncoder:
         assert all('v_meas' in g for g in guards), guards
 
 
+class TestOptInWiring:
+    """`rate_adaptive` and `ilc_enable` are opt-in, but the way the node wires
+    them up is not covered by `tests/test_mpc3_core.py` -- the core classes are
+    correct in isolation and were still wired wrongly.  These are source-level
+    assertions for the same reason the `is_stuck` one above is."""
+
+    def _cls(self):
+        tree = ast.parse(open(MPC3_PY).read())
+        return next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                    and n.name == 'MPC3Tracker')
+
+    def _defaults(self):
+        """The (name, default) pairs in `declare_parameters`."""
+        out = {}
+        for n in ast.walk(self._cls()):
+            if isinstance(n, ast.Tuple) and len(n.elts) == 2 \
+                    and isinstance(n.elts[0], ast.Constant) \
+                    and isinstance(n.elts[0].value, str):
+                try:
+                    out[n.elts[0].value] = ast.literal_eval(n.elts[1])
+                except ValueError:
+                    pass
+        return out
+
+    def test_both_features_are_off_by_default(self):
+        d = self._defaults()
+        assert d['rate_adaptive'] is False
+        assert d['ilc_enable'] is False
+
+    def test_the_ilc_speed_table_is_off_by_default(self):
+        """It costs more lap time than the steering table saves: 12 harness
+        laps went 7.86 -> 8.09 s with it and 7.86 -> 7.76 s without."""
+        assert self._defaults()['ilc_v_enable'] is False
+
+    def test_ilc_persistence_is_opt_in(self):
+        """A non-empty default store makes run N+1 start on run N's table,
+        which the offline harness never does -- so the harness would stop
+        measuring what races."""
+        assert self._defaults()['ilc_store'] == ''
+
+    def test_the_node_caps_the_ilc_target_by_the_line_own_clearance(self):
+        """Without `set_nominal_clearance` the target is a flat 0.30 m, and on
+        a line whose corridor is under that by construction every bin scores
+        tight every lap and the table ratchets to the v_lo floor."""
+        src = ast.unparse(self._cls())
+        assert 'set_nominal_clearance' in src, \
+            'the node builds an ILC but never caps its clearance target'
+
+    def test_the_period_is_estimated_from_accepted_poses_only(self):
+        """A rejected pose is not evidence about the sensor rate: feeding them
+        in let a `stamp == 0` pose anchor the estimator."""
+        on_pose = next(n for n in self._cls().body
+                       if isinstance(n, ast.FunctionDef) and n.name == 'on_pose')
+        body = on_pose.body
+        upd = [i for i, n in enumerate(body)
+               if 'rate_ctl.update' in ast.unparse(n)]
+        drops = [i for i, n in enumerate(body)
+                 if isinstance(n, ast.If) and 'drop_pose' in ast.unparse(n)]
+        assert upd and drops, (upd, drops)
+        assert min(upd) > max(drops), \
+            'rate_ctl.update runs before on_pose has finished rejecting poses'
+
+
 class TestServoThrottle:
     """mpc3's only longitudinal actuator.  Never negative -- negative throttle
     is reverse drive in this simulator, which cost 176 collisions once."""

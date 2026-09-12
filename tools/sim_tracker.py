@@ -30,6 +30,18 @@ Usage (from the repo root):
     .venv/bin/python tools/sim_tracker.py                       # both trackers
     .venv/bin/python tools/sim_tracker.py --line data/racelines/track_v2_safe_ay6.0.csv \
         --laps 6 --tracker mpc2 --plot /tmp/mpc2.png
+
+Reproducing the live rate failure (mpc3 on porto_mesh_mc0.63_ay6.75, 2026-09-12
+logs).  `--plant-realistic` is the identified speed loop plus both encoder
+channels; `--speed-diag` prints the lag decomposition in the same metric the
+logs are read with; `--pose-lon-bias` injects the measured along-axis
+localization offset, which is what actually produces the hairpin collisions:
+
+    .venv/bin/python tools/sim_tracker.py --tracker mpc3 \
+        --line data/racelines/porto_mesh_mc0.63_ay6.75.csv --map data/maps/porto_mesh \
+        --laps 20 --pose-noise 0.03 --plant-realistic --speed-diag \
+        --frame 0.104 --pose-lon-bias 0.00      # 0 collisions / 100 laps, 5 seeds
+    ...  --frame 0.088 --pose-lon-bias 0.15      # 64 / 100, all at s 11.1-11.8
 """
 
 import argparse
@@ -45,7 +57,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 from pit_crew import vehicle                                    # noqa: E402
 from pit_crew.mpc2_core import (Actuator, CurvatureBias, MPC2,   # noqa: E402
                                 PoseFilter, RefPath, wrap)
-from pit_crew.mpc3_core import MPC3                              # noqa: E402
+from pit_crew.mpc3_core import (ILC, MPC3, RateControl,            # noqa: E402
+                                RATE_NOMINAL, RATE_TERMS,
+                                corridor_clearance)
 from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
 
 DT = 0.001                  # physics step, s
@@ -58,6 +72,47 @@ POSE_LATENCY = 0.045
 SERVO_SPEED_PER_THROTTLE = 24.6
 SERVO_A = 6.0               # m/s2 of authority, both directions
 SERVO_K = 8.0               # 1/s, how hard the servo chases its target
+# The speed loop as CALIBRATED against the live logs, rather than as guessed.
+# The values above make the plant follow the speed plan almost perfectly --
+# measured, 0.30-0.50 m of spatial lag and 0.10 m/s of residual against a plan
+# the real car lags by 1.45 m with 0.265 m/s residual, and a peak of 6.54 m/s
+# where the real car reaches 6.01 against the same 6.91 m/s plan.  That gap is
+# not cosmetic: the collision mechanism at 11 Hz is arriving at the hairpin
+# too fast because the speed loop's transport lag (which was acting as a free
+# corner-entry brake) shrinks, and a plant with no lag cannot show it at all.
+# `--servo-cal` selects these; the defaults above are left untouched so every
+# earlier number in docs/STATUS.md stays reproducible.
+# Best fit found so far by grid: at 0.104 s it gives 0.60 m of lag, 0.249 m/s
+# of de-lagged residual and a 6.13 m/s peak, against the log's 1.45 m, 0.265
+# and 6.01.  The residual and the peak match; the LAG does not, and that is
+# the part the collision mechanism needs, so this is a partial calibration and
+# is NOT yet a gate the rate work can be judged against.  What is still
+# missing is most likely inside `ServoThrottle._predict`, whose servo model
+# (K 18) is much stiffer than the plant this fit wants (K 6): the resulting
+# over-prediction is a systematic under-command, i.e. lag.
+SERVO_CAL = dict(servo_k=6.0, a_accel=5.0, a_brake=4.5, drag=0.273)
+# `--plant-realistic`: the speed loop IDENTIFIED against the clean 100-lap log
+# rather than grid-searched against a spatial-lag statistic.  The log's
+# `throttle` column is the command the SIMULATOR reports in force, so fitting
+# `dv/dt = clip(K*(24.6*u - v), -dmax, amax) - drag*v` against the ground-truth
+# speed (d/dt of the IPS path length) identifies the plant with no controller
+# model in the loop at all: `tools/sim_servo.py fit
+# data/logs/race_20260912_015615.csv` gives K 18, tau 0 (w.r.t. that column),
+# a_max 5.50, a_min -4.00, drag 0.273 at an RMSE of 0.087 m/s -- i.e. the servo
+# really is first-order-with-K-18, and SERVO_CAL's K 6 is an artefact of having
+# fitted the wrong observable (see `--speed-diag`).
+PLANT_REAL = dict(servo_k=18.0, a_accel=5.5, a_brake=4.0, drag=0.273)
+# The race logger's `speed` column is NOT the plant speed and NOT
+# `vehicle.SpeedEstimator` either: `src/tools/race_logger.py` runs its own
+# per-encoder-message low pass, `v += 0.3 * clip(v_enc - v, -2, 2)`.  Its lag is
+# most of the "1.45 m" live speed lag, so the harness models the channel
+# explicitly and reports both, or the two can never be compared.
+LOG_ENC_ALPHA = 0.30
+LOG_ENC_CLAMP = 2.0
+# The wheel encoder over-reads the ground speed under drive: mean encoder speed
+# is 4.096 m/s against 3.943 m/s of ground truth on the 100-lap log (+3.9%),
+# which is wheel slip and not filter lag.
+ENC_SLIP = 1.039
 GRIP_RATIO = 0.95           # of asked curvature, well inside the envelope
 # Sustained lateral acceleration the car actually delivers ON TRACK.  The
 # skidpad's 9.9 m/s2 is a TRANSIENT peak -- the Unity sideways tyre peaks at
@@ -84,9 +139,14 @@ AY_KNEE = 0.85              # fraction of AY_MAX where saturation starts
 
 class Plant:
 
-    def __init__(self, x, y, yaw, v=0.0, ay_max=AY_MAX):
+    def __init__(self, x, y, yaw, v=0.0, ay_max=AY_MAX, servo_k=SERVO_K,
+                 a_accel=SERVO_A, a_brake=SERVO_A, drag=0.0):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
+        self.servo_k = float(servo_k)
+        self.a_accel = float(a_accel)
+        self.a_brake = float(a_brake)
+        self.drag = float(drag)
         self.delta = 0.0                 # actual steering angle, rad
         self.cmd_queue = []              # (t_effective, steer_cmd)
         self.steer_target = 0.0
@@ -115,7 +175,9 @@ class Plant:
                       if abs(k_ask) > 1e-9 else 0.0)
 
         v_tgt = SERVO_SPEED_PER_THROTTLE * self.throttle
-        a = max(-SERVO_A, min(SERVO_A, SERVO_K * (v_tgt - self.v)))
+        a = max(-self.a_brake, min(self.a_accel,
+                                   self.servo_k * (v_tgt - self.v)))
+        a -= self.drag * self.v
         self.v = max(-3.0, self.v + a * DT)
         yr = self.v * self.kappa
         ym = self.yaw + 0.5 * yr * DT
@@ -261,13 +323,30 @@ class MPC3Sim:
                       v_meas_min=0.2, v_start=0.5, servo_k=18.0, servo_drag=0.273,
                       servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
                       servo_head_max=0.5, servo_u_max=0.60, servo_v_floor=1.0,
-                      servo_gain=24.6)
+                      servo_gain=24.6,
+                      # --- rate adaptivity (opt-in, identity when off) -----
+                      rate_adaptive=0, rate_nominal=RATE_NOMINAL,
+                      rate_window=20, rate_min_change=0.002,
+                      rate_terms=','.join(RATE_TERMS),
+                      stale_pose_s=0.35, enc_alpha=0.35,
+                      # --- ILC (opt-in) ------------------------------------
+                      ilc_enable=0, ilc_bin_m=0.25, ilc_k_gain=0.30,
+                      ilc_q_span_m=0.50, ilc_k_max=0.15, ilc_shift_max_m=0.08,
+                      ilc_shift_len_m=1.50, ilc_clear_target=0.30,
+                      ilc_clear_band=0.10, ilc_clear_loss=0.05,
+                      # Matches the node's default: the speed table costs more
+                      # lap time than the steering table saves (12 laps on the
+                      # safe line, 7.86 -> 8.09 s with it, 7.86 -> 7.76 s
+                      # without).  Pass `ilc_v_enable=1` to re-measure it.
+                      ilc_v_enable=0, ilc_v_down=1.0, ilc_v_up=0.005,
+                      ilc_v_lo=0.85, ilc_v_hi=1.05, ilc_store='')
         solver_keys = ('horizon', 'step_dt', 'min_step_m', 'iters', 'outer',
                        'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk',
                        'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
                        'yaw_gain', 'ay_deliver', 'sat_knee', 'ay_budget',
                        'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
-                       'thr_lead_s', 'delay_s', 'apply_ahead_s', 'steer_rate')
+                       'thr_lead_s', 'thr_lead_mode', 'thr_enc_tau', 'delay_s',
+                       'apply_ahead_s', 'steer_rate')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
@@ -291,6 +370,40 @@ class MPC3Sim:
         self.e_lat = 0.0
         self.solve_ms = []
         self.v_cmd = 0.0
+        self.rate_ctl = RateControl(
+            self.mpc, self.act, enabled=bool(self.P['rate_adaptive']),
+            filt=self.filt, speed_est=None,
+            nominal=float(self.P['rate_nominal']),
+            window=int(self.P['rate_window']),
+            terms=tuple(str(self.P['rate_terms']).split(',')),
+            min_change=float(self.P['rate_min_change']),
+            cmd_dead_time=self.P['cmd_dead_time'],
+            delay_s=self.mpc.cfg['delay_s'],
+            apply_ahead_s=self.mpc.cfg['apply_ahead_s'],
+            thr_lead_s=self.mpc.cfg['thr_lead_s'],
+            max_predict_s=self.P['max_predict_s'],
+            stale_pose_s=self.P['stale_pose_s'],
+            enc_alpha=self.P['enc_alpha'], pose_blend=self.P['pose_blend'],
+            enc_tau=self.mpc.cfg['thr_enc_tau'])
+        self.ilc = None
+        self.ilc_log = []
+        self.idx_prev = None
+        if self.P['ilc_enable']:
+            self.ilc = ILC(
+                float(path.s[-1] + path.spacing),
+                bin_m=self.P['ilc_bin_m'], k_gain=self.P['ilc_k_gain'],
+                q_span_m=self.P['ilc_q_span_m'], k_max=self.P['ilc_k_max'],
+                shift_max_m=self.P['ilc_shift_max_m'],
+                shift_len_m=self.P['ilc_shift_len_m'],
+                clear_target=self.P['ilc_clear_target'],
+                clear_band=self.P['ilc_clear_band'],
+                v_down=self.P['ilc_v_down'], v_up=self.P['ilc_v_up'],
+                v_lo=self.P['ilc_v_lo'], v_hi=self.P['ilc_v_hi'],
+                clear_loss=self.P['ilc_clear_loss'],
+                v_enable=bool(self.P['ilc_v_enable']),
+                store=str(self.P['ilc_store']))
+            self.ilc.set_nominal_clearance(path)
+            self.mpc.ilc = self.ilc
 
     # -- the two "callbacks" ------------------------------------------------
     def on_frame(self, t, gyro, speed, steer_fb):
@@ -299,12 +412,25 @@ class MPC3Sim:
             self.act.snap(t - self.P['steer_fb_age'], steer_fb)
 
     def on_pose(self, t_now, t_stamp, x, y, yaw):
+        self.rate_ctl.update(t_stamp)
         if self.v_plan0 <= 0.0:
             self.v_plan0 = float(self.path.v_prof[
                 self.path.nearest(x, y, None, yaw=yaw)])
         v = self.measured_speed() or self.start_speed()
         fx, fy, fyaw, _ = self.filt.update(t_stamp, x, y, yaw, max(v, 0.4))
         self.meas = (t_stamp, fx, fy, fyaw)
+
+    def enc_alpha(self, nominal):
+        """The encoder filter's alpha the LIVE node would be running.
+
+        The harness models `vehicle.SpeedEstimator` outside the tracker (it is
+        the bridge that reports a speed), so the rate-adapted alpha has to be
+        handed back to it or the `enc` term cannot be isolated at all.
+        """
+        if not self.P['rate_adaptive'] or nominal <= 0.0:
+            return nominal
+        r = self.rate_ctl.applied / self.rate_ctl.adapter.nominal
+        return 1.0 - (1.0 - nominal) ** r
 
     def measured_speed(self):
         v = self.speed_meas
@@ -331,7 +457,7 @@ class MPC3Sim:
         v_meas = self.measured_speed()
         v0 = max(v_meas if v_meas is not None else self.start_speed(), 0.4)
         g = self.mpc.cfg['yaw_gain']
-        t_now = min(t, ts + self.P['max_predict_s'])
+        t_now = min(t, ts + self.rate_ctl.values["max_predict_s"])
         x, y, yaw, delta0 = self.act.predict(
             x, y, yaw, ts, t_now, v0,
             kappa_of=lambda d: g * math.tan(d) / vehicle.WHEELBASE)
@@ -354,6 +480,16 @@ class MPC3Sim:
                             / max(v_cap * v_cap, 0.25)))
         cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
                                    committed=committed)
+        if self.ilc is not None:
+            if (self.idx_prev is not None
+                    and self.idx_prev > 0.8 * self.path.n
+                    and i0 < 0.2 * self.path.n):
+                st = self.ilc.finish_lap()
+                if st:
+                    self.ilc_log.append(st)
+            self.idx_prev = i0
+            self.ilc.observe(float(self.path.s[i0]), e_lat,
+                             corridor_clearance(self.path, i0, e_lat))
         self.v_plan0 = float(self.path.v_prof[i0])
         self.v_cmd = float(info['v_cmd'])
         th = float(self.thr.command(self.v_cmd, v_meas, 0.0, now=t,
@@ -528,7 +664,9 @@ def footprint_clear(dist, meta, x, y, yaw, pts=None):
 
 def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         yaw_noise=0.0, noise_tau=0.5, pose_bias_inside=0.0, ay_max=AY_MAX,
-        pose_latency=POSE_LATENCY, verbose=True, v_start=None):
+        pose_latency=POSE_LATENCY, verbose=True, v_start=None, frame=FRAME,
+        enc_alpha=0.0, servo=None, enc_slip=1.0, log_enc_alpha=0.0,
+        pose_lon_bias=0.0):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -540,13 +678,24 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
     rng = np.random.default_rng(seed)
     pending = []                       # poses in flight through localization
     err_lat = err_yaw = 0.0
-    beta = math.exp(-FRAME / max(noise_tau, 1e-3))
+    frame = float(frame)
+    beta = math.exp(-frame / max(noise_tau, 1e-3))
+    # The wheel-encoder speed the bridge reports is `vehicle.SpeedEstimator`'s
+    # output, a per-SAMPLE low pass: its lag in seconds therefore depends on
+    # the sensor period, which is one of the things rate adaptivity has to
+    # answer for.  0.0 = off, i.e. the perfect speed the harness used before.
+    enc_v = None
+    # A second, purely DIAGNOSTIC encoder channel: what `src/tools/race_logger.py`
+    # would have written in its `speed` column.  Every "live speed lag" number in
+    # docs/STATUS.md came from that column, so without modelling it here the
+    # harness and the logs are not measuring the same signal.
+    log_enc = None
     i0 = 0
     # v_start=0 is a STANDING START, which is how a race actually begins and
     # is not the same test as a flying lap: the encoder has said nothing yet.
     plant = Plant(path.xy[i0, 0], path.xy[i0, 1], float(path.yaw[i0]),
                   v=(float(path.v_prof[i0]) if v_start is None else float(v_start)),
-                  ay_max=ay_max)
+                  ay_max=ay_max, **(servo or {}))
     steer_cmd, throttle = 0.0, 0.0
     t = 0.0
     next_frame = 0.0
@@ -578,18 +727,43 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                 kr = float(path.kappa[last_i])
                 bias = (math.copysign(pose_bias_inside, kr)
                         * min(1.0, abs(kr) / 0.4))
-            nx = plant.x - math.sin(plant.yaw) * (err_lat + bias)
-            ny = plant.y + math.cos(plant.yaw) * (err_lat + bias)
+            # A LONGITUDINAL pose error is not the same failure as a lateral
+            # one and the harness modelled only the lateral kind.  Measured
+            # est-truth along the car's own axis at the s 11.3 hairpin: -0.21/
+            # -0.13 m at a 0.104 s period and -0.03/-0.07 m at 0.088 s, i.e.
+            # the estimate sits ~0.15 m FURTHER FORWARD at the faster rate.
+            # An arc-length error turns the car in early where kappa ramps,
+            # which is a corner cut and not a tracking error at all.
+            nx = (plant.x - math.sin(plant.yaw) * (err_lat + bias)
+                  + math.cos(plant.yaw) * pose_lon_bias)
+            ny = (plant.y + math.cos(plant.yaw) * (err_lat + bias)
+                  + math.sin(plant.yaw) * pose_lon_bias)
             # The bridge publishes IMU, encoders and the steering angle at the
             # frame.  The POSE goes through the particle filter first, so it is
             # stamped with the scan time and delivered `pose_latency` later --
             # which is why the newest steering sample is always newer than the
             # pose the controller is about to optimise from.
-            tracker.on_frame(t, gyro, plant.v, plant.delta)
+            # The wheel encoder measures WHEEL speed, which over-reads the
+            # ground speed under drive (measured +3.9% in the mean over the
+            # 100-lap log).  `enc_slip` 1.0 keeps the old perfect sensor.
+            v_wheel = enc_slip * plant.v
+            if enc_alpha > 0.0:
+                a = getattr(tracker, 'enc_alpha', lambda n: n)(enc_alpha)
+                enc_v = (v_wheel if enc_v is None
+                         else enc_v + a * (v_wheel - enc_v))
+                v_rep = enc_v
+            else:
+                v_rep = plant.v
+            if log_enc_alpha > 0.0:
+                log_enc = (v_wheel if log_enc is None else log_enc
+                           + log_enc_alpha * max(-LOG_ENC_CLAMP,
+                                                 min(LOG_ENC_CLAMP,
+                                                     v_wheel - log_enc)))
+            tracker.on_frame(t, gyro, v_rep, plant.delta)
             pending.append((t + pose_latency, t, nx, ny,
                             wrap(plant.yaw + err_yaw)))
             plant.accept_frame(t, steer_cmd, throttle)
-            next_frame += FRAME
+            next_frame += frame
         while pending and pending[0][0] <= t:
             _, ts, nx, ny, nyaw = pending.pop(0)
             tracker.on_pose(t, ts, nx, ny, nyaw)
@@ -634,7 +808,10 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
             path_m += math.hypot(plant.x - last_xy[0], plant.y - last_xy[1])
             last_xy = (plant.x, plant.y)
             rec.append((t, plant.x, plant.y, plant.yaw, plant.v, plant.delta,
-                        float(path.s[j]), e, clear, lap))
+                        float(path.s[j]), e, clear, lap,
+                        plant.throttle, throttle,
+                        enc_v if enc_v is not None else plant.v,
+                        log_enc if log_enc is not None else plant.v))
     return dict(rec=np.array(rec), laps=lap, lap_times=lap_times,
                 collisions=collisions, coll_s=coll_s, path_m=path_m,
                 line_m=total_s)
@@ -677,6 +854,100 @@ def report(name, out, path, lo=10.0, hi=14.0, warm=1):
               f'most-inside {e[m].min():+.3f}')
 
 
+def speed_diag(out, path, grid=0.10, warm=1, servo_gain=SERVO_SPEED_PER_THROTTLE):
+    """The speed loop's spatial lag, decomposed, in the SAME metric as the logs.
+
+    Every number is a median-per-0.10 m-bin curve round the lap, and a "lag" is
+    the shift ``d`` (metres of arc) that minimises the RMS between two such
+    curves.  This is exactly what the log analysis does, which is the point: the
+    harness and `data/logs/*.csv` have to be measured with one ruler.
+
+    Four channels, and conflating them is what produced the "missing 0.9 m":
+
+    * ``v_prof``   the offline profile;
+    * ``setpoint`` 24.6 * the throttle in force, i.e. the controller's ``v_cmd``
+      exactly -- the boundary between a PLAN lag and a SERVO lag;
+    * ``v_true``   the plant speed, which is what the IPS-derived speed in a log
+      measures;
+    * ``log_enc``  what `race_logger.py` would have written (needs
+      ``--log-enc-alpha``), which is where "1.45 m" came from.
+    """
+    r = out['rec']
+    if not len(r):
+        print('  speed-diag: no data')
+        return None
+    if r.shape[1] < 14:
+        print('  speed-diag: run() did not record the throttle channels')
+        return None
+    r = r[r[:, 9] >= warm]
+    if len(r) < 50:
+        print('  speed-diag: not enough post-warmup data')
+        return None
+    L = float(path.s[-1] + path.spacing)
+    g = np.arange(0.0, L, grid)
+
+    def curve(val):
+        idx = np.clip((r[:, 6] / grid).astype(int), 0, len(g) - 1)
+        out_ = np.full(len(g), np.nan)
+        for k in np.unique(idx):
+            out_[k] = np.median(val[idx == k])
+        ok = ~np.isnan(out_)
+        return np.interp(g, g[ok], out_[ok])
+
+    vp = np.interp(g, path.s, path.v_prof, period=L)
+    ch = dict(setpoint=curve(servo_gain * r[:, 10]), v_true=curve(r[:, 4]),
+              v_enc=curve(r[:, 12]), log_enc=curve(r[:, 13]))
+
+    def lag(a, b, lo=-1.5, hi=4.0):
+        ds = np.arange(lo, hi, 0.01)
+        e = [np.sqrt(np.mean((a - np.interp((g - d) % L, g, b, period=L)) ** 2))
+             for d in ds]
+        k = int(np.argmin(e))
+        return float(ds[k]), float(e[k]), float(e[int(np.argmin(np.abs(ds)))])
+
+    print('  speed-loop lag (positive = the first signal lags the second):')
+    res = {}
+    for nm, a, b in (('v_true   vs v_prof', ch['v_true'], vp),
+                     ('setpoint vs v_prof', ch['setpoint'], vp),
+                     ('v_true   vs setpoint', ch['v_true'], ch['setpoint']),
+                     ('v_enc    vs v_prof', ch['v_enc'], vp),
+                     ('log_enc  vs v_prof', ch['log_enc'], vp)):
+        d, e1, e0 = lag(a, b)
+        res[nm.split(' vs ')[0].strip() + '|' + nm.split(' vs ')[1].strip()] = d
+        print('    %-21s %+6.2f m   rms %.3f -> %.3f m/s' % (nm, d, e0, e1))
+    print('    peaks  v_prof %.2f  setpoint %.2f  v_true %.2f  v_enc %.2f  '
+          'log_enc %.2f' % (vp.max(), ch['setpoint'].max(), ch['v_true'].max(),
+                            ch['v_enc'].max(), ch['log_enc'].max()))
+    print('    s-bin   v_prof  setpt  v_true   sp-prof  true-sp  true-prof')
+    for lo in range(0, int(L), 2):
+        k = (g >= lo) & (g < lo + 2)
+        print('     %5.1f  %6.2f %6.2f %6.2f   %+6.2f  %+6.2f  %+6.2f'
+              % (lo, vp[k].mean(), ch['setpoint'][k].mean(), ch['v_true'][k].mean(),
+                 (ch['setpoint'][k] - vp[k]).mean(),
+                 (ch['v_true'][k] - ch['setpoint'][k]).mean(),
+                 (ch['v_true'][k] - vp[k]).mean()))
+    res['peak_true'] = float(ch['v_true'].max())
+    res['peak_log_enc'] = float(ch['log_enc'].max())
+    return res
+
+
+def per_lap(out):
+    """Lap time, |e_lat| p95 and worst clearance, lap by lap.
+
+    The ILC's whole claim is that lap N+1 is better than lap N, which a
+    run-wide percentile cannot show.
+    """
+    r = out['rec']
+    print('   lap   time     |e| p50   |e| p95    |e| max   min clear')
+    for i, lt in enumerate(out['lap_times']):
+        m = r[:, 9] == i
+        if not m.any():
+            continue
+        e = np.abs(r[m, 7])
+        print(f'   {i:3d}  {lt:6.3f}    {np.percentile(e,50):7.3f}  '
+              f'{np.percentile(e,95):7.3f}   {e.max():7.3f}   {r[m,8].min():7.3f}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--line', default='data/racelines/track_v2_safe_ay6.0.csv')
@@ -690,6 +961,29 @@ def main():
     ap.add_argument('--kappa-span', type=float, default=0.5)
     ap.add_argument('--ay-max', type=float, default=AY_MAX,
                     help='sustained lateral grip of the plant, m/s2')
+    ap.add_argument('--frame', type=float, default=FRAME,
+                    help='sensor / command-pickup period, s (0.088-0.104 measured)')
+    ap.add_argument('--enc-alpha', type=float, default=0.0,
+                    help="model vehicle.SpeedEstimator's per-sample low pass")
+    ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--servo-cal', action='store_true',
+                    help='plant speed loop calibrated to the live logs')
+    ap.add_argument('--plant-realistic', action='store_true',
+                    help='plant speed loop IDENTIFIED from the clean 100-lap '
+                         'log (K 18, +5.5/-4.0, drag 0.273); implies the '
+                         'encoder slip and both encoder channels')
+    ap.add_argument('--enc-slip', type=float, default=1.0,
+                    help='wheel/ground speed ratio the encoder reports '
+                         '(measured 1.039)')
+    ap.add_argument('--log-enc-alpha', type=float, default=0.0,
+                    help="model race_logger.py's own speed filter (0.30) so "
+                         'harness numbers compare with a log column')
+    ap.add_argument('--pose-lon-bias', type=float, default=0.0,
+                    help='localization bias ALONG the car axis, m (+ = the '
+                         'estimate reads further forward than the car is)')
+    ap.add_argument('--speed-diag', action='store_true',
+                    help='decompose the speed-loop spatial lag')
+    ap.add_argument('--per-lap', action='store_true')
     ap.add_argument('--pose-latency', type=float, default=POSE_LATENCY,
                     help='scan stamp to pose delivery, s')
     ap.add_argument('--pose-bias-inside', type=float, default=0.0,
@@ -725,6 +1019,20 @@ def main():
     kw, lkw = parse(args.param), parse(args.legacy_param)
     kw3 = parse(args.mpc3_param)
 
+    # `--plant-realistic` is one switch for the whole measured sensor+plant
+    # chain, because the parts are not independent: an identified plant with a
+    # perfect speed sensor is not the live car either.  Explicit flags still win.
+    enc_alpha = args.enc_alpha
+    enc_slip = args.enc_slip
+    log_enc_alpha = args.log_enc_alpha
+    if args.plant_realistic:
+        if enc_alpha <= 0.0:
+            enc_alpha = 0.35            # vehicle.SpeedEstimator, what mpc3 sees
+        if enc_slip == 1.0:
+            enc_slip = ENC_SLIP
+        if log_enc_alpha <= 0.0:
+            log_enc_alpha = LOG_ENC_ALPHA
+
     results = {}
     order = {'both': ('mpc', 'mpc2'), 'all': ('mpc', 'mpc2', 'mpc3')}.get(
         args.tracker, (args.tracker,))
@@ -740,8 +1048,17 @@ def main():
                   pose_noise=args.pose_noise, yaw_noise=args.yaw_noise,
                   noise_tau=args.noise_tau, ay_max=args.ay_max,
                   pose_bias_inside=args.pose_bias_inside,
-                  pose_latency=args.pose_latency, v_start=args.v_start)
+                  pose_latency=args.pose_latency, v_start=args.v_start,
+                  frame=args.frame, enc_alpha=enc_alpha, seed=args.seed,
+                  enc_slip=enc_slip, log_enc_alpha=log_enc_alpha,
+                  pose_lon_bias=args.pose_lon_bias,
+                  servo=(PLANT_REAL if args.plant_realistic else
+                         SERVO_CAL if args.servo_cal else None))
         report(which, out, path, lo, hi)
+        if args.per_lap:
+            per_lap(out)
+        if args.speed_diag:
+            speed_diag(out, path)
         if which in ('mpc2', 'mpc3') and getattr(tr, 'solve_ms', None):
             sm = np.array(tr.solve_ms)
             print(f'  solve time  median {np.median(sm):.2f} ms  '

@@ -47,7 +47,9 @@ from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32
 
 from pit_crew import vehicle
-from pit_crew.mpc3_core import MPC3, Actuator, PoseFilter, RefPath, wrap
+from pit_crew.mpc3_core import (ILC, MPC3, RATE_NOMINAL, RATE_TERMS, Actuator,
+                                PoseFilter, RateControl, RefPath,
+                                corridor_clearance, wrap)
 from pit_crew.throttle2 import ServoThrottle
 
 
@@ -112,6 +114,8 @@ class MPC3Tracker(Node):
             ('k_e', 2.0),
             ('v_mod_min', 0.55),
             ('thr_lead_s', 0.225),
+            ('thr_lead_mode', 'point'),   # 'min' = brake-only lead, opt-in
+            ('thr_enc_tau', 0.19),
             # --- actuator / delay --------------------------------------------
             ('steer_rate_limit', 3.2),
             ('cmd_dead_time', 0.135),     # measured, structural (devkit bridge)
@@ -148,6 +152,43 @@ class MPC3Tracker(Node):
             ('v_meas_min', 0.2),          # below this the encoder says nothing
             ('v_start', 0.5),             # plan speed before the encoder ever
                                           # reports -- see start_speed()
+            # --- rate adaptivity (OPT-IN, identity at `rate_nominal`) ---------
+            # The sensor period is a property of the MACHINE, not of the
+            # tracker: 0.104 s on the dev host, 0.088 s in the submission
+            # image, 0.097 s measured by the organisers.  mpc3's defaults were
+            # validated at 0.104 s and several of them are really "so many
+            # sensor periods"; see `mpc3_core.RateAdapter` for the isolation.
+            ('rate_adaptive', False),
+            ('rate_nominal', RATE_NOMINAL),
+            ('rate_window', 20),          # poses in the robust median
+            ('rate_min_change', 0.002),   # s; below this, do not re-point
+            ('rate_terms', ','.join(RATE_TERMS)),
+            # --- iterative learning control (OPT-IN) --------------------------
+            ('ilc_enable', False),
+            ('ilc_bin_m', 0.25),
+            ('ilc_k_gain', 0.30),
+            ('ilc_q_span_m', 0.50),
+            ('ilc_k_max', 0.15),
+            ('ilc_shift_max_m', 0.08),
+            ('ilc_shift_len_m', 1.50),
+            ('ilc_clear_target', 0.30),
+            ('ilc_clear_band', 0.10),
+            ('ilc_clear_loss', 0.05),
+            # The speed-ceiling table is a NET LOSS in the harness even with
+            # `set_nominal_clearance` wired: 12 laps on the safe line gave
+            # 7.86 -> 8.09 s with it and 7.86 -> 7.76 s without, and the
+            # steering table alone still halved |e_lat| p95.  It is off by
+            # default; `ilc_enable` on its own means the steering table only.
+            ('ilc_v_enable', False),
+            ('ilc_v_down', 1.0),
+            ('ilc_v_up', 0.005),
+            ('ilc_v_lo', 0.85),
+            ('ilc_v_hi', 1.05),
+            # Persistence is OPT-IN, and empty by default so the node and
+            # `tools/sim_tracker.py` agree: with a store, run N+1 starts on
+            # run N's table, so the harness (which never had one) would no
+            # longer be measuring what races.  Set it deliberately, per line.
+            ('ilc_store', ''),
             # --- safety --------------------------------------------------------
             ('stuck_seconds', 1.5),
             ('stuck_distance', 0.20),
@@ -195,7 +236,8 @@ class MPC3Tracker(Node):
             sat_knee=v['sat_knee'], ay_budget=v['ay_budget'],
             a_brake=v['a_brake'], a_accel=v['a_accel'], e_free=v['e_free'],
             k_e=v['k_e'], v_mod_min=v['v_mod_min'],
-            thr_lead_s=v['thr_lead_s'], delay_s=v['delay_s'],
+            thr_lead_s=v['thr_lead_s'], thr_lead_mode=v['thr_lead_mode'],
+            thr_enc_tau=v['thr_enc_tau'], delay_s=v['delay_s'],
             apply_ahead_s=v['apply_ahead_s'],
             steer_rate=v['steer_rate_limit'])
         self.act = Actuator(dead_time=float(v['cmd_dead_time']),
@@ -209,6 +251,58 @@ class MPC3Tracker(Node):
             lead_max=0.0, ay_limit=v['ay_budget'], v_floor=v['servo_v_floor'],
             u_max=v['servo_u_max'], servo_gain=v['servo_gain'])
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
+        # Measures the pose period always; only ACTS on it when rate_adaptive.
+        self.rate_ctl = RateControl(
+            self.mpc, self.act, enabled=bool(v['rate_adaptive']),
+            filt=self.filt, speed_est=self.speed_est,
+            nominal=float(v['rate_nominal']), window=int(v['rate_window']),
+            terms=tuple(str(v['rate_terms']).split(',')),
+            min_change=float(v['rate_min_change']),
+            cmd_dead_time=float(v['cmd_dead_time']),
+            delay_s=float(v['delay_s']),
+            apply_ahead_s=float(v['apply_ahead_s']),
+            thr_lead_s=float(v['thr_lead_s']),
+            max_predict_s=float(v['max_predict_s']),
+            stale_pose_s=float(v['stale_pose_s']),
+            enc_alpha=self.speed_est.alpha, pose_blend=float(v['pose_blend']),
+            enc_tau=float(v['thr_enc_tau']))
+        self._rate_logged = 0.0
+
+        self.ilc = None
+        self._ilc_prev_idx = None
+        if v['ilc_enable']:
+            store = str(v['ilc_store'])
+            if store:
+                store = (f"{store}_{os.path.splitext(os.path.basename(v['raceline_csv']))[0]}"
+                         f".npz")
+            self.ilc = ILC(
+                float(self.path.s[-1] + self.path.spacing),
+                bin_m=float(v['ilc_bin_m']), k_gain=float(v['ilc_k_gain']),
+                q_span_m=float(v['ilc_q_span_m']), k_max=float(v['ilc_k_max']),
+                shift_max_m=float(v['ilc_shift_max_m']),
+                shift_len_m=float(v['ilc_shift_len_m']),
+                clear_target=float(v['ilc_clear_target']),
+                clear_band=float(v['ilc_clear_band']),
+                clear_loss=float(v['ilc_clear_loss']),
+                v_enable=bool(v['ilc_v_enable']),
+                v_down=float(v['ilc_v_down']), v_up=float(v['ilc_v_up']),
+                v_lo=float(v['ilc_v_lo']), v_hi=float(v['ilc_v_hi']),
+                store=store)
+            # WITHOUT this the speed target is a flat `ilc_clear_target`, and
+            # on a line whose corridor is under that by construction every bin
+            # scores "tight" every lap and the table ratchets to the `v_lo`
+            # floor -- measured offline at 7.11 -> 8.28 s with the error still
+            # converging.  The harness has always called it; the node did not.
+            self.ilc.set_nominal_clearance(self.path)
+            self.mpc.ilc = self.ilc
+            self.get_logger().info(
+                f'ILC on: {self.ilc.nb} bins of {v["ilc_bin_m"]:.2f} m, '
+                f'|kff| <= {self.ilc.k_clamp:.3f} 1/m, speed table '
+                f'{"on" if v["ilc_v_enable"] else "OFF"} '
+                f'[{v["ilc_v_lo"]:.2f}, {v["ilc_v_hi"]:.2f}], clearance target '
+                f'{"line-capped" if self.ilc.nominal_clear is not None else "flat"}'
+                f', {self.ilc.laps} lap(s) restored from '
+                f'{store or "(no store)"}')
 
         self.pose = None
         self.gyro_z = 0.0
@@ -286,6 +380,9 @@ class MPC3Tracker(Node):
             # speed (6-7 m/s) with the car stopped, which is the lap-0 failure
             # this class of fix already removed once.
             self._enc_seen = False
+            ilc = getattr(self, 'ilc', None)
+            if ilc is not None:
+                ilc.invalidate()        # this lap is not repeatable evidence
             return None
         v = self.speed_est.speed
         if v > float(self.P['v_meas_min']):
@@ -320,10 +417,15 @@ class MPC3Tracker(Node):
         now = self.now()
         if not all(math.isfinite(q) for q in (mx, my, myaw, stamp)):
             return self.drop_pose('non-finite', now)
-        if stamp <= 0.0 or stamp > now + 0.1 or now - stamp > self.P['stale_pose_s']:
+        R = self.rate_ctl.values
+        if stamp <= 0.0 or stamp > now + 0.1 or now - stamp > R['stale_pose_s']:
             return self.drop_pose(f'stale by {now - stamp:.2f}s', now)
         if self.pose is not None and stamp <= self.pose[3]:
             return self.drop_pose('out of order', now)
+        # Only an ACCEPTED pose is evidence about the sensor period.  Feeding
+        # the rejects in let a `stamp == 0` pose anchor the estimator, and made
+        # it measure a stream the tracker does not actually control on.
+        self.rate_ctl.update(stamp)
         self._pose_ok += 1
         if self.v_plan0 <= 0.0:
             j = self.path.nearest(mx, my, None, yaw=myaw)
@@ -363,14 +465,15 @@ class MPC3Tracker(Node):
         """Runs whether or not poses arrive; commands LATCH in this simulator."""
         if self.pose is None:
             return
-        if self.now() - self.pose[3] > self.P['stale_pose_s']:
+        if self.now() - self.pose[3] > self.rate_ctl.values['stale_pose_s']:
             # Hold the steering angle (mid-corner, zero steer points at the
             # outside wall) and coast.  Zero throttle is a ~5.8 m/s2 brake here,
             # which is exactly what is wanted when the pose has gone.
             self.publish(self.steer, 0.0)
             if not self._stale_warned:
                 self.get_logger().error(
-                    f"no pose for {self.P['stale_pose_s']:.2f}s — coasting to a stop")
+                    f"no pose for {self.rate_ctl.values['stale_pose_s']:.2f}s"
+                    " — coasting to a stop")
                 self._stale_warned = True
             return
         self._stale_warned = False
@@ -425,7 +528,7 @@ class MPC3Tracker(Node):
         # Pose stamp -> now.  This is ESTIMATION lag only (the scan is stamped,
         # the filter takes ~45 ms): the actuator dead time is not handled here
         # but inside the horizon, as committed steering.
-        t_now = min(now, t + float(self.P['max_predict_s']))
+        t_now = min(now, t + float(self.rate_ctl.values['max_predict_s']))
         x, y, yaw, delta0 = self.act.predict(
             x, y, yaw, t, t_now, v0,
             kappa_of=lambda d: (self.P['yaw_gain'] * math.tan(d)
@@ -446,6 +549,8 @@ class MPC3Tracker(Node):
         if self.is_stuck() and (v_meas is None or v_meas < 0.5):
             self._escape_until = now + self.P['escape_seconds']
             self._stuck_count += 1
+            if self.ilc is not None:
+                self.ilc.invalidate()
             turn = e_yaw if abs(e_yaw) > 0.1 else e_lat
             self._escape_steer = math.copysign(vehicle.MAX_STEER, turn)
             self.get_logger().warn(
@@ -482,6 +587,26 @@ class MPC3Tracker(Node):
                 f'solver rejected the state ({exc}); holding the last command '
                 f'(#{self._solve_fail})')
             return
+        if self.ilc is not None:
+            # Lap boundary = the reference index wrapping.  `nearest` is
+            # heading-gated and monotone in practice, so this is the same test
+            # the offline harness uses.
+            if (self._ilc_prev_idx is not None
+                    and self._ilc_prev_idx > 0.8 * self.path.n
+                    and i0 < 0.2 * self.path.n):
+                st = self.ilc.finish_lap()
+                if st:
+                    self.get_logger().info(
+                        f'ILC lap {st["lap"]}: mean |e| per bin '
+                        f'{st["mean_abs_e"]:.3f} m (max {st["max_abs_e"]:.3f}), '
+                        f'|kff| max {st["kff_max"]:.3f} 1/m (moved '
+                        f'{st["d_kff"]:.3f}), v_scale '
+                        f'[{st["v_scale_min"]:.3f}, {st["v_scale_max"]:.3f}], '
+                        f'worst corridor clearance {st["min_clear"]:.3f} m')
+            self._ilc_prev_idx = i0
+            self.ilc.observe(float(self.path.s[i0]), e_lat,
+                             corridor_clearance(self.path, i0, e_lat))
+
         # Fallback speed if the encoder ever goes quiet: the PROFILE here, not
         # the last measurement, which would be a stale hold.  Also what
         # `is_stuck` compares against.
@@ -500,7 +625,11 @@ class MPC3Tracker(Node):
             self.get_logger().info(
                 f'solve {self._solve_ms:.1f} ms, e_lat {e_lat:+.3f} m, '
                 f'v {v0:.2f} -> plan {info["v_cmd"]:.2f} '
-                f'(profile {float(self.path.v_prof[i0]):.2f})')
+                f'(profile {float(self.path.v_prof[i0]):.2f}); pose period '
+                f'{self.rate_ctl.est.period * 1e3:.1f} ms '
+                f'({"adapted" if self.rate_ctl.enabled else "measured only"}: '
+                f'apply {self.mpc.cfg["apply_ahead_s"]:.3f} thr '
+                f'{self.mpc.cfg["thr_lead_s"]:.3f} nd {self.mpc.nd})')
 
     # ------------------------------------------------------------------
     def publish(self, steer, throttle):
