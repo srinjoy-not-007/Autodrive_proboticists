@@ -524,7 +524,16 @@ there, so the 2 collisions are the 2.2-sigma tail of the same behaviour
 (clean laps: body clearance p50 0.135, min 0.035). Fix: `--min-halfwidth
 0.53` -> fast3_m53 (ideal 9.96, clearance 0.395, inside half-width 0.72;
 committed, to drive). Do NOT raise the barrier there: the corridor is
-left-tight/right-open and the margin would bias the car further inside. **ICRA 2025 fast2_m50: 32 laps, 0
+left-tight/right-open and the margin would bias the car further inside.
+Harness matrix (1980 laps): fast3_m53 absorbs the cut (hairpin clearance
+p05 0.30 vs 0.25) at +0.05 s/lap but loses margin on the approach (4
+collisions at 0.058/slew vs 1); thr_brake_lead_s 0.05 removes the
+approach overspeed on both circuits (0 collisions in 396 laps on fast3)
+but costs +0.30 s/lap on CDC-TF and +0.23 on ICRA 2025 (not the free
+-0.018 it was on Porto); 0.08 is bit-identical to 0.05 at 0.097 (never
+pay for it). Recommended drill picks: CDC-TF fast3_m53 + lead 0.05 (or
+lead 0 if the live A/B is clean), ICRA 2025 fast2_m50 (+ lead 0.05 as
+margin), safe lines dropped (0.6-0.9 s/lap slower and cut harder). **ICRA 2025 fast2_m50: 32 laps, 0
 collisions, OFFICIAL 140.4 s vs 149.8 s on safe (-9.4 s/race)** -- the
 drill's pick for that circuit under the finals config. **ICRA 2026 with
 steer_tau: 32/0/148.3 s (vs 150.4 without). steer_tau 0.04 SHIPPED in
