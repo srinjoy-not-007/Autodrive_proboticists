@@ -166,17 +166,22 @@ fixed for a small window on a 5120x2880 screen.
 (mpc3 + rate_adaptive, safe line from finals_drill_mesh.sh, Ultra):
 ICRA 2026 32 laps / 0 collisions / 150.4 s; SRL 2025 CDC-TF (never
 tuned) 32 / 0 / **111.1 s** (Aug 30 legacy stack: 124.5 s); **SRL 2025
-ICRA (never tuned) 4 laps / 14 collisions = DQ.** Cause from the log: on
-the long straight the encoder reads 7.5 m/s while IPS truth moves at 4.76
-m/s (wheelspin at throttle 0.30; no slip below ~5 m/s, and none on
-CDC-TF at the same throttle and speed), the dead-reckoned estimate runs
-7 m ahead of the car, localization is lost and the car hits the same
-corner every lap. Physics, vehicle and tyre assets are IDENTICAL between
-the two images (compare_sim_builds), so it is track-specific (floor
-material or geometry -- under investigation). A SCALE=0.75 re-run is
-queued to test the speed dependence; a slip-robust fix (throttle slip
-guard / IMU-fused speed / conservative v_max for unseen tracks) is being
-designed offline. **This is the finals risk to close before Sep 16.**
+ICRA (never tuned) 4 laps / 14 collisions = DQ.** CORRECTED cause (the
+first reading had the logger's columns swapped: `x,y` ARE the IPS truth,
+`px,py` the estimate): the encoder is accurate (enc/truth 1.03 at 7-8
+m/s), and it is the **localization estimate that saturates at 5.1 m/s**:
+`max_step_m` 0.6 per update at rate_nominal 0.104 is a 5.77 m/s speed
+cap in the motion model, and this circuit has a 13.9 m stretch above
+that (Porto 3.3 m, ICRA 2026 10.3, CDC-TF 11.7), so the estimate falls
+up to 4 m behind by the corner and the car drives straight into the
+wall with cte reading 0.03. The harness with the cap injected reproduces
+it exactly (14 collisions, same corner) and is clean at cap >= 6.4.
+Physics, floor, materials, spawn height are identical between images.
+Fix: `max_step_mps:=9.0` on localization (parameter exists; zero lap
+cost). Plumbing: run_stanley.sh now takes LOC_ARGS; the entrypoint takes
+PIT_CREW_LOCALIZATION_ARGS. Live A/B queued (icra2025_step9); then
+regression on Porto and ICRA 2026. **This is the finals risk to close
+before Sep 16.**
 
 **Tight-circuit lines (Sept 12, offline; live A/B queued):** the drill's
 MESH_RACE_KAPPA_MAX 1.0 gate rejected every raceline on both 2025

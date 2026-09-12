@@ -36,12 +36,14 @@ docker exec autodrive_roboracer_api /bin/bash -c \
 # The LiDAR sits 0.1933 m ahead of the pose point. A map built with that
 # correction MUST be localized against with the same offset -- the two have to
 # agree or the sharper map makes things worse, not better. Set
-# LIDAR_OFFSET=0.1933 when racing a *_c (corrected) map.
+# LIDAR_OFFSET=0.1933 when racing a *_c (corrected) map. LOC_ARGS="-p k:=v"
+# passes extra parameters to localization (the positional extras go to the
+# controller only).
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew localization --ros-args \
     -p map_prefix:=/home/data/maps/${MAP} \
     -p centerline_csv:=/home/data/racelines/${MAP}_centerline.csv \
     -p lidar_offset:=${LIDAR_OFFSET:-0.0} \
-    -p init_x:=${IX} -p init_y:=${IY} > /tmp/loc.log 2>&1"
+    -p init_x:=${IX} -p init_y:=${IY} ${LOC_ARGS:-} > /tmp/loc.log 2>&1"
 sleep 7
 docker exec -d autodrive_roboracer_api /bin/bash -c "$R && ros2 run pit_crew ${CONTROLLER:-stanley} --ros-args \
     -p raceline_csv:=/home/data/racelines/${MAP}_${LINE}.csv \
