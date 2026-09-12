@@ -108,8 +108,13 @@ controller's fixed apply_ahead_s 0.090 s (0.87 period at 0.104, 1.02 at
 corner and sign as the collisions -- exactly the term `rate_adaptive`
 scales. Live A/B at a rate-selected 11 Hz instance queued (ra_fast vs
 ctl_fast). **Live at a rate-selected 0.090 s instance: mpc3 defaults -> 32
-laps, 7 collisions, median 6.92 (ctl_fast3).** rate_adaptive running next on
-a fast instance.
+laps, 7 collisions, median 6.92 (ctl_fast3).** rate_adaptive at a 0.092 s instance -> 32 laps, **2 collisions** (s 11.3,
+13.4), median 7.05, OFFICIAL 70.59 s: most of the rate failure removed, not
+all. Online steering ILC from zero (prior not visible inside the container)
+at a 0.092 s instance, WITHOUT rate_adaptive -> **32 laps, 0 collisions,
+median 7.10**: it converged within two laps (bin mean |e| 0.119 -> 0.053 m).
+Both together with the prior (ilc_store:=/home/data/ilc/run_prior) queued,
+32 then 100 laps.
 
 ## September 13: image as shipped 70.8 s, 100 laps clean twice
 
