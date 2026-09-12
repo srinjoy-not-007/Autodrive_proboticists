@@ -13,7 +13,10 @@ isolations of the search's knobs: ay_budget 6.57 alone -> 2/32; horizon 30 +
 step_dt 0.040 alone -> 2/32 but median 7.06 (fast); both collide at the s
 11.3 hairpin entry arriving at ~5 m/s one second before a 2.9 m/s corner,
 i.e. a late/weak braking point, not a steering problem. Testing horizon 30
-with earlier braking (a_brake 3.5; thr_lead_s 0.30).
+with earlier braking: a_brake 3.5 -> 9/32, thr_lead_s 0.30 -> 7/32, w_rate
+1.9 alone -> 0/32 at 72.29 (neutral). Horizon 30 is dead live. The shipping
+defaults are the local optimum on this line; next is the line's own braking
+profile (planner --brake 3.5) into that hairpin.
 
 ## September 13: 71.6 s / 100 laps clean
 
