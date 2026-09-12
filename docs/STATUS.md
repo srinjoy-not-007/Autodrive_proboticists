@@ -86,6 +86,32 @@ line's feasible cap — min half-width minus 0.135 m — clears it; `thr_brake_l
 0.05 on a tight circuit, never 0.08). Pass = 0 collisions over 100 Xvfb laps
 (Gate C) **and** 0 over 32 real-display laps at ~0.058 s (Gate D).
 
+**CHECKPOINT (Sept 12, end of session; the user asked to stop cleanly):**
+qualification is secure (pass/fail on collisions; the built image raced
+the organisers' way on the real display at 70.06 s clean), the finals
+work resumes on Sep 16 with the released track. Steer_tau 0.02 vs 0.04:
+display 69.88 s with the best hairpin margin; circuit regression at
+0.02 clean on CDC-TF (113.4) and ICRA 2025 (142.3, +2 s); ICRA 2026 and
+Porto Xvfb were the last runs of the session (see experiments.tsv rows
+icra26_t02, porto_t02_xvfb). Open items for the next session, ranked:
+1. The line generator fails on a track with a corner tighter than the
+   steering lock (SRL 2024 IROS: 24/24 candidates rejected, safe line
+   0.265 m effective clearance). A partial attempt is saved as
+   docs/wip/2026-09-12_partial_tight_track_and_ftg.patch (NOT applied).
+2. follow_the_gap fallback audit (offline LiDAR harness, direction
+   lock, corridor-adaptive bubble): partial work in the same patch.
+3. Corridor sign fix in optimize_raceline.py (committed after
+   check_pipeline): one-sided bounds now land on the right wall; the
+   "0.53 asked, 0.443 held" claim did NOT reproduce (pre-fix held 0.522,
+   post-fix 0.527; the residual is the post-QP smoothing). With the
+   corrected bound icra2026's width-using candidate no longer survives
+   the gates (it ships safe anyway).
+4. The organisers' telemetry period is still unknown; the shipping
+   config is clean at 0.058 (real display) and 0.09-0.10 (Xvfb).
+5. Ask the organisers (Discord/email) whether the Sep 19 form accepts a
+   different image from the qualification one (the rules only say the
+   phases are "handled separately").
+
 **Late Sept 12 additions (after the brief was written):**
 - The CDC-TF missed lap was NOT a skipped gate: checkpoint triggers are
   width x 0.254 x 0.100 m boxes (scene), the car passed every one inside
