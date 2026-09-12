@@ -396,7 +396,10 @@ on 18-39% of a braking approach because of the POINT LEAD. Opt-in
 profile brakes, taking the window minimum: 0.05 removes 93-100% of the
 commanded overspeed at -0.018 s/lap with |e| p95 -24..-38% (288 harness
 laps, 0 collisions); 0.08 removes all of it at -0.003 s/lap. thr_source
-profile collides (rejected), min is a no-op. Display slot: thr_bl05.
+profile collides (rejected), min is a no-op. Display: thr_bl05 32/0,
+69.94 s (median 6.99), hairpin most-inside p50 -0.290 / worst -0.310 (8/32
+below -0.30): a small margin gain (bm34+tau: 13/31) for +0.6 s of race;
+not better than barrier 0.40 (0/32 for +0.8 s). Not shipped.
 
 **Apex cap refuted; turn-in phase shift found (Sept 12, five logs):**
 the ay_limit steering cap is identical at both rates to 1.6% (the
