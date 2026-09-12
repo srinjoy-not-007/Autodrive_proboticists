@@ -419,7 +419,11 @@ collisions, OFFICIAL 69.24 s** (best race so far) -- but the hairpin
 margin is NOT improved: most-inside p50 -0.300 / worst -0.333 (16/32
 laps below -0.30) vs bm34+steer_tau -0.297/-0.338 and bm34 alone
 -0.287/-0.313. Clean runs with a thin margin, all three; steer_tau costs
-~0.01 m of it. The barrier 0.40 arm targets exactly this margin.
+~0.01 m of it. The barrier 0.40 arm targets exactly this margin. lead45 (thr_lead_mode
+min, 0.45 s) on the display: 32/0, 72.87 s (median 7.28: +0.33 s/lap),
+hairpin most-inside p50 -0.278 / worst -0.317 (7/32 below -0.30): +0.02 m
+of margin for 3.3 s of race -- not for Porto; the cheap
+brake-phase lead thr_brake_lead_s 0.05 is the one to try.
 
 **Lap-time budget on the finals candidate (Sept 12, display log
 083832, 32 laps, median 6.944):** the car beats its own ideal lap
