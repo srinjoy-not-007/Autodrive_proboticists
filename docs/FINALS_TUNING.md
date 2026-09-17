@@ -48,15 +48,36 @@ that needs something we have not yet found.
       the usual 0.09–0.10 Xvfb band. Cross-track p50 0.095 / p95 **0.336 m**
       (Porto: 0.21), car 0.26 m/s under plan on average, driven median 7.6 %
       over the 11.02 s ideal (Porto: 0.6 %).
-      **All three collisions are at one corner, s 18.97–19.67 m, xy ≈
-      (0.7, −15.6).** Curvature there ramps 0.28 → 1.27 → 1.60 in 0.4 m of
-      arclength; two of the three hits arrived OVER plan speed (2.17 and
-      1.83 m/s against 1.74), with cte 0.31–0.35 m. Planned body clearance at
-      that corner is 0.35–0.58 m, so the line is not the problem — the car
-      runs wide on a sharp entry. Same shape as Porto's s ≈ 16 corner, and the
-      lever that made Porto's line clean was halving the entry ramp with
-      `--dkappa-max` (→ `cr_dk0.8`). Try that before a lower clearance floor,
-      which would not address a tracking error.
+      **CORRECTED — the first attribution was wrong.** xy (0.72, −15.57) is
+      *checkpoint 7*: the row where `collision_count` steps is the respawn,
+      not the impact. With the c-2 rule (`tools/racelog.py`) every collision
+      is at **s 18.07–18.57, the entry to the left-hand corner at s ≈ 19**,
+      with the car 0.33–0.53 m **inside** (left of) the line.
+
+      **Run 2, `finals_mesh_dk08` (`--dkappa-max 0.8`, `race_20260917_135943`)
+      — FAILED, 4 collisions**, OFFICIAL 119.07 s + 20 s. Same entry, same
+      side. The refinement lowered the corner's peak kappa 1.60 → 1.40 but
+      `|dkappa/ds|` stayed 4.77 against a requested 0.8 (25 passes gave the
+      identical line): the 0.53 m half-width floor leaves no room to move.
+
+      **Mechanism, measured on every lap (not just the crashes):** the car's
+      true signed offset grows +0.04 m (s 16.5) → +0.28 (s 18.0–18.5) →
+      **+0.39 m median, +0.48 p95 (s 18.5–19.0)**, then swings −0.25 m wide
+      on the exit. The line's planned body clearance on that approach is
+      only 0.20–0.30 m, so the collisions are the tail of a cut that happens
+      every lap. It is the tracker, not the line and not localization:
+      localization lateral error is p95 **0.069 m** (the large "pose error"
+      first reported on the straights was along-track — logger pose age 82 ms
+      at 8 m/s — computed with the TUM heading convention, 0 = +y, mistaken
+      for 0 = +x). Same shape as the documented CDC-TF hairpin cut (~0.4 m
+      inside at the s 39 entry on every lap).
+
+      Levers for a corner-entry cut, in the order to try: `barrier_margin`
+      is already 0.40, above this line's 0.385 feasible margin, so it is
+      spent; next are mpc3's entry-timing knobs (`apply_lead_steps`, see the
+      Sep 12 "entry cut is the publish lead" note; `nd_delay_s`; `steer_tau`
+      0.02), then a line that sits further from the inside wall on the
+      approach (clearance on s 17.5–18.5, not the lap minimum).
 
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
