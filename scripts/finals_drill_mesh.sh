@@ -135,11 +135,17 @@ stage "3/5 centerline + swept racing lines (no recon: checkpoints stand in)"
 DRILL_LINE_ARGS='--dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0
                  --kappa-gate safe --min-halfwidth-ladder 0.53,0.50,0.45'
 # shellcheck disable=SC2086
-LINE_LOG="data/logs/drill_lines_${SLUG}.log"
-mkdir -p data/logs
+# mktemp, NOT data/logs: that directory is a bind mount the containers
+# create as root, so on a real host the tee fails, the log never exists,
+# and the grep below silently decides no retry is needed. Seen on the
+# 2026-iros-compete drill (Sep 17).
+LINE_LOG="$(mktemp -t "drill_lines_${SLUG}.XXXXXX")"
+echo "  line-generation log: $LINE_LOG"
 .venv/bin/python tools/make_track_lines.py "${SLUG}_mesh" \
     ${LINE_ARGS-$DRILL_LINE_ARGS} 2>&1 | tee "$LINE_LOG"
 [ "${PIPESTATUS[0]}" = "0" ] || exit 1
+[ -s "$LINE_LOG" ] || { echo "line-generation log is empty ($LINE_LOG);"\
+    " cannot tell whether the floor was cleared" >&2; exit 1; }
 
 # CORNER-OPENING RETRY. `--open-kappa` is deliberately NOT a default: on both
 # tuned tracks it changes the line that ships (Porto picks an anchored raceline
