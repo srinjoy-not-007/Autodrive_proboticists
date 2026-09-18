@@ -15,6 +15,10 @@ TOP_SPEED = 22.88           # m/s (claimed; calibrate)
 # the car has ever been planned to go is 7.29 m/s and the fastest measured is
 # 6.58, so 9.0 leaves headroom without admitting nonsense; it reverses only
 # under the escape manoeuvre, at around 1 m/s.
+# Confirmed non-binding on the finals track (Sep 19 audit): over the two clean
+# 32-lap logs the encoder peaks at 8.23 / 8.25 m/s and **0.000 %** of samples
+# exceed 9.0, so this bound is fitted on Porto and never fires here. It is the
+# reject-with-persistence logic below, not the magnitude, that does the work.
 SPEED_MAX = 9.0             # m/s, largest believable forward wheel speed
 # The bound has to stay tight: the glitches run from -2 to -10.8 m/s with a
 # MEDIAN of -5.4, so loosening it to 9.0 lets most of them straight through
@@ -96,6 +100,20 @@ def steer_to_cmd(angle_rad: float) -> float:
     return max(-1.0, min(1.0, angle_rad / MAX_STEER))
 
 
+# SUPERSEDED, and dangerous to reuse — kept only because `achieved_curvature`
+# below is still imported by the OFFLINE planner (`tools/`), never by mpc3.
+# Re-measured Sep 19 on the two clean finals logs (`race_20260918_191411`,
+# display 0.058 s, and `_185202`, Xvfb 0.098 s), achieved yaw rate against the
+# kinematic `v tan(delta)/L` binned by |delta|:
+#     0.03-0.10 rad  0.956 / 0.873      0.10-0.20  0.998 / 0.927
+#     0.20-0.35      0.966 / 0.899      0.35-0.53  0.951 / 0.947
+# i.e. **0.95-1.00 all the way to full lock**, against the 0.52/0.42/0.40 this
+# table claims there. There is no understeer on this simulator; what the Porto
+# ay-4.0 trace measured was the tyre past its 9.81 m/s2 extremum, not a
+# steady-state steering characteristic. The whole-log fit of the one number
+# mpc3 DOES use, `yaw_gain`, comes out at 0.981 (display) / 0.910 (Xvfb)
+# against its 0.956 default, so that constant is confirmed and is left alone.
+#
 # Measured understeer, from tools/grip_curve.py on the ay-4.0 race trace: the
 # fraction of the curvature a steering angle asks for that the front tyres
 # actually deliver. They track the kinematic bicycle model below ~0.10 rad, are

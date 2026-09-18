@@ -79,6 +79,14 @@ __all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS',
 
 DEFAULTS = dict(
     # horizon ---------------------------------------------------------------
+    # `horizon` x `step_dt` = 1.20 s of preview, swept on PORTO only. Do not
+    # lengthen it on the finals track: measured (harness,
+    # finals_mesh_hyb675b_race.csv, shipping args, 3 seeds x 12 laps),
+    # `horizon` 24 (1.44 s) is 36/0 at 0.098 but **24 collisions in 36 laps**
+    # at 0.058, 20 of them at s 37.3-37.9 and the rest at s 42.7-43.0 and
+    # s 18.4 -- the extra preview reaches over the s 37.5 corner's kappa step
+    # and the terminal weights pull the plan into it. It is also slower at
+    # 0.098 (13.19 against 12.95). Not a near miss; a cliff.
     horizon=20,
     step_dt=0.060,            # 1.20 s of preview
     min_step_m=0.10,          # never preview less than this per step
@@ -158,7 +166,22 @@ DEFAULTS = dict(
     # -1.0 keeps the shipping readout untouched.
     apply_lead_steps=-1.0,
     # measured lateral model ------------------------------------------------
+    # `yaw_gain` CONFIRMED on the finals track (Sep 19 audit): whole-log least
+    # squares of the IPS yaw rate against `v tan(delta)/L` on the two clean
+    # 32-lap logs gives 0.981 (display, 0.058 s) and 0.910 (Xvfb, 0.098 s),
+    # bracketing the 0.956 default. Left alone.
     yaw_gain=0.956,           # measured yaw rate / (v tan(delta)/L)
+    # `ay_deliver` / `sat_knee` describe the DELIVERED-curvature knee inside
+    # the rollout. The simulator's tyre is linear to its 9.81 m/s2 extremum
+    # (`TireFriction.cs`) and the finals display logs show achieved/kinematic
+    # curvature 0.95-1.00 to full lock, so the physically faithful pair looks
+    # like (9.8, ~0.95) rather than (9.5, 0.80). It is NOT an improvement:
+    # measured (harness, finals_mesh_hyb675b_race.csv, shipping args, 3 seeds
+    # x 12 laps) `sat_knee` 0.95 + `ay_deliver` 9.8 gives 36/0 at 0.098 but
+    # 36/**2** at 0.058 (s 37.5 and s 37.9) with min clearance 0.000 against
+    # the default's 0.025, for no lap time (12.42 against 12.43). The soft
+    # knee is doing useful work as a margin, exactly like the lateral-jerk
+    # limiter's bug. Do not "correct" it to the source values.
     ay_deliver=9.5,           # asked curvature above this/v^2 is not delivered
     sat_knee=0.80,            # fraction of it where the knee starts
     # speed plan ------------------------------------------------------------
@@ -196,6 +219,13 @@ DEFAULTS = dict(
     # raised ceiling back into the entry, and the harness takes 9 collisions in
     # 36 laps, all at s 37.4-37.5.
     e_cut_accel_kappa=0.0,
+    # `v_mod_min` 0.55 has no recorded provenance; it is the floor under the
+    # `e_free`/`k_e` cut, which is the ONLY term of `_speed_plan` that binds on
+    # this track. Raising it (0.70, the value the finals schedule uses on the
+    # s 19 exit alone) is a global speed gain and collides: harness, 3 seeds x
+    # 12 laps, 36/0 at 0.098 for -0.06 s/lap but 36/**1** at 0.058 with min
+    # clearance 0.075 / 0.000 against 0.112 / 0.025. Keep 0.55 globally; if it
+    # is wanted, it belongs in a `param_schedule` window.
     v_mod_min=0.55,           # never cut the profile speed below this fraction
     thr_lead_s=0.225,         # plan speed at the time the command is in force
     # How the lead is taken.  'point' is what raced: the ceiling AT

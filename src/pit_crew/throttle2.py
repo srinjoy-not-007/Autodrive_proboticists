@@ -36,6 +36,12 @@ try:
 except ImportError:                                  # running from src/pit_crew
     from vehicle import RATE_NOMINAL
 
+# Fitted on two PORTO race logs (`tools/sim_servo.py fit`) and **re-confirmed
+# on the finals track** (Sep 19 audit): on the two clean 32-lap logs
+# (`race_20260918_191411` display, `_185202` Xvfb), steady-state speed per unit
+# throttle (|a| < 0.5 m/s2, u > 0.02) is 23.80 and 24.03 (p25-p75 22.4-24.9 and
+# 23.1-24.7). The shipping feedforward `0.040*v + 0.005` is `v/25 + 0.005`,
+# within 2 % of `v/24.0`. No change warranted.
 SERVO_GAIN = 24.6       # m/s of setpoint per unit of throttle (measured)
 # The simulator consumes one command per telemetry tick, so this IS the sensor
 # period -- a property of the MACHINE, not of the throttle law: 0.104 s on the
@@ -101,6 +107,18 @@ class ServoThrottle:
         #   'pulse' duty-cycle 0.0 against the feedforward command, one tick
         #           per period, to approximate a requested deceleration
         #           anywhere between 0 and the full brake `brake_a_full`.
+        # `brake_a_full` 4.6 + `drag` 0.273 re-measured on the finals track
+        # (Sep 19 audit) from the samples where the published throttle is
+        # exactly 0.0 and the car is above 1.5 m/s, IPS truth differentiated:
+        # on the Xvfb log (`race_20260918_185202`, 1556 samples) the least
+        # squares fit is **-a = 4.31 + 0.284 v**, against this model's
+        # 4.60 + 0.273 v; the display log agrees on the median (5.39 m/s2
+        # against the Xvfb 5.60) but its own fit is unusable, because
+        # differentiating a 0.058 s IPS step puts outliers to 37 m/s in it.
+        # Both constants stand as they are.
+        # NOTE: any string that is not 'none' or 'pulse' falls through to
+        # 'zero' below, so a typo brakes and is never reported. `mpc3.py`
+        # rejects an unknown spelling at construction.
         self.brake_mode = str(brake_mode)
         self.brake_a_min = float(brake_a_min)
         self.brake_dv = float(brake_dv)

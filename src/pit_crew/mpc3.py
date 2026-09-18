@@ -109,6 +109,22 @@ class MPC3Tracker(Node):
             # --- speed plan --------------------------------------------------
             ('ay_budget', 7.5),
             ('a_brake', 4.0),
+            # NOTE (Sep 19 audit): `mpc3_core.DEFAULTS['a_accel']` is **5.0**
+            # -- "the measured servo authority", the same number as
+            # `servo_a_accel` below -- and the two were written 4.0/5.0 in the
+            # SAME commit (6c55a13) with no explanation. This declaration wins
+            # for the node, so the live stack has always planned its forward
+            # acceleration pass at 4.0; `tools/sim_tracker.py` never sets
+            # `a_accel`, so the OFFLINE HARNESS has always run 5.0. Every
+            # harness number in docs/FINALS_TUNING.md therefore models a
+            # different speed plan than the car.
+            # Measured (harness, finals_mesh_hyb675b_race.csv, shipping args,
+            # 6 seeds x 12 laps at each frame): 5.0 -> 72/0 at both frames,
+            # min clearance 0.125 / 0.025; 4.0 -> 72/0 at 0.098 but 72/**1** at
+            # 0.058, clearance 0.103 / 0.000. So it is NOT inert and 4.0 is the
+            # worse of the two. Aligning the node to 5.0 is a speed-plan
+            # change and owes Gates C and D; until then this stays 4.0 so that
+            # nothing moves without being driven.
             ('a_accel', 4.0),
             ('e_free', 0.18),
             ('k_e', 2.0),
@@ -243,10 +259,48 @@ class MPC3Tracker(Node):
             ('use_steer_feedback', True),
             ('steer_fb_age', 0.0),
             # --- steering authority ------------------------------------------
-            ('ay_limit', 9.0),            # hard cap; the saturation model does
-                                          # most of this work now
-            ('cap_ff_headroom', 1.15),    # ...but never below the LINE's own
-            ('cap_preview_min_m', 1.0),   #    feedforward over the preview
+            # Hard cap on the published angle, `atan(L * ay_cap / v^2)`; the
+            # rollout's own `ay_deliver` saturation does most of this work now.
+            #
+            # AUDIT (Sep 19, finals track, harness only -- NOT driven). This is
+            # a Porto-era belt-and-braces and on this track it is the single
+            # biggest remaining knob. It is NOT limiting corner ay: measured on
+            # the two clean finals logs (`race_20260918_191411` display,
+            # `_185202` Xvfb) the driven |ay| p99 is 6.82 / 6.36 against a tyre
+            # that is linear to 9.81, and |cmd| sits within 5 % of this cap on
+            # 33-43 % of samples at s 16-20 and s 40-44 (where the cap IS
+            # `MAX_STEER`, so that is steering lock, not ay) and on 8-9 % at
+            # s 32-36 at 5 m/s, where the cap really is 0.113 rad. What it
+            # limits there is CORRECTION authority on the approach to the
+            # corner that runs wide at the organisers' period.
+            # Harness, `finals_mesh_hyb675b_race.csv`, shipping args,
+            # notch-free, 9 seeds x 12 laps = 108 laps at EACH frame:
+            #   9.0 (this) 12.945 / 12.485 s, 0+0 coll, clearance 0.125 / 0.025
+            #   12.0       12.650 / 12.270,   0+0,      0.125 / 0.050
+            #   16.0       12.620 / 12.030,   0+0,      0.175 / 0.100
+            #   20.0       12.655 / 11.975,   0+0,      0.175 / 0.125
+            # i.e. -0.33 s/lap at the organisers' 0.098 s AND more clearance
+            # AND a smaller s 19 entry cut, with driven ay p99 unmoved
+            # (6.34-6.43 on every arm, abort limit 9.3). 14.0 took 1 collision
+            # in 36 laps at 0.058, so the ladder is not monotone -- these all
+            # sit near the edge and a single 36-lap cell is not evidence.
+            # Teleport stress (`--teleport-every 4`, 36 laps): base 41/55,
+            # 12.0 24/44, 16.0 30/32, 20.0 43/45 -- no arm is worse, so the
+            # old "do not remove the cap to get more steering" note (CLAUDE.md,
+            # written for the LEGACY `mpc`, which had no saturation model and
+            # ran ay_limit 4.5) does not reproduce here. Straight weave is
+            # near-neutral (per-2 m actuator std 0.0225 -> 0.0249 at 0.058,
+            # 0.0279 -> 0.0276 at 0.098): `pub_gate_corr` 0.05 already binds
+            # tighter than this cap on the straight.
+            # It is a SPEED-GAINING change and is left at 9.0 until it has
+            # Gate C (100 Xvfb laps) and Gate D (32 display laps).
+            ('ay_limit', 9.0),
+            # `cap_ff_headroom` / `cap_preview_min_m`: never cap below the
+            # LINE's own feedforward over the preview. Measured inert on this
+            # track -- `1.5` is byte-identical to `1.15` at both frames,
+            # because `1.5 * plan_ay` never reaches 9.0 anywhere on the lap.
+            ('cap_ff_headroom', 1.15),
+            ('cap_preview_min_m', 1.0),
             ('cap_use_measured', True),
             # --- pose ---------------------------------------------------------
             ('pose_blend', 1.0),          # 1.0 = take every sample whole
