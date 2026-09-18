@@ -1,6 +1,58 @@
 # Status — measured, not assumed
 
-## NEXT SESSION — START HERE (September 12: the finals candidate is clean at both sensor periods)
+## NEXT SESSION — START HERE (September 18: the finals config is frozen and clean on the display)
+
+**`docs/FINALS_TUNING.md` is the finals state page** — frozen config, the
+mechanism, every arm driven, what is closed, what is left, and the submission
+commands. This block is the one-screen version.
+
+**State:** the finals image for the SRL 2026 IROS track (`2026-iros-compete`)
+is built, tested and ready to push as `bongracers/roboracer:iros2026-finals`;
+submission due **Sep 19 AoE = Sep 20, 17:30 IST**. Two ay-6.75 display arms are
+in flight; if neither passes both gates, the frozen config ships unchanged.
+
+```
+map / line   finals_mesh  ->  finals_mesh_race.csv   (mpc3)
+CTRL_ARGS    -p map_prefix:=$MAP -p rate_adaptive:=true -p w_dcmd:=50.0
+             -p cmd_tau:=0.10 -p steer_tau:=0.04 -p barrier_margin:=0.40
+             -p thr_brake_lead_s:=0.05
+             -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3
+             -p brake_a_full:=4.6
+LOC_ARGS     -p max_step_mps:=9.0 -p publish_on_reloc:=false
+env          OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1
+```
+
+Driven: **real display (0.058 s) 32 laps / 0 collisions / OFFICIAL 114.042 s**
+(`race_20260918_162222.csv`) and 113.981 s on a second sample
+(`race_20260918_165621.csv`); **Xvfb 32 / 0 / 119.508 s**
+(`race_20260918_163645.csv`); the built image raced the organisers' way,
+**12 laps / 0 collisions / 119.57 s**. Without the brake the same line, the safe
+line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ.
+
+### Corrections to the Sep 12 brief below (from reading the simulator source)
+
+- **The brake is throttle exactly 0.0, not negative throttle.** Negative
+  throttle is reverse drive; `VehicleController.cs` applies `BrakeTorque =
+  MotorTorque` (428 N·m) only at `throttle == 0.0f`, and this stack had never
+  published it (0.4 % of samples). `brake_mode:=zero` is what publishes it.
+- **The tyre is linear to its extremum** (slip 0.01, 9.81 m/s², `TireFriction.cs`).
+  The "sustained limit 4.6-6.6 m/s²" quoted in earlier briefs was chatter across
+  the knee, not a ceiling; driven ay p99 is already 9.6. Planned ay is a real
+  lever again, gated on driven ay p99 < 9.3.
+- **The held brake ceiling is 4.55 m/s²** plus drag (constant torque locks the
+  wheel in one physics step, so what is held is the longitudinal asymptote).
+  Plan brake ≤ 5.5; **"`--brake` 7.0 is ready to ship" was never achievable** —
+  it is unphysical, not merely unvalidated.
+- Also from the source: drive torque is linear in throttle to 1.0 (11 m/s ≈ 0.44)
+  but constant torque means acceleration decays with speed; steering slews at
+  3.2 rad/s in physics time with no lag, independent of graphics quality (Ultra
+  does not change the physics rate); there is no special startup mode, so the
+  warm-up lap is free.
+
+The Sep 12 brief below is otherwise still current: it is the controller-generic
+stack the finals config is built on.
+
+## September 12 brief — the stack the finals config is built on (still current except where the Sep 18 block corrects it)
 
 One day, ~25 experiments. There is now a single shipping config that has driven
 clean on the **real display (0.058 s)** and on **Xvfb (0.09-0.10 s)**, on all

@@ -104,7 +104,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_brake_disp` | + `brake_mode:=zero` (brake_a_min 1.5) | **114.042 s + 0** | **32 / 0** | +0.19 p50 / +0.25 worst | **CLEAN — frozen** |
 | `fin_brk25_disp` | `brake_a_min` 2.5 | **113.981 s + 0** | **32 / 0** | unchanged | **no-op** (the `brake_dv` branch fires first); a second clean sample of the frozen config |
 | `fin_bl08_disp` | `thr_brake_lead_s` **0.08** | 115.343 s + 0 | 32 / 0 | p50 +0.206 / worst +0.278 — identical to 0.05's +0.202 / +0.279 | **REJECTED**: no margin bought live, 1.3 s/race lost |
-| `fin_ay675_bl12_disp` | ay 6.75 line + lead 0.12 | *pending* | *pending* | *pending* | *in flight* |
+| `fin_ay675_bl12_disp` | ay 6.75 line + lead 0.12 | 114.103 s | 0 | +0.201 / +0.252 | neutral: driven ay p99 6.40 vs 6.27 on the frozen run, the lead's cost cancels the profile's gain (`race_20260918_171628`) |
 | `fin_ay675_bl05_disp` | ay 6.75 line + lead 0.05 | *pending* | *pending* | *pending* | *in flight* |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at

@@ -10,8 +10,8 @@ Team workspace for the [6th RoboRacer Sim Racing League @ IROS 2026](https://aut
 |---|---|
 | Sep 6 | **Registration closes** ([register here](https://forms.gle/MiuoSMYQ4z6QACLS6)) |
 | Sep 12 | Phase 1 (qualification) submission deadline |
-| Sep 16 | Competition track released |
-| Sep 19 | Phase 2 (final race) submission deadline |
+| Sep 16 | Competition track released — **SRL 2026 IROS Track**, sim/api tag `2026-iros-compete` |
+| Sep 19 | Phase 2 (final race) submission deadline — AoE, i.e. **Sep 20, 17:30 IST** |
 
 ## Layout
 
@@ -58,28 +58,40 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-Shipping config (Sep 12) = **mpc3** on the curvature-rate-limited mesh raceline
-`porto_mesh_cr_dk0.8.csv`, with `rate_adaptive` (timing terms scaled by the
-measured sensor period), `w_dcmd` 50 + `cmd_tau` 0.10 (steering limit-cycle
-damping), `steer_tau` 0.04 (rack lag in the rollout) and a corridor barrier at
-`barrier_margin` 0.34 — 0.40 on Porto's own line — over localization with
-`max_step_mps` 9.0 and `publish_on_reloc` off. Everything ships as an
-uncommented default in `submission/autodrive_devkit.sh`. The sensor period the
-organisers' box delivers is unknown, so every number below is quoted with the
-period it was measured at (OFFICIAL race = simulator lap timer + 10 s/collision):
+Shipping config (Sep 18, finals) = **mpc3** on `finals_mesh_race.csv`, the SRL
+2026 IROS finals track (`2026-iros-compete`), with `rate_adaptive` (timing terms
+scaled by the measured sensor period), `w_dcmd` 50 + `cmd_tau` 0.10 (steering
+limit-cycle damping), `steer_tau` 0.04 (rack lag in the rollout), a corridor
+barrier at `barrier_margin` 0.40 with `thr_brake_lead_s` 0.05, and — the change
+that made the real display clean — **`brake_mode:=zero`** (`brake_a_min` 1.5,
+`brake_dv` 0.3, `brake_a_full` 4.6). The simulator applies its brake torque only
+when the throttle command is exactly 0.0, and this stack had never published it;
+without that, every finals configuration took 10 collisions in 11-14 display
+laps, which is a DQ. Localization runs `max_step_mps` 9.0 with
+`publish_on_reloc` off. Everything ships as an uncommented default in
+`submission/autodrive_devkit.sh`; `PIT_CREW_MAP=/home/data/maps/porto_mesh`
+still races the qualifier. The sensor period the organisers' box delivers is
+unknown, so every number below is quoted with the period it was measured at
+(OFFICIAL race = simulator lap timer + 10 s/collision):
 
 | Track | Real display, 0.058 s | Xvfb, 0.09-0.10 s |
 |---|---|---|
-| Porto (qualifier) | **32 laps, 0 collisions, 70.13 s** (69.36 s at margin 0.34) | **100 laps, 0 collisions, 71.91 s** |
+| **SRL 2026 IROS (finals)** | **32 laps, 0 collisions, 114.04 s** (113.98 s on a second sample) | **32 laps, 0 collisions, 119.51 s**; the built image raced the organisers' way, 12 laps, 0 collisions, 119.57 s |
+| Porto (qualifier) | **32 laps, 0 collisions, 70.13 s** (69.36 s at margin 0.34) | **100 laps, 0 collisions, 71.91 s** (75.08 s on the finals args) |
 | SRL 2025 CDC-TF — never tuned on | — | 32 laps, **2** collisions, 101.9 s (fast line; the roomier `fast3` line is collision-free but missed a checkpoint once) |
 | SRL 2025 ICRA — never tuned on | — | 32 laps, 0 collisions, **140.4 s** (fast line) |
 | ICRA 2026 — never tuned on | — | 32 laps, 0 collisions, 148.3 s |
 | Legacy `mpc` on the safe line (fallback) | never driven | 32 laps, 0 collisions, 78.4 s |
 
-Baseline on `main` is 89.6 s. Four real-display runs of earlier configurations
-failed identically (10-11 collisions, always the same hairpin entry) before the
-corridor barrier; the display, not Xvfb, is the gate. See `docs/STATUS.md`,
-"NEXT SESSION", and `docs/FINALS_RUNBOOK.md` for the finals procedure.
+`docs/FINALS_TUNING.md` is the finals state page — frozen config, the mechanism,
+every arm driven and the submission commands; `docs/FINALS_RUNBOOK.md` is the
+procedure.
+
+Baseline on `main` is 89.6 s (Porto). The display, not Xvfb, is the gate: on
+Porto four real-display runs of earlier configurations failed identically
+(10-11 collisions, always the same hairpin entry) before the corridor barrier,
+and on the finals track three more failed the same way before the brake. A run
+is evidence only together with its `dt_p50`.
 
 The fastest published lap on this same Porto track is **6.46 s** (VAUL, ICRA
 2026 qualification), for a ~65 s race. Our median display lap is 6.94-7.00 s and
@@ -123,13 +135,19 @@ drill until Aug 23 and would have produced a slower, ungated line at the finals.
 ## Submission
 
 ```bash
-docker build --platform linux/amd64 --build-arg TAG=2026-iros-practice -t <user>/roboracer:iros2026-qualification \
-    -f submission/Dockerfile .
-docker push <user>/roboracer:iros2026-qualification
+# finals (default assets are the SRL 2026 IROS track)
+docker build --platform linux/amd64 --build-arg TAG=2026-iros-compete \
+    -t bongracers/roboracer:iros2026-finals -f submission/Dockerfile .
+docker push bongracers/roboracer:iros2026-finals
+
+# qualification image, for reference
+docker build --platform linux/amd64 --build-arg TAG=2026-iros-practice \
+    -t bongracers/roboracer:iros2026-qualification -f submission/Dockerfile .
 ```
 
 See [submission/README.md](submission/README.md) for the deadline, exact run
-command, DockerHub overview, and qualification acceptance procedure.
+command, DockerHub overview, and acceptance procedure; the finals sequence is in
+[docs/FINALS_TUNING.md](docs/FINALS_TUNING.md) section 6.
 
 The image builds FROM the official devkit, leaves `autodrive_roboracer`
 untouched, and starts everything from `autodrive_devkit.sh` (never `.bashrc`),

@@ -1,7 +1,9 @@
 # Submission image — IROS 2026
 
 Qualification was due **September 12, 2026, AoE**; the final submission is a
-separate deadline on **September 19, 2026, AoE**. Checked against the
+separate deadline on **September 19, 2026, AoE = September 20, 17:30 IST**. The
+finals image is `bongracers/roboracer:iros2026-finals`, built from the SRL 2026
+IROS track assets (`2026-iros-compete`), which are the image defaults. Checked against the
 [event page](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-iros-2026/),
 [rules](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-rules-2026/),
 and [technical guide](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-guide-2026/).
@@ -15,17 +17,18 @@ that this file cannot go stale.
 
 ## Build and publish
 
-Replace `YOUR_DOCKERHUB_USER` with the actual repository owner. `--build-arg TAG`
-selects the devkit base image and must name the track image being raced
-(`2026-iros-practice` for qualification; the released finals api tag for the
-final submission).
+`--build-arg TAG` selects the devkit base image and must name the track image
+being raced: `2026-iros-compete` for the final submission,
+`2026-iros-practice` for qualification. `--build-arg FINALS_SLUG` names the
+raceline set to COPY and already defaults to `finals_mesh`, so the finals build
+takes no edit.
 
 ```bash
-docker build --platform linux/amd64 --build-arg TAG=2026-iros-practice \
+docker build --platform linux/amd64 --build-arg TAG=2026-iros-compete \
   -f submission/Dockerfile \
-  -t YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification .
-docker push YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
-docker image inspect YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification \
+  -t bongracers/roboracer:iros2026-finals .
+docker push bongracers/roboracer:iros2026-finals
+docker image inspect bongracers/roboracer:iros2026-finals \
   --format '{{json .RepoDigests}}'
 ```
 
@@ -72,13 +75,51 @@ interactive setup are needed at runtime.
 
 ## DockerHub overview / evaluator instructions
 
-> Team Proboticists' ROS 2 Humble racing stack for the RoboRacer Sim Racing
-> League @ IROS 2026, built FROM the official AutoDRIVE devkit image. The
-> upstream `autodrive_roboracer` package is unmodified. All map, centerline and
-> raceline assets are baked in: no host repository, mounted volumes, downloads
-> or interactive setup are needed at runtime. Only LiDAR, IMU, encoders and
-> throttle feedback feed the runtime nodes — IPS, odometry, TF, reset and
-> scoring topics are not subscribed.
+Paste the block below into the DockerHub repository description for
+`bongracers/roboracer:iros2026-finals`.
+
+> Team Proboticists' ROS 2 Humble racing stack for the **RoboRacer Sim Racing
+> League @ IROS 2026 final round**, built FROM the official AutoDRIVE devkit
+> image. The upstream `autodrive_roboracer` package is unmodified. All assets
+> for the **finals track — the SRL 2026 IROS Track (`2026-iros-compete`)** are
+> baked in and are the defaults: map, centerline and the validated raceline. No
+> host repository, mounted volumes, downloads or interactive setup are needed at
+> runtime. Only LiDAR, IMU, encoders and throttle feedback feed the runtime
+> nodes — IPS, odometry, TF, reset and scoring topics are not subscribed. The
+> Porto practice track is still available with
+> `-e PIT_CREW_MAP=/home/data/maps/porto_mesh`.
+>
+> ```bash
+> xhost local:root
+> docker pull bongracers/roboracer:iros2026-finals
+> # the documented competition-execution path:
+> docker run --name autodrive_roboracer_api --rm -it --entrypoint /bin/bash \
+>   --network=host --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY \
+>   --privileged --gpus all bongracers/roboracer:iros2026-finals
+> # inside the container:
+> /home/autodrive_devkit.sh
+> ```
+>
+> An argument-less `docker run bongracers/roboracer:iros2026-finals` runs the
+> same script through the image's default `CMD`. Start the official simulator
+> separately (autonomous mode, **Ultra** graphics), then press **Connection** —
+> the bridge, localization and the MPC are already up and waiting for sensor
+> data. A second shell (`docker exec -it autodrive_roboracer_api bash`) starts no
+> second controller. Orderly shutdown:
+> `docker stop --time 10 autodrive_roboracer_api`; the stack zeroes both
+> actuators before the bridge goes down. The team nodes are CPU-only.
+>
+> Optional environment overrides (the defaults are the validated finals config):
+>
+> | Variable | Default |
+> |---|---|
+> | `PIT_CREW_MAP` | `/home/data/maps/finals_mesh` |
+> | `PIT_CREW_LINE` | `/home/data/racelines/finals_mesh_race.csv` |
+> | `PIT_CREW_CENTERLINE` | `/home/data/racelines/<map basename>_centerline.csv` |
+> | `PIT_CREW_LIDAR_OFFSET` | `0.1933` |
+> | `PIT_CREW_CONTROLLER` | `mpc3` (`mpc` = legacy tracker + safe line) |
+> | `PIT_CREW_SPEED_SCALE` | `1.00` |
+> | `PIT_CREW_MODE` | `raceline` (`reactive` = map-free Follow-the-Gap) |
 
 Both run paths execute the same script. The organisers' documented procedure
 ([official repo, "Competition Execution"](https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Sim-Racing#competition-execution))
@@ -87,10 +128,10 @@ the stack is started from that shell:
 
 ```bash
 xhost local:root
-docker pull YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
+docker pull bongracers/roboracer:iros2026-finals
 docker run --name autodrive_roboracer_api --rm -it --entrypoint /bin/bash \
   --network=host --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY \
-  --privileged --gpus all YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
+  --privileged --gpus all bongracers/roboracer:iros2026-finals
 # inside the container:
 /home/autodrive_devkit.sh
 ```
@@ -100,7 +141,7 @@ An argument-less run does the same thing via the image's default `CMD`:
 ```bash
 docker run --name autodrive_roboracer_api --rm \
   --network=host --ipc=host --stop-timeout=10 \
-  YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification
+  bongracers/roboracer:iros2026-finals
 ```
 
 Start the official simulator separately, use autonomous mode and **Ultra**
@@ -131,7 +172,7 @@ all. Nothing else is read.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PIT_CREW_MAP` | `/home/data/maps/porto_mesh` | Map prefix (`.pgm` + `.yaml`). Its basename is the slug used to derive the centerline. Exact mesh map from `tools/map_from_mesh.py`. |
+| `PIT_CREW_MAP` | `/home/data/maps/finals_mesh` | Map prefix (`.pgm` + `.yaml`). Its basename is the slug used to derive the centerline. Exact mesh map from `tools/map_from_mesh.py`. |
 | `PIT_CREW_LINE` | Derived from the map slug: `porto_mesh_cr_dk0.8.csv` for `mpc3` on `porto_mesh`, otherwise `<slug>_race.csv` for `mpc3` and `<slug>_safe.csv` for `mpc`, all under `/home/data/racelines/` | The raceline to track (6 columns: s, x, y, heading, curvature, speed). **Not `<slug>_centerline.csv`** — that file is 4 columns (x, y, w_right, w_left) with no speed profile, and preflight rejects it as a line. The `_safe.csv` line is the corridor middle *with* a profile. |
 | `PIT_CREW_CENTERLINE` | `/home/data/racelines/<map basename>_centerline.csv` | Derived from `PIT_CREW_MAP`, never from a fixed Porto path. **Not a diagnostic:** localization seeds its whole particle cloud at `centerline[0]` and resamples along it on every collision recovery, so a centerline from another track is a race with no laps in it. |
 | `PIT_CREW_LIDAR_OFFSET` | `0.1933` | LiDAR forward offset used by the filter, in metres. Must match the `lidar_offset` stamped in the map YAML — preflight rejects a mismatch. A recon map built at 0 must be raced at 0. |
@@ -189,9 +230,9 @@ image's own entrypoint, the official docker flags, Ultra graphics — with:
 
 ```bash
 # the organisers' documented path: --entrypoint /bin/bash, script run inside
-./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification 12
+./scripts/test_submission_image.sh bongracers/roboracer:iros2026-finals 12
 # the argument-less CMD path, which must work too
-ENTRY_MODE=cmd ./scripts/test_submission_image.sh YOUR_DOCKERHUB_USER/roboracer:iros2026-qualification 12
+ENTRY_MODE=cmd ./scripts/test_submission_image.sh bongracers/roboracer:iros2026-finals 12
 .venv/bin/python tools/score_race.py data/logs/submission_<ts>.csv
 ```
 
