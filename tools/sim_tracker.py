@@ -172,7 +172,7 @@ class Plant:
     def __init__(self, x, y, yaw, v=0.0, ay_max=AY_MAX, servo_k=SERVO_K,
                  a_accel=SERVO_A, a_brake=SERVO_A, drag=0.0,
                  actuator='slew', steer_rate=None, tau=0.0, dead=None,
-                 frame=FRAME, tick_frac=1.0):
+                 frame=FRAME, tick_frac=1.0, brake_at_zero=0.0):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
         self.servo_k = float(servo_k)
@@ -191,6 +191,16 @@ class Plant:
         self.dead = EXTRA_DEAD if dead is None else float(dead)
         self.frame = float(frame)
         self.tick_frac = float(tick_frac)
+        # OPT-IN (0.0 = off, the historical plant).  The simulator's
+        # VehicleController.Drive() applies brakeTorque = MotorTorque on all
+        # four wheels when DriveTorque is exactly 0, i.e. when the throttle
+        # command is the exact float 0.0.  That is a real brake -- traction
+        # limited to ~4.6 m/s2 with the wheels locked, up to the longitudinal
+        # mu 0.72 (~7.1 m/s2) modulated -- and it is NOT what the speed servo
+        # does at a zero setpoint (K*(0 - v), which the a_brake clip caps at
+        # 4.0 and the car reaches only asymptotically).  Every earlier report
+        # was produced with this off, so it stays off by default.
+        self.brake_at_zero = float(brake_at_zero)
         self._tick_budget = 0.0          # rad left in this telemetry tick
 
     def accept_frame(self, t, steer_cmd, throttle):
@@ -230,9 +240,12 @@ class Plant:
         self.kappa = (math.copysign(ay, k_ask) / max(self.v * self.v, 1e-3)
                       if abs(k_ask) > 1e-9 else 0.0)
 
-        v_tgt = SERVO_SPEED_PER_THROTTLE * self.throttle
-        a = max(-self.a_brake, min(self.a_accel,
-                                   self.servo_k * (v_tgt - self.v)))
+        if self.brake_at_zero > 0.0 and self.throttle == 0.0 and self.v > 0.0:
+            a = -self.brake_at_zero
+        else:
+            v_tgt = SERVO_SPEED_PER_THROTTLE * self.throttle
+            a = max(-self.a_brake, min(self.a_accel,
+                                       self.servo_k * (v_tgt - self.v)))
         a -= self.drag * self.v
         self.v = max(-3.0, self.v + a * DT)
         yr = self.v * self.kappa
@@ -387,6 +400,9 @@ class MPC3Sim:
                       servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
                       servo_head_max=0.5, servo_u_max=0.60, servo_v_floor=1.0,
                       servo_gain=24.6,
+                      # --- OPT-IN real brake (see throttle2) ---------------
+                      brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
+                      brake_a_full=4.6,
                       # --- rate adaptivity (opt-in, identity when off) -----
                       rate_adaptive=0, rate_nominal=RATE_NOMINAL,
                       rate_window=20, rate_min_change=0.002,
@@ -448,7 +464,11 @@ class MPC3Sim:
             a_accel=self.P['servo_a_accel'], k_p=self.P['servo_k_p'],
             head_max=self.P['servo_head_max'], lead_max=0.0,
             ay_limit=self.mpc.cfg['ay_budget'], v_floor=self.P['servo_v_floor'],
-            u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'])
+            u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'],
+            brake_mode=str(self.P['brake_mode']),
+            brake_a_min=float(self.P['brake_a_min']),
+            brake_dv=float(self.P['brake_dv']),
+            brake_a_full=float(self.P['brake_a_full']))
         self.v_plan0 = 0.0
         self._enc_seen = False
         self._pose_prev = None           # (stamp, x, y) of the last pose
@@ -1675,6 +1695,11 @@ def main():
                          'command during it either')
     ap.add_argument('--watchdog-hz', type=float, default=20.0,
                     help="the node's watchdog rate (mpc3 only)")
+    ap.add_argument('--plant-brake-at-zero', type=float, default=0.0,
+                    help='deceleration (m/s2) the PLANT applies when the '
+                         'throttle command is exactly 0.0, as the simulator '
+                         'does (locked ~4.6, modulated up to ~7.1). '
+                         '0 = off, the historical servo-only plant.')
     ap.add_argument('--plot', default='')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
@@ -1763,8 +1788,11 @@ def main():
                                 jitter=args.publish_jitter)
                            if (args.publish_latency > 0.0
                                or args.publish_jitter > 0.0) else None),
-                  servo=(PLANT_REAL if args.plant_realistic else
-                         SERVO_CAL if args.servo_cal else None),
+                  servo=(dict(PLANT_REAL if args.plant_realistic else
+                              SERVO_CAL if args.servo_cal else {},
+                              **({'brake_at_zero': args.plant_brake_at_zero}
+                                 if args.plant_brake_at_zero > 0.0 else {}))
+                         or None),
                   actuator=act_cfg, drop=drop_cfg,
                   watchdog_hz=args.watchdog_hz)
         report(which, out, path, lo, hi)

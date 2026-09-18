@@ -237,6 +237,16 @@ class MPC3Tracker(Node):
             ('servo_head_max', 0.5),
             ('servo_u_max', 0.60),
             ('servo_v_floor', 1.0),
+            # OPT-IN real brake; 'none' is the shipping law byte for byte.
+            # The sim brakes all four wheels when the throttle is EXACTLY 0.0
+            # (VehicleController.Drive: DriveTorque == 0 -> brakeTorque =
+            # MotorTorque); negative throttle is reverse drive, so 0.0 is the
+            # only brake we have, and we have never published it.
+            # 'zero' | 'pulse' -- see throttle2.ServoThrottle.
+            ('brake_mode', 'none'),
+            ('brake_a_min', 1.5),
+            ('brake_dv', 0.3),
+            ('brake_a_full', 4.6),
             ('v_meas_min', 0.2),          # below this the encoder says nothing
             ('v_start', 0.5),             # plan speed before the encoder ever
                                           # reports -- see start_speed()
@@ -441,7 +451,9 @@ class MPC3Tracker(Node):
             a_auth=v['servo_a_auth'], a_accel=v['servo_a_accel'],
             k_p=v['servo_k_p'], head_max=v['servo_head_max'],
             lead_max=0.0, ay_limit=v['ay_budget'], v_floor=v['servo_v_floor'],
-            u_max=v['servo_u_max'], servo_gain=v['servo_gain'])
+            u_max=v['servo_u_max'], servo_gain=v['servo_gain'],
+            brake_mode=str(v['brake_mode']), brake_a_min=v['brake_a_min'],
+            brake_dv=v['brake_dv'], brake_a_full=v['brake_a_full'])
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         # Measures the pose period always; only ACTS on it when rate_adaptive.
         self.rate_ctl = RateControl(

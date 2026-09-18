@@ -64,7 +64,9 @@ class ServoThrottle:
     def __init__(self, K=18.0, drag=0.0, tau=0.135, a_auth=4.5,
                  a_accel=5.0, k_p=0.0, k_ff=1.0, head_max=0.5,
                  lead_max=0.25, ay_limit=6.0, v_floor=1.0, u_max=0.60,
-                 hold=CMD_PERIOD, servo_gain=SERVO_GAIN, predict=True):
+                 hold=CMD_PERIOD, servo_gain=SERVO_GAIN, predict=True,
+                 brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
+                 brake_a_full=4.6):
         self.K = float(K)                # servo proportional gain, 1/s
         self.drag = float(drag)          # rigidbody linear drag, 1/s
         self.tau = float(tau)            # actuator dead time, s
@@ -80,6 +82,31 @@ class ServoThrottle:
         self.u_max = float(u_max)
         self.g = float(servo_gain)
         self.predict = bool(predict)
+        # --- OPT-IN real brake ('none' reproduces every earlier number) -----
+        # The simulator's VehicleController.Drive(): DriveTorque =
+        # throttle * MotorTorque, and when DriveTorque is exactly 0 it applies
+        # brakeTorque = MotorTorque on all four wheels -- a genuine brake worth
+        # ~4.6 m/s2 locked and up to the longitudinal mu (~7.1) modulated.
+        # Negative throttle is REVERSE DRIVE under our prefab's brake type, so
+        # the only brake we own is the exact float 0.0, and the sim samples one
+        # command per telemetry tick: it must be published as 0.0 ON the tick.
+        # The law above never emits 0.0 (measured: 0.4% of samples in every
+        # log, never negative) because `v_floor` holds a walking-pace setpoint,
+        # so we have never braked at all -- the car coasts at -2.4..-3.3 m/s2
+        # against a plan that asks -4.0.
+        #   'none'  the shipping law, untouched.
+        #   'zero'  publish exactly 0.0 whenever the setpoint asks for more
+        #           deceleration than `brake_a_min`, or sits `brake_dv` below
+        #           the (predicted) measured speed.
+        #   'pulse' duty-cycle 0.0 against the feedforward command, one tick
+        #           per period, to approximate a requested deceleration
+        #           anywhere between 0 and the full brake `brake_a_full`.
+        self.brake_mode = str(brake_mode)
+        self.brake_a_min = float(brake_a_min)
+        self.brake_dv = float(brake_dv)
+        self.brake_a_full = float(brake_a_full)
+        self._duty = 0.0                 # pulse-width accumulator
+        self.brakes = 0                  # ticks published as exactly 0.0
         self._hist = []                  # (t, u) as issued, for dead-time
         self.last_target = 0.0           # last setpoint, m/s (diagnostics)
 
@@ -107,8 +134,15 @@ class ServoThrottle:
             n = max(1, int(dt / 0.01))
             h = dt / n
             for _ in range(n):
-                a = self.K * (self.g * ua - v)
-                a = max(-self.a_auth, min(self.a_accel, a)) - self.drag * v
+                if self.brake_mode != 'none' and ua == 0.0:
+                    # A command of exactly 0.0 is the four-wheel brake, not a
+                    # zero setpoint fed to the servo.  Modelling it as the
+                    # latter would under-predict the deceleration already in
+                    # flight by ~2 m/s2 and re-brake on the next tick.
+                    a = -self.brake_a_full - self.drag * v
+                else:
+                    a = self.K * (self.g * ua - v)
+                    a = max(-self.a_auth, min(self.a_accel, a)) - self.drag * v
                 v = max(0.0, v + a * h)
         return v
 
@@ -189,6 +223,34 @@ class ServoThrottle:
         self.last_target = target
 
         u = max(0.0, min(self.u_max, target / self.g))
+
+        # --- the brake (opt-in) ---------------------------------------------
+        if self.brake_mode != 'none' and v_meas is not None:
+            # How much deceleration the setpoint is asking for, over the time
+            # this command is actually in force: the dead time plus one hold.
+            # At the default 0.135 + 0.09 s that makes `brake_dv` 0.3 m/s and
+            # `brake_a_min` 1.5 m/s2 the same trigger to within 10%, which is
+            # what makes the OR of them a single sensible threshold.
+            t_force = max(self.tau, 0.0) + self.hold
+            dv = v_pred - v_t
+            a_req = dv / t_force if t_force > 1e-6 else 0.0
+            want = (a_req > self.brake_a_min or dv > self.brake_dv)
+            # Never brake at a crawl: below `v_floor` the car is parking, and
+            # a full four-wheel brake there just stops it on the line.
+            if want and v_pred > self.v_floor:
+                if self.brake_mode == 'pulse':
+                    duty = max(0.0, min(1.0, a_req / max(self.brake_a_full,
+                                                         1e-6)))
+                    self._duty += duty
+                    if self._duty >= 1.0:
+                        self._duty -= 1.0
+                        u = 0.0
+                else:                                   # 'zero'
+                    u = 0.0
+            else:
+                self._duty = 0.0
+        if u == 0.0:
+            self.brakes += 1
         self._hist.append((now, u))
         cutoff = now - max(self.tau, 0.0) - 0.5
         while len(self._hist) > 2 and self._hist[0][0] < cutoff:
