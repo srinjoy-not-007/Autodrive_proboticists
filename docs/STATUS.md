@@ -21,7 +21,10 @@ entrypoint's finals line and the built image raced 117.26 s (cmd entry, clean),
 118.40 s + 1 collision (default entry, at s 38.7, 0.093 s) and 112.09 s (display),
 all 12 laps. That corner is marginal at the organisers' period on the frozen
 speeds too, so `finals_mesh_hyb675b_race.csv` (0.08 m inward there, exit capped
-at 3.0 m/s) is in its 100-lap Xvfb gate. Behind it,
+at 3.0 m/s) replaced it: **100 Xvfb laps / 0 / 118.07 s with 0.566 m margin
+at s 39-41, display 32 / 0 / 111.59 s**, and the rebuilt image raced 117.13
+(Xvfb), 117.80 (Xvfb, cmd entry) and 111.74 s (display), all 12 / 0. That image
+is `bongracers/roboracer:iros2026-finals` as of Sep 19 01:40 IST. Behind it,
 two single-knob arms on the frozen line behind it (`servo_k_p 0.5 +
 servo_head_max 0.3` for the corner exits; `pub_gate_corr 0.05` for the straight
 weave — both opt-in, committed, defaults off, see FINALS_TUNING section 5). Note the frozen profile's own wall margin at s 39 is 0.25 m at

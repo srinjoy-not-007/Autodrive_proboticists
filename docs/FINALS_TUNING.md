@@ -114,6 +114,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_hyb675b_x100` (Xvfb) | `finals_mesh_hyb675b_race.csv` | **118.074 s + 0** (0.098 s) | **100 / 0** | wall min at s 39-41 **0.566 m** (hybrid 0.195), s 37-39 0.401 (0.336), s 26-28 0.318 (0.266) | **passed Gate C with real margin**; 0.35 s/race slower than the hybrid on Xvfb. Display runs in flight, alone and with `pub_gate_corr 0.05` (`race_20260918_185202`) |
 | `fin_hyb675b_disp` | hyb675b, display | **111.585 s + 0** | **32 / 0** | — | **PROMOTED**: clean at both periods with margin (`race_20260918_191411`) |
 | `fin_hyb675b_pg_disp` | hyb675b + `pub_gate_corr 0.05` | **111.653 s + 0** | **32 / 0** | — | time-neutral again (111.59 alone); owes 100 Xvfb laps before it joins the image (`race_20260918_192212`) |
+| image v2 (hyb675b) | built image, raced as shipped | Xvfb default **117.129**, Xvfb cmd **117.795**, display **111.743 s**, all + 0 | 12 / 0 each | — | **SHIPPABLE**; supersedes image v1 (`submission_20260919_*`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
