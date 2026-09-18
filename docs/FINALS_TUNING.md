@@ -127,6 +127,17 @@ that needs something we have not yet found.
       29% of samples through the entry, most-inside +0.19 p50 / +0.25
       worst (was +0.35..+0.49 at impact), 15 laps clean so far.**
 
+      **Straight-noise correction (Sep 18):** the "3.5 sign changes / 10 m"
+      figure was rounding dust of a geometrically dead-straight section
+      (|kappa| <= 0.006 over s 2-15; 42% of masked samples under 0.02). The
+      driven steering on the true straight is a 0.033 rad limit cycle plus
+      the early turn-in bias from s 16 (+0.096 rad where the line asks
+      0.03); a flatter line (Porto's 2.4/10 m) drives 1.2 s/lap SLOWER with
+      MORE steering, and the safe line is worse still. Keep the race line;
+      the swivel the user sees is the s 19 entry, i.e. the same problem
+      the brake addresses. tools/smooth_straights.py exists (opt-in
+      post-pass), not recommended.
+
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
