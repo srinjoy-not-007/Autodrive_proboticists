@@ -199,6 +199,17 @@ class MPC3Tracker(Node):
             ('straight_d', 1.5),
             ('straight_kappa', 0.30),
             ('straight_e', 0.25),
+            # --- s-indexed parameter schedule (OPT-IN, '' = off) -------------
+            # Path to a JSON schedule (see `mpc3_core.ParamSchedule`) giving
+            # per-arc-length overrides for a whitelisted subset of the knobs
+            # above.  Inside the container the finals schedule lives at
+            # /home/data/racelines/<name>.json, so it has to be in the
+            # Dockerfile COPY list to ship.
+            ('param_schedule', ''),
+            ('sched_blend_m', 1.0),
+            ('sched_hold_n', 5.0),
+            ('sched_jump_m', 1.0),
+            ('v_scale', 1.0),
             # --- the rack inside the rollout (OPT-IN; see mpc3_core) ---------
             # `steer_tau` is handed to BOTH the solver's rollout and the
             # `Actuator` that does the delay compensation, so there is one rack
@@ -491,6 +502,10 @@ class MPC3Tracker(Node):
             straight_lead_scale=v['straight_lead_scale'],
             straight_d=v['straight_d'], straight_kappa=v['straight_kappa'],
             straight_e=v['straight_e'],
+            param_schedule=str(v['param_schedule']),
+            sched_blend_m=v['sched_blend_m'],
+            sched_hold_n=int(round(float(v['sched_hold_n']))),
+            sched_jump_m=v['sched_jump_m'], v_scale=v['v_scale'],
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],
@@ -708,6 +723,12 @@ class MPC3Tracker(Node):
             # speed (6-7 m/s) with the car stopped, which is the lap-0 failure
             # this class of fix already removed once.
             self._enc_seen = False
+            # The arc length the schedule indexes on is not trustworthy across
+            # a teleport either: fall back to the global parameters and ramp
+            # back in (a no-op unless `param_schedule` is set).
+            _m = getattr(self, 'mpc', None)
+            if _m is not None:
+                _m.hold_schedule()
             ilc = getattr(self, 'ilc', None)
             if ilc is not None:
                 ilc.invalidate()        # this lap is not repeatable evidence

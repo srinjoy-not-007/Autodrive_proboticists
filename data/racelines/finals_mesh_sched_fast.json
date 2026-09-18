@@ -1,0 +1,41 @@
+{
+  "line": "finals_mesh_hyb675b_race.csv",
+  "map": "finals_mesh",
+  "total_s": 44.71081127190853,
+  "blend_m": 1.0,
+  "note": "finals_mesh_sched.json plus the two windows that RAISE a speed. Harness (8 seeds x 12 laps per cell): 96/0 at 0.098 s, median lap 12.645 against the baseline's 12.910 and the safe schedule's 12.710; 96/0 at 0.058 s, 12.235 against 12.460. It keeps min clearance above the baseline's (0.103 vs 0.075 at 0.098, 0.075 vs 0.025 at 0.058) and improves the s 19 entry cut, but it takes 0.034 m off the hairpin's own clearance (0.214 -> 0.180 at 0.098), and both extra windows took a collision at 0.058 s before c37_entry was added. It is a speed-gaining change and therefore owes Gate C (100 Xvfb laps) and Gate D (32 display laps) in its own right; the harness ranks arms but does not predict which period fails.",
+  "windows": [
+    {
+      "name": "hp19_entry",
+      "s0": 16.0,
+      "s1": 19.0,
+      "barrier_margin": 0.50
+    },
+    {
+      "name": "hp19_exit",
+      "note": "The e_free/k_e cross-track speed cut is the only _speed_plan term that binds on this track, and on the hairpin EXIT it clips at v_mod_min while the car is already 0.5-0.9 m/s under plan. Floor it higher on the exit only. e_free and k_e themselves are a cliff (0.25 -> 10 collisions/36, k_e 1.0 -> 5) and are not touched - measured here too: e_free 0.21-0.24 in this window costs 0.08-0.10 m of hairpin clearance.",
+      "s0": 19.2,
+      "s1": 21.0,
+      "v_mod_min": 0.70
+    },
+    {
+      "name": "c37_entry",
+      "s0": 34.5,
+      "s1": 37.5,
+      "thr_brake_lead_s": 0.09
+    },
+    {
+      "name": "hp43_entry",
+      "s0": 40.5,
+      "s1": 43.5,
+      "thr_brake_lead_s": 0.0
+    },
+    {
+      "name": "hp43_apex",
+      "note": "The offline profile asks 1.75 m/s at |kappa| 1.245, i.e. ay 2.7 where the line's own budget is 6.75 - that apex is set by the lateral-jerk limiter, not by grip. 1.08 over the apex only; 1.12 and 1.16 are faster still and give the clearance back.",
+      "s0": 43.2,
+      "s1": 44.5,
+      "v_scale": 1.08
+    }
+  ]
+}

@@ -57,6 +57,7 @@ What is new, and why
    line if a shorter path is wanted.
 """
 
+import json
 import math
 import os
 
@@ -72,7 +73,8 @@ except ImportError:                                  # running from src/pit_crew
 __all__ = ['Actuator', 'PoseFilter', 'RefPath', 'wrap', 'MPC3', 'DEFAULTS',
            'RateEstimator', 'RateAdapter', 'RateControl', 'ILC',
            'corridor_clearance', 'RATE_NOMINAL', 'RATE_TERMS',
-           'RATE_ALL_TERMS', 'GapRider', 'gap_feedforward']
+           'RATE_ALL_TERMS', 'GapRider', 'gap_feedforward',
+           'ParamSchedule', 'SCHED_PARAMS']
 
 
 DEFAULTS = dict(
@@ -469,6 +471,41 @@ DEFAULTS = dict(
     straight_d=1.5,
     straight_kappa=0.30,
     straight_e=0.25,
+    # s-indexed parameter schedule (OPT-IN; '' = off, byte-identical) --------
+    #
+    # `param_schedule` is the path to a JSON file (see `ParamSchedule`) giving,
+    # per arc-length WINDOW of the reference line, overrides for a whitelisted
+    # subset of the parameters below.  It exists because this stack has exactly
+    # one global value per lap for every knob, and the finals track is not one
+    # kind of corner: the s 19 hairpin wants a long brake lead and a wide
+    # barrier, the 18 m straight wants neither, and the two contribute to the
+    # lap in opposite directions.  Per-sector scaling is what the ForzaETH and
+    # TUM stacks do with speed; this generalises it to the tracker's own knobs.
+    #
+    # HOW IT IS APPLIED.  Every scalar override is evaluated at the arc length
+    # of the car's CURRENT reference index and the solve runs with that value
+    # (`self.cfg` is swapped for one overridden copy and restored), so the
+    # whole solve is internally consistent.  `v_scale` is the exception: it is
+    # a multiplier on the offline profile and is evaluated at the arc length of
+    # EVERY horizon index, because a speed cut that appeared only once the car
+    # was already in the window would give the backward brake pass nothing to
+    # brake with.
+    #
+    # ROBUSTNESS.  `s` comes from localization, so a relocalization jump can
+    # teleport the schedule into the wrong window.  `sched_jump_m` is the arc
+    # step, beyond what the car could have travelled, that is read as a jump;
+    # on one the schedule falls back to the GLOBAL values and then ramps back
+    # over `sched_hold_n` solves.  `MPC3.hold_schedule()` does the same thing
+    # on demand and is what the node calls on a collision teleport.
+    param_schedule='',
+    sched_blend_m=1.0,        # default edge blend, m (a window may override)
+    sched_hold_n=5,           # solves spent back on the globals after a jump
+    sched_jump_m=1.0,         # arc step, m, over the feasible one, that is one
+    # Global multiplier on the offline speed profile (1.0 = off).  On its own
+    # it is a blunt instrument; it exists so that `param_schedule` can ask for
+    # a per-sector speed scale, which is the one knob every sector-tuning
+    # paper in the field actually schedules.
+    v_scale=1.0,
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes
@@ -1254,6 +1291,163 @@ class ILC:
         return True
 
 
+# Which parameters a schedule may move.  Deliberately narrow: everything here
+# is a scalar the solver re-reads every solve, and nothing here changes the
+# solver's STRUCTURE (`horizon`, `step_dt`, `delay_s`, `nd_*`, the lead laws).
+# Moving `nd` or the horizon mid-lap would re-slice the warm start at a window
+# edge, which is exactly the discontinuity a schedule must not introduce.
+SCHED_PARAMS = frozenset((
+    # speed plan
+    'v_scale', 'e_free', 'k_e', 'v_mod_min', 'ay_budget', 'a_brake', 'a_accel',
+    'k_excess_max', 'thr_lead_s', 'thr_brake_lead_s',
+    'e_cut_accel_scale', 'e_cut_accel_kappa',
+    # steering cost
+    'w_lat', 'w_yaw', 'w_steer', 'w_rate', 'w_jerk', 'w_lat_T', 'w_yaw_T',
+    'w_barrier', 'barrier_margin', 'w_dcmd', 'cmd_tau', 'e_dead', 'steer_tau',
+))
+
+
+class ParamSchedule:
+    """An arc-length-indexed set of parameter overrides for :class:`MPC3`.
+
+    The file is JSON::
+
+        {
+          "line": "finals_mesh_hyb675b_race.csv",   # provenance, unread
+          "total_s": 44.711,        # optional; the path's length is used
+          "blend_m": 1.0,           # default edge blend, metres
+          "windows": [
+            {"name": "hairpin_s19", "s0": 16.5, "s1": 21.5,
+             "thr_brake_lead_s": 0.09, "barrier_margin": 0.44},
+            {"name": "hairpin_s43", "s0": 41.0, "s1": 44.2,
+             "blend_m": 0.8, "v_scale": 0.97}
+          ]
+        }
+
+    A window is ``[s0, s1]`` in metres along the reference, where the override
+    is applied in FULL; outside it the weight ramps linearly back to the global
+    value over ``blend_m`` metres on each side, so no parameter ever steps.
+    Windows wrap around the start/finish line (``s0 > s1`` is the wrapping
+    window).  The combination rule is ``base + sum_i w_i * (v_i - base)``, and
+    construction REJECTS a file whose ramps let two windows that set the same
+    parameter overlap with a total weight above 1 -- an overlap is an ambiguous
+    schedule, not a blend.
+
+    Nothing here knows about the controller: :meth:`overrides` answers "what
+    are the scalar parameters at this arc length", :meth:`array` answers the
+    same question for a whole horizon of indices at once, and both take the
+    global value as an argument so an unscheduled parameter is untouched.
+    """
+
+    def __init__(self, windows, blend_m=1.0, total_s=0.0, source=''):
+        self.total = float(total_s)
+        if not (self.total > 0.0):
+            raise ValueError('ParamSchedule needs a positive total_s')
+        self.blend_m = float(blend_m)
+        self.source = str(source)
+        self.windows = []
+        for i, w in enumerate(windows):
+            w = dict(w)
+            name = str(w.pop('name', f'w{i}'))
+            b = float(w.pop('blend_m', self.blend_m))
+            s0 = float(w.pop('s0'))
+            s1 = float(w.pop('s1'))
+            w.pop('note', None)
+            width = (s1 - s0) % self.total
+            if width <= 0.0:
+                raise ValueError(f'window {name!r} has zero width')
+            ov = {}
+            for k, v in w.items():
+                if k not in SCHED_PARAMS:
+                    raise ValueError(
+                        f'window {name!r}: {k!r} is not schedulable; '
+                        f'allowed: {sorted(SCHED_PARAMS)}')
+                ov[k] = float(v)
+            if not ov:
+                raise ValueError(f'window {name!r} overrides nothing')
+            self.windows.append(dict(name=name, s0=s0 % self.total,
+                                     width=width, blend=max(b, 1e-6), ov=ov))
+        self.keys = sorted({k for w in self.windows for k in w['ov']})
+        self._check_overlap()
+
+    # ..................................................................
+    @classmethod
+    def load(cls, path, total_s=0.0):
+        with open(path) as fh:
+            d = json.load(fh)
+        return cls(d.get('windows', ()),
+                   blend_m=float(d.get('blend_m', 1.0)),
+                   total_s=float(d.get('total_s', 0.0) or total_s),
+                   source=str(path))
+
+    def _check_overlap(self):
+        """No parameter may be claimed by more than one window at a time."""
+        s = np.arange(0.0, self.total, 0.02)
+        for k in self.keys:
+            tot = np.zeros_like(s)
+            for w in self.windows:
+                if k in w['ov']:
+                    tot += self.weight(w, s)
+            bad = tot > 1.0 + 1e-6
+            if bad.any():
+                raise ValueError(
+                    f'schedule windows overlap on {k!r} near s = '
+                    f'{s[bad][0]:.2f} m (total weight {tot[bad].max():.2f}); '
+                    'separate them by at least 2 * blend_m')
+
+    # ..................................................................
+    def weight(self, w, s):
+        """Blend weight of one window at arc length(s) ``s`` (0..1)."""
+        s = np.asarray(s, dtype=float)
+        L = self.total
+        u = np.mod(s - w['s0'], L)
+        after = u - w['width']        # metres past the far edge
+        before = L - u                # metres before the near edge
+        d = np.minimum(np.maximum(after, 0.0), np.maximum(before, 0.0))
+        return np.where(u <= w['width'], 1.0,
+                        np.clip(1.0 - d / w['blend'], 0.0, 1.0))
+
+    def overrides(self, s, base, gain=1.0, keys=None):
+        """``{param: value}`` at a single arc length ``s``.
+
+        ``base`` is the global config (anything the schedule does not name is
+        absent from the result).  ``gain`` scales every deviation from the
+        global value, which is how the post-relocalization ramp is applied.
+        """
+        out = {}
+        for w in self.windows:
+            ww = float(self.weight(w, float(s))) * float(gain)
+            if ww <= 0.0:
+                continue
+            for k, v in w['ov'].items():
+                if keys is not None and k not in keys:
+                    continue
+                b = float(base[k])
+                out[k] = out.get(k, b) + ww * (v - b)
+        return out
+
+    def array(self, s, key, base, gain=1.0):
+        """``key``'s value at every arc length in the array ``s``.
+
+        ``None`` when no window sets ``key``, so the caller can skip the
+        multiply entirely and stay byte-identical.
+        """
+        ws = [w for w in self.windows if key in w['ov']]
+        if not ws:
+            return None
+        out = np.full(np.shape(s), float(base), dtype=float)
+        for w in ws:
+            out += (self.weight(w, s) * float(gain)
+                    * (w['ov'][key] - float(base)))
+        return out
+
+    def describe(self):
+        return '; '.join(
+            f"{w['name']} s {w['s0']:.1f}+{w['width']:.1f} "
+            f"({', '.join(f'{k}={v:g}' for k, v in sorted(w['ov'].items()))})"
+            for w in self.windows)
+
+
 class MPC3:
     """Gauss-Newton over a steering-rate sequence, with a coupled speed plan.
 
@@ -1315,6 +1509,23 @@ class MPC3:
         self._wv = None
         self._wv_lp = None
         self.last_gate = 0.0
+        # s-indexed parameter schedule (OPT-IN; see DEFAULTS `param_schedule`).
+        # `_sched_hold` counts the solves still owed to the globals after a
+        # localization jump and `_sched_gain` is the ramp back out of it.
+        self.sched = None
+        self._sched_prev_s = None
+        self._sched_hold = 0
+        self._sched_gain = 1.0
+        self.last_sched = {}
+        self._sched_scalar = None
+        src = str(p.get('param_schedule', '') or '').strip()
+        if src:
+            self.sched = ParamSchedule.load(
+                src, total_s=float(path.s[-1] + path.spacing))
+            # `v_scale` is applied per horizon index in `_speed_plan`, not as
+            # a scalar at the car's own s, so it is not in this set.
+            self._sched_scalar = frozenset(
+                k for k in self.sched.keys if k != 'v_scale')
 
 
     # ..................................................................
@@ -1363,6 +1574,52 @@ class MPC3:
         return self.nd
 
     # ..................................................................
+    def hold_schedule(self):
+        """Fall back to the GLOBAL parameters for `sched_hold_n` solves.
+
+        The node calls this whenever the pose it is about to hand the solver
+        may not be where the car is -- a collision teleport, a global
+        relocalization, a stale-pose recovery.  A schedule indexed by an arc
+        length that is wrong is worse than no schedule: it would apply the
+        hairpin's brake lead on the straight.  Idempotent, and the way back is
+        a ramp, not a step.
+        """
+        self._sched_hold = max(1, int(self.cfg.get('sched_hold_n', 5) or 1))
+        self._sched_prev_s = None
+
+    def _sched_step(self, i0, v0):
+        """Update the schedule's jump guard; returns the ramp gain in 0..1."""
+        if self.sched is None:
+            return 0.0
+        n = max(1, int(self.cfg.get('sched_hold_n', 5) or 1))
+        s = float(self.path.s[i0])
+        if self._sched_prev_s is not None:
+            L = self.sched.total
+            d = (s - self._sched_prev_s) % L
+            d = min(d, L - d)
+            # What the car could honestly have covered since the last solve,
+            # with a floor so that a slow car does not trip the guard on noise.
+            lim = max(float(self.cfg.get('sched_jump_m', 1.0) or 1.0),
+                      3.0 * abs(float(v0)) * float(self._period))
+            if d > lim:
+                self._sched_hold = n
+        self._sched_prev_s = s
+        # The gain is read BEFORE the countdown, so the first solve after a
+        # jump is on the globals exactly (gain 0) and the ramp back takes
+        # `sched_hold_n` further solves.
+        self._sched_gain = max(0.0, min(1.0, 1.0 - self._sched_hold / float(n)))
+        if self._sched_hold > 0:
+            self._sched_hold -= 1
+        return self._sched_gain
+
+    def _sched_vscale(self, s):
+        """Per-index speed-profile scale, or ``None`` when unscheduled."""
+        base = float(self.cfg.get('v_scale', 1.0) or 1.0)
+        if self.sched is None or self._sched_gain <= 0.0:
+            return None if base == 1.0 else np.full(np.shape(s), base)
+        return self.sched.array(s, 'v_scale', base, self._sched_gain)
+
+    # ..................................................................
     def _indices(self, i0, v):
         """Reference indices and arc lengths, from the warm speed plan."""
         P = self.path
@@ -1392,6 +1649,13 @@ class MPC3:
         v_lim = P.v_prof[idx].astype(float).copy()
         if self.ilc is not None:
             v_lim *= self.ilc.speed_scale(P.s[idx])
+        # The scheduled profile scale, evaluated at EVERY horizon index rather
+        # than at the car's own -- a speed cut that only appeared once the car
+        # was inside the window would give the backward brake pass below
+        # nothing to brake with, and the plan would ask for a step.
+        vsc = self._sched_vscale(P.s[idx])
+        if vsc is not None:
+            v_lim *= vsc
 
         e = np.abs(self.e_pred[:N + 1])
         mod = np.clip(1.0 - c['k_e'] * np.maximum(0.0, e - c['e_free']),
@@ -1445,8 +1709,12 @@ class MPC3:
         n_tail = max(2, int(4.0 / max(P.spacing, 1e-3)))
         j = (tail + np.arange(n_tail)) % P.n
         d_ahead = np.arange(n_tail) * P.spacing
+        v_tail = P.v_prof[j].astype(float)
+        vst = self._sched_vscale(P.s[j])
+        if vst is not None:
+            v_tail = v_tail * vst
         v_lim[N] = min(v_lim[N], float(np.sqrt(
-            P.v_prof[j] ** 2 + 2.0 * c['a_brake'] * d_ahead).min()))
+            v_tail ** 2 + 2.0 * c['a_brake'] * d_ahead).min()))
 
         for k in range(N - 1, -1, -1):
             v_lim[k] = min(v_lim[k], math.sqrt(v_lim[k + 1] ** 2
@@ -1806,6 +2074,35 @@ class MPC3:
 
     # ..................................................................
     def solve(self, e_lat, e_yaw, delta0, i0, v0, cap=None, committed=None):
+        """One control cycle, with the s-indexed schedule applied around it.
+
+        When `param_schedule` is off this is exactly `_solve` and costs one
+        attribute test.  When it is on, the scalar overrides for the car's
+        CURRENT arc length are computed once, `self.cfg` is swapped for a
+        single overridden copy for the duration of the solve and restored
+        afterwards -- so every term of the solve sees one consistent parameter
+        set, and nothing outside the solve ever observes the override.
+        """
+        if self.sched is None:
+            return self._solve(e_lat, e_yaw, delta0, i0, v0, cap, committed)
+        g = self._sched_step(i0, v0)
+        ov = self.sched.overrides(float(self.path.s[i0]), self.cfg, gain=g,
+                                  keys=self._sched_scalar)
+        self.last_sched = ov
+        base = self.cfg
+        if ov:
+            self.cfg = dict(base)
+            self.cfg.update(ov)
+        try:
+            cmd, info = self._solve(e_lat, e_yaw, delta0, i0, v0, cap,
+                                    committed)
+        finally:
+            self.cfg = base
+        info['sched'] = ov
+        info['sched_gain'] = g
+        return cmd, info
+
+    def _solve(self, e_lat, e_yaw, delta0, i0, v0, cap=None, committed=None):
         """One control cycle.  Call once per new pose.
 
         ``delta0`` is the actuator angle at the pose stamp, ``committed`` the
