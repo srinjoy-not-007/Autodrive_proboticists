@@ -34,7 +34,11 @@ that needs something we have not yet found.
 
 ## Checkpoints
 
-- [ ] **0. Baseline** — race line, shipping mpc3 args + pick
+- [x] **0. Baseline** -- PASSED Sep 18 with the brake: display (0.058 s) 32 laps
+      / 0 collisions / **114.04 s** (`race_20260918_162222.csv`, throttle exactly
+      0 on 29% of samples through the s 19 entry, cut +0.19 p50 / +0.25 worst).
+      Frozen into the entrypoint (finals_mesh default map, brake_mode zero +
+      pick args); Xvfb regression + image build/test running (freeze chain). — race line, shipping mpc3 args + pick
       (`barrier_margin 0.40`, `thr_brake_lead_s 0.05`). 32 laps Xvfb, then 32
       on the real display. Record race time, collisions, dt_p50, cross-track
       p95, speed deficit vs plan, achieved ay p95/p99 from the driven path,
