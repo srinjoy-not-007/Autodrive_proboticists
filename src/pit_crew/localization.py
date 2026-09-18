@@ -189,6 +189,32 @@ class ParticleFilter(Node):
                                             # WORSE (p90 peak error 2.25 m
                                             # against 0.32 m) because the cloud
                                             # can cross to the far side.
+            # ---- launch wheelspin (Sep 19), default off -------------------
+            # Measured on all three clean finals logs: from the grid the drive
+            # torque spins the wheels, the encoder reads up to 2.2x the true
+            # speed for ~2 s (8.08 m/s against a true 6.00), and because the
+            # first 18 m of this track is a featureless straight the scan
+            # cannot contradict it. The published estimate runs +1.8 m ahead
+            # at rest and +5.0 to +5.4 m ahead by t+1.9 s, snapping back only
+            # at s ~ 14-15 where the geometry becomes observable again -- 3.1
+            # to 3.7 s and 13-14.6 m into the race, at up to 7.5 m/s. It has
+            # never cost a lap here (the plan is flat at 8.0 m/s across the
+            # whole straight) but it leaves ~3 m between the estimate and the
+            # s 16-19 hairpin entry, which it would then command at 8 m/s.
+            #
+            # `dr_accel_max` slew-limits the speed the MOTION MODEL uses (not
+            # the published encoder speed) to a physical acceleration, so a
+            # spinning wheel cannot march the cloud forward faster than the
+            # car can actually accelerate. It is a rate in m/s^2 and so means
+            # the same thing at every sensor period. 0 = off, which is the
+            # shipped behaviour.
+            ('dr_accel_max', 0.0),
+            # A scan stamp this far BEHIND the last one is a clock reset, not
+            # an out-of-order frame: without this the `t <= last_t` test in
+            # `on_scan` rejects every later scan for the rest of the run and
+            # the filter silently stops updating. Inert on any monotone
+            # stream, which is every recorded run.
+            ('clock_reset_s', 1.0),
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
@@ -202,7 +228,19 @@ class ParticleFilter(Node):
          self.gap_dt, self.gap_step_cap_m, self.gap_noise_mult,
          self.lost_patience_min, self.scan_dt_max, self.enc_gap_max,
          self.along_clamp_mps, self.along_clamp_min_v, self.noise_along,
-         self.tp_cp_radius) = [x.value for x in p]
+         self.tp_cp_radius, self.dr_accel_max,
+         self.clock_reset_s) = [x.value for x in p]
+        # A zero here is a divide-by-zero in `update` that takes the node down
+        # on the first scan of the race; a mistyped `-p sigma_hit:=0` should
+        # cost a warning, not the run. Identity for every positive value.
+        if not self.sigma_hit > 0.0:
+            self.get_logger().warn('sigma_hit must be > 0; using 0.06')
+            self.sigma_hit = 0.06
+        if not self.beam_temp > 0.0:
+            self.get_logger().warn('beam_temp must be > 0; using 1.0')
+            self.beam_temp = 1.0
+        # What `predict` last handed the motion model, for `dr_accel_max`.
+        self._dr_v = 0.0
         self.speed_cmd = 0.0
         # Teleport handler state. Every one of these is inert while both
         # `teleport_scan_jump` and `teleport_imu_g` are 0.0.
@@ -443,6 +481,19 @@ class ParticleFilter(Node):
         # calibration, so it needs no per-track retuning.
         if msg.position:
             t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            # `SpeedEstimator.update` drops a sample whose interval is
+            # non-positive WITHOUT advancing its reference, which is right for
+            # a duplicate and a permanent wedge for a stamp from the future:
+            # one glitched sample ahead of the stream freezes `self.speed` for
+            # the rest of the race, and the motion model then dead-reckons at
+            # that stale speed forever. Re-seed when the stream goes
+            # backwards. Inert while stamps are monotone.
+            last = getattr(self.speed_est, '_last', {}).get(wheel)
+            if last is not None and t < last[0] - 1e-3:
+                self.get_logger().warn(
+                    f'{wheel} encoder stamp went back {last[0] - t:.2f} s; '
+                    f're-seeding the speed estimator')
+                self.speed_est.reset()
             self.speed_est.update(wheel, t, msg.position[0])
 
     def on_throttle(self, msg: Float32):
@@ -484,7 +535,20 @@ class ParticleFilter(Node):
         if t <= 0 or now - t > 0.35 or t > now + 0.1:
             return
         if self.last_t is not None and t <= self.last_t:
-            return
+            # An out-of-order or duplicated frame is dropped, as ever. A stamp
+            # far BEHIND the last one is something else: the clock was reset
+            # (a restarted bridge under `use_sim_time`, a replayed bag). The
+            # test above would then reject EVERY later scan and the filter
+            # would never update again while still holding a pose the
+            # controller believes. Re-seed instead. Inert on a monotone
+            # stream, which is every run recorded here.
+            if self.last_t - t < float(self.clock_reset_s):
+                return
+            self.get_logger().warn(
+                f'scan clock went back {self.last_t - t:.2f} s; re-seeding '
+                f'the filter timebase')
+            self.last_t = None
+            self.speed_est.reset()
         dt = 0.0 if self.last_t is None else min(
             max(t - self.last_t, 0.0), float(self.scan_dt_max))
         self.last_t = t
@@ -593,6 +657,16 @@ class ParticleFilter(Node):
             jumped = True
         # Encoder speed when available, throttle estimate as fallback
         v = self.speed_est.speed if self.speed_est.speed > 1e-3 else self.speed_cmd
+        # Wheels that are spinning (measured: 2.2x the true speed for the
+        # first ~2 s of every run here) drive the cloud forward at a speed the
+        # car cannot reach. Hold the MOTION MODEL's speed to a physical
+        # acceleration; the published encoder speed is untouched.
+        # getattr: the rate-invariance tests lift `predict` onto a synthetic
+        # namespace that carries only the fields it is testing.
+        a_max = float(getattr(self, 'dr_accel_max', 0.0) or 0.0)
+        if a_max > 0.0 and dt > 0.0:
+            v = min(v, float(getattr(self, '_dr_v', 0.0)) + a_max * dt)
+        self._dr_v = float(v)
         # The cap is on the SPEED (see `_v_cap`): a per-update distance cap
         # silently truncates dead reckoning above 0.6/dt m/s, which is 5.77 m/s
         # on the dev host and 6.82 in the submission image, either side of the
@@ -745,9 +819,15 @@ class ParticleFilter(Node):
             # non-resampled update a one-scan estimator.
             w = w * self.w
 
-        # Particles inside a wall or off the map are impossible
-        pgx = ((self.px - self.ox) / self.res).astype(np.int32)
-        pgy = ((self.py - self.oy) / self.res).astype(np.int32)
+        # Particles inside a wall or off the map are impossible.
+        # `floor`, not a cast: `astype` truncates TOWARDS ZERO, so a particle
+        # up to one cell below the map origin lands on index 0 and reads as
+        # INSIDE the map -- the one direction in which "off the map" must not
+        # be forgiving, because the weight that should be zero then comes from
+        # a real cell. Identity for every particle at or above the origin,
+        # which is every particle in a healthy run.
+        pgx = np.floor((self.px - self.ox) / self.res).astype(np.int32)
+        pgy = np.floor((self.py - self.oy) / self.res).astype(np.int32)
         inside = ((pgx >= 0) & (pgx < self.W) & (pgy >= 0) & (pgy < self.H))
         w[~inside] = 0.0
         pgx = np.clip(pgx, 0, self.W - 1)
@@ -797,6 +877,13 @@ class ParticleFilter(Node):
 
     def publish(self, stamp):
         x, y, yaw = self.estimate()
+        # A NaN here is worse than a missing pose: the controller's stale gate
+        # covers a gap, and nothing covers a pose that is not a number. The
+        # weights are normalized on every update, so this cannot fire in a
+        # healthy run -- it is the last line before the wire.
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(yaw)):
+            self.get_logger().warn('non-finite pose; not publishing')
+            return
         msg = PoseStamped()
         msg.header.stamp = stamp
         msg.header.frame_id = 'map'
