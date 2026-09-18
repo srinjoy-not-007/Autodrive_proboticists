@@ -189,6 +189,10 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # lead 0.05) on finals_mesh_race: real display (0.058 s) 32 laps / 0
     # collisions / 114.04 s, where every config without the brake took 10
     # collisions in 11-14 laps at the s 19 entry. Applied on every map.
+    # barrier 0.40 here is a deliberate exception to pick_config's cap rule
+    # (this line's feasible cap is 0.385): the display A/B at 0.34 vs 0.40
+    # was indistinguishable (both DQ without the brake, both clean with it),
+    # and 0.40 is the value every clean display run was measured at.
     CTRL_ARGS+=(-p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05)
     CTRL_ARGS+=(-p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6)
     # PICK_BLOCK_BEGIN
