@@ -138,6 +138,24 @@ that needs something we have not yet found.
       the brake addresses. tools/smooth_straights.py exists (opt-in
       post-pass), not recommended.
 
+      **From the simulator source (Sep 18 research, VehicleController.cs /
+      TireFriction.cs):** BrakeTorque = MotorTorque (428 N.m), constant,
+      applied only at throttle == 0.0 exactly; it locks the wheel in one
+      physics step, so the HELD brake is the longitudinal asymptote 4.55
+      m/s2 plus drag -- **plan brake <= 5.5, never 7.0**; brake_a_full 4.6
+      is right. Drive torque is linear in throttle to 1.0 (11 m/s ~ 0.44)
+      but constant torque means acceleration decays with speed (VAUL's
+      planner uses ax_max_machines 5.3 tapering). Steering slews at 3.2
+      rad/s in physics time, no lag, independent of graphics quality; Ultra
+      does not change the physics rate. The lateral tyre is LINEAR to its
+      extremum (slip 0.01, 9.81 m/s2); our "sustained 4.6-6.6" is
+      chattering across the knee, and driven ay p99 is already 9.6, so the
+      lever is planned ay 6.0 -> 6.75 -> 7.5 gated on driven ay p99 < 9.3
+      (VAUL plans 12 flat). Warm-up lap is free: no special startup mode.
+      Ranked: ay rungs (-4..-8 s/race est.), brake 5.5 profile (-1.5..-2.5),
+      vmax 8 -> 11 with the two 9 m/s caps raised (-1..-3), thr_brake_lead_s
+      0.08 if the cut returns (+5..+8 but avoids a DQ). TUM mintime: no.
+
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
