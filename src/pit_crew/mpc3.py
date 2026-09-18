@@ -192,10 +192,16 @@ class MPC3Tracker(Node):
             # term are then inert, every other rate term still applies.  The
             # defaults are `apply_ahead_s` 0.090 s expressed as a distance,
             # NOT ForzaETH's pure-pursuit L1 -- see `mpc3_core.DEFAULTS`.
+            # 'time' reads it `lead_t0 + lead_tk * period` SECONDS ahead, i.e.
+            # a fixed number of SENSOR PERIODS -- the law that makes the driven
+            # corner offset period-invariant (see `mpc3_core.DEFAULTS`).  Inert
+            # unless `lead_mode` is set to 'time'.
             ('lead_mode', 'temporal'),
             ('lead_m0', 0.0),
             ('lead_k', 0.09),
             ('lead_min_m', 0.30),
+            ('lead_t0', 0.0),
+            ('lead_tk', 0.0),
             ('use_steer_feedback', True),
             ('steer_fb_age', 0.0),
             # --- steering authority ------------------------------------------
@@ -458,6 +464,7 @@ class MPC3Tracker(Node):
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],
+            lead_t0=v['lead_t0'], lead_tk=v['lead_tk'],
             steer_rate=v['steer_rate_limit'])
         self.act = Actuator(dead_time=float(v['cmd_dead_time']),
                             rate=float(v['steer_rate_limit']),

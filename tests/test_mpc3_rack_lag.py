@@ -248,3 +248,46 @@ def test_solve_stays_finite_with_everything_on(tmp_path):
         cmd, info = m.solve(0.15, 0.1, -0.05, I0, 5.0)
         assert math.isfinite(cmd) and abs(cmd) <= 0.5236 + 1e-9
         assert np.isfinite(info['delta']).all()
+
+
+# ------------------------------------------------------- lead_mode 'time'
+def test_time_lead_is_off_by_default(tmp_path):
+    """Defaults are byte-identical: `lead_t0`/`lead_tk` are 0 and the mode is
+    'temporal', so nothing reads them."""
+    assert DEFAULTS['lead_t0'] == 0.0 and DEFAULTS['lead_tk'] == 0.0
+    path = straight_path(tmp_path)
+    a = MPC3(path)
+    b = MPC3(path, lead_t0=0.0, lead_tk=0.0)
+    a.solve(0.05, 0.0, 0.0, I0, 4.0)
+    b.solve(0.05, 0.0, 0.0, I0, 4.0)
+    assert a._apply == b._apply
+
+
+def test_time_lead_is_a_fixed_number_of_sensor_periods(tmp_path):
+    """The whole point: the readout lead in SECONDS scales with the measured
+    period, so the lead in periods is the same at 0.058 and 0.094 s -- where
+    the shipping 'temporal' law gives 4.0 periods at the fast rate and 2.8 at
+    the slow one, which is the sign flip this mode exists to remove.  `tk` is
+    above 4.2 here so the `nd + apply_floor_steps` floor does not bind at the
+    fast rate (with the default `nd` = 3 that floor is 0.24 s)."""
+    path = straight_path(tmp_path)
+    leads = []
+    for period in (0.058, 0.094):
+        m = MPC3(path, lead_mode='time', lead_t0=0.0, lead_tk=5.0)
+        m.period = period
+        m.solve(0.05, 0.0, 0.0, I0, 4.0)
+        k, frac = m._apply
+        leads.append((k + frac) * m.dt / period)
+    assert abs(leads[0] - leads[1]) < 1e-6
+    assert abs(leads[0] - 5.0) < 1e-6
+
+
+def test_time_lead_keeps_the_index_off_the_committed_knot(tmp_path):
+    """Read at `nd` itself and the published angle is the one already in
+    flight: measured, a 0.058 s harness cell went 0 -> 236 collisions."""
+    path = straight_path(tmp_path)
+    m = MPC3(path, lead_mode='time', lead_t0=0.0, lead_tk=0.1)
+    m.period = 0.058
+    m.solve(0.05, 0.0, 0.0, I0, 4.0)
+    k, frac = m._apply
+    assert k + frac >= m.nd + m.cfg['apply_floor_steps'] - 1e-9

@@ -450,7 +450,8 @@ class MPC3Sim:
                        'pub_gate_corr', 'pub_gate_d', 'pub_gate_kappa',
                        'pub_gate_e',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
-                       'lead_k', 'lead_min_m', 'nd_mode', 'nd_delay_s', 'dead_tick_c')
+                       'lead_k', 'lead_min_m', 'lead_t0', 'lead_tk',
+                       'nd_mode', 'nd_delay_s', 'dead_tick_c')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer'):
             if k in skw:
@@ -1213,6 +1214,14 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         tp_t = now
         tp_events.append((now, float(path.s[j]), plant.x, plant.y))
 
+    # Physics steps taken, as an INTEGER.  The bookkeeping below used to test
+    # `abs(t / DT - round(t / DT)) < 1e-6` on a float accumulated 1 ms at a
+    # time: past t ~ 335 s the accumulated error exceeds that tolerance and the
+    # test never fires again, so lap counting, collision detection and the
+    # record all stopped dead in the middle of a long cell (measured: every
+    # `--laps 36` cell on this track reported 25-27 laps and 334 s of record,
+    # then drove on unmeasured -- through walls -- to `t_end`).
+    step_n = 0
     while t < t_end and lap < laps:
         if t >= next_frame - 1e-9 and dropper is not None and dropper.drop(t):
             # The whole telemetry frame is gone: no pose, no encoder, no IMU,
@@ -1327,9 +1336,10 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
             hist.push(t, plant.x, plant.y, plant.yaw)
         plant.step(t)
         t += DT
+        step_n += 1
 
         # bookkeeping at the sensor rate is enough for the metrics
-        if abs(t / DT - round(t / DT)) < 1e-6 and round(t * 1000) % 10 == 0:
+        if step_n % 10 == 0:
             j = path.nearest(plant.x, plant.y, last_i, yaw=plant.yaw)
             if j < last_i - path.n // 2:
                 j += 0                      # wrapped; handled below
