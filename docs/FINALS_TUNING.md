@@ -40,7 +40,12 @@ that needs something we have not yet found.
       Frozen into the entrypoint (finals_mesh default map, brake_mode zero +
       pick args). Xvfb regression: finals 32/0/119.5 s (`race_20260918_163645`);
       Porto with the same finals args 32/0/75.1 s (4 s slower than Porto's own
-      tune -- expected, the qualifier is done). Image build/test running. — race line, shipping mpc3 args + pick
+      tune -- expected, the qualifier is done). **Image `bongracers/roboracer:
+      iros2026-finals` built from this tree and raced the organisers' way on
+      Xvfb: 12 laps / 0 collisions / 119.57 s, both nodes up, extra-shell
+      check clean -- the FALLBACK SUBMISSION, ready to push.** Improvement
+      A/Bs on the display from here (brake_a_min 2.5, brake lead 0.08, then
+      the ay / vmax rungs as the agents rank them). — race line, shipping mpc3 args + pick
       (`barrier_margin 0.40`, `thr_brake_lead_s 0.05`). 32 laps Xvfb, then 32
       on the real display. Record race time, collisions, dt_p50, cross-track
       p95, speed deficit vs plan, achieved ay p95/p99 from the driven path,
