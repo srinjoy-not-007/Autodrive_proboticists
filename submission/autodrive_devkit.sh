@@ -207,6 +207,12 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # and 0.40 is the value every clean display run was measured at.
     CTRL_ARGS+=(-p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05)
     CTRL_ARGS+=(-p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6)
+    # Sep 19: no-anticipation publish gate on straights (the "swivel"): clips
+    # the published angle to line-matching + 0.05 rad while no corner is within
+    # 1.5 m and |e| <= 0.25.  Straight steering std 0.0242 -> 0.0181 rad live,
+    # time-neutral: display 32/0/111.65 s, 100 Xvfb laps / 0 / 117.11 s on
+    # hyb675b (111.59 / 118.07 without).
+    CTRL_ARGS+=(-p pub_gate_corr:=0.05)
     # PICK_BLOCK_BEGIN
     # PICK="${PIT_CREW_PICK:-/home/data/racelines/${SLUG}_pick.json}"
     # if [[ -f "$PICK" ]]; then

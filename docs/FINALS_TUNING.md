@@ -115,6 +115,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_hyb675b_disp` | hyb675b, display | **111.585 s + 0** | **32 / 0** | — | **PROMOTED**: clean at both periods with margin (`race_20260918_191411`) |
 | `fin_hyb675b_pg_disp` | hyb675b + `pub_gate_corr 0.05` | **111.653 s + 0** | **32 / 0** | — | time-neutral again (111.59 alone); owes 100 Xvfb laps before it joins the image (`race_20260918_192212`) |
 | image v2 (hyb675b) | built image, raced as shipped | Xvfb default **117.129**, Xvfb cmd **117.795**, display **111.743 s**, all + 0 | 12 / 0 each | — | **SHIPPABLE**; supersedes image v1 (`submission_20260919_*`) |
+| `fin_hyb675b_pg_x100` (Xvfb) | hyb675b + `pub_gate_corr 0.05` | **117.112 s + 0** | **100 / 0** | — | **passed Gate C; pub_gate 0.05 SHIPS** (`race_20260918_194320`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
