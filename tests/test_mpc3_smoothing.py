@@ -138,3 +138,88 @@ def test_rate_control_records_the_period_even_when_disabled(tmp_path):
         rc.update(t)
     assert m.period == pytest.approx(0.058, abs=1e-6)
     assert m.cfg['apply_ahead_s'] == pytest.approx(DEFAULTS['apply_ahead_s'])
+
+
+# --------------------------------------------------------------------------
+# straight-only weave conditioning (`weave_notch_*`, `straight_*`)
+# --------------------------------------------------------------------------
+#
+# The knobs exist for the 2-3 Hz lateral limit cycle the 18 m finals straight
+# carries.  The contract is the same as above: identity at the defaults, and
+# each does exactly what it claims when switched on.
+
+
+def test_weave_defaults_are_inert():
+    assert DEFAULTS['weave_notch_f'] == 0.0
+    assert DEFAULTS['weave_notch_k'] == 0.0
+    assert DEFAULTS['straight_hf_gain'] == 1.0
+    assert DEFAULTS['straight_w_lat_scale'] == 1.0
+    assert DEFAULTS['straight_w_yaw_scale'] == 1.0
+    assert DEFAULTS['straight_lead_scale'] == 1.0
+
+
+def test_weave_knobs_off_are_the_identity(tmp_path):
+    path = straight_path(tmp_path)
+    a = drive(path)
+    b = drive(path, weave_notch_f=0.0, weave_notch_k=0.0,
+              straight_hf_gain=1.0, straight_w_lat_scale=1.0,
+              straight_w_yaw_scale=1.0, straight_lead_scale=1.0)
+    assert np.array_equal(a, b)
+
+
+def test_straight_gate_is_one_on_a_straight_and_zero_at_a_corner(tmp_path):
+    """The ramp, which every one of these knobs is scaled by."""
+    path = straight_path(tmp_path)
+    m = MPC3(path, weave_notch_f=2.2)
+    assert m._straight_gate(I0, 0.0) == pytest.approx(1.0, abs=1e-6)
+    # off line by the release distance -> shut, whatever the geometry
+    assert m._straight_gate(I0, DEFAULTS['straight_e']) == 0.0
+    # a corner inside the window -> shut
+    k = path.kappa.copy()
+    k[I0:I0 + 20] = 0.9
+    path.kappa = k
+    assert m._straight_gate(I0, 0.0) == 0.0
+
+
+def test_the_notch_rejects_its_own_centre_frequency(tmp_path):
+    """A pure sine at f0 through the filter, gate wide open, comes out ~0."""
+    path = straight_path(tmp_path)
+    m = MPC3(path, weave_notch_f=2.2, weave_notch_q=0.7)
+    m.period = 0.058
+    t = np.arange(400) * 0.058
+    drive_in = 0.05 * np.sin(2 * math.pi * 2.2 * t)
+    out = np.array([m._weave_filter(float(x), 1.0) for x in drive_in])
+    assert np.abs(out[200:]).max() < 0.1 * np.abs(drive_in[200:]).max()
+    # ...and a constant passes untouched (unity gain, no lag, at DC)
+    m2 = MPC3(path, weave_notch_f=2.2, weave_notch_q=0.7)
+    m2.period = 0.058
+    dc = [m2._weave_filter(0.03, 1.0) for _ in range(200)]
+    assert dc[-1] == pytest.approx(0.03, abs=1e-9)
+
+
+def test_the_notch_state_is_dropped_when_the_gate_shuts(tmp_path):
+    """No transient survives a release -- the teleport-recovery contract."""
+    path = straight_path(tmp_path)
+    m = MPC3(path, weave_notch_f=2.2)
+    m.period = 0.058
+    for x in (0.05, -0.05, 0.05, -0.05):
+        m._weave_filter(x, 1.0)
+    assert m._wv is not None
+    assert m._weave_filter(0.2, 0.0) == 0.2
+    assert m._wv is None
+
+
+def test_weave_notch_k_scales_the_centre_with_the_period(tmp_path):
+    """`weave_notch_k` is Hz*s: f0 = k / (period + dead_tick_c)."""
+    path = straight_path(tmp_path)
+    for period, want in ((0.058, 0.227 / 0.103), (0.094, 0.227 / 0.139)):
+        m = MPC3(path, weave_notch_k=0.227, weave_notch_q=0.7)
+        m.period = period
+        t = np.arange(600) * period
+        for f, small in ((want, True), (want * 3.0, False)):
+            mm = MPC3(path, weave_notch_k=0.227, weave_notch_q=0.7)
+            mm.period = period
+            sig = 0.05 * np.sin(2 * math.pi * f * t)
+            out = np.array([mm._weave_filter(float(x), 1.0) for x in sig])
+            rej = np.abs(out[300:]).max() / np.abs(sig[300:]).max()
+            assert (rej < 0.15) if small else (rej > 0.5)

@@ -242,6 +242,79 @@ every per-track knob was re-measured above.
    (0.03 halves the motion again but diverges after a teleport). It does NOT
    fix the early turn-in DC bias over s 16-18; only the brake moved that. On
    the display now.
+
+   **Sep 19 — the mechanism, and a fix (agent, harness only; not driven yet).**
+   The weave is a **saturation relay against the `ay_limit` steering cap**, not
+   a gain problem. Traced at the solver (`MPC3.solve`, perfect sensor,
+   0.058 s): the RAW published angle alternates between +-0.055 and +-0.069
+   rad, and those are exactly `atan(L * ay_limit / v^2)` at the 6.5-7.3 m/s the
+   car runs there. The straight is where the speed is highest, so it is where
+   the steering cap is TIGHTEST; the solver predicts the lateral error running
+   out to 0.4 m if it does nothing, asks for the cap, gets it, overshoots one
+   dead time later and flips. `cmd_tau` 0.10 is what turns that +-0.06 square
+   wave into the +-0.035 rad seen at the actuator. This is why every gain knob
+   failed: scaling `w_lat` AND `w_yaw` to **2 % on the straight, with
+   `w_barrier` 0 as well**, leaves the actuator std at 0.031 rad against the
+   baseline 0.032 — the loop re-equilibrates at a bigger error and the same
+   command amplitude, which is the signature of a relay cycle. Also refuted
+   here, do not re-run: `apply_floor_steps` 0.0; the publish lead on straights
+   (`straight_lead_scale` 0.5 and 1.5); a straight-only first-order low pass
+   (tau 0.30 HALVES the motion at 0.094 s and makes it WORSE at 0.058 s,
+   0.0318 -> 0.0465 — a pure lag costs phase exactly where the cycle lives);
+   a high-frequency shelf (`straight_hf_gain` 0.3-0.5, same story).
+
+   What works is to stop the relay saturating AND null its frequency:
+   **`pub_gate_corr` 0.05 + a second-order NOTCH on the published angle, gated
+   to the straight** — new opt-in `weave_notch_k` 0.227, `weave_notch_q` 0.7,
+   with the gate widened to `straight_d` 3.0 / `straight_kappa` 0.10. A notch
+   has unity gain and ZERO phase shift at DC, so it costs nothing where there
+   is something to track, and its centre comes from the MEASURED dead time,
+   `k / (period + dead_tick_c)` = 2.20 Hz at 0.058 s and 1.63 Hz at 0.094 s,
+   because the cycle is a dead-time crossover and moves with the sensor period
+   — one constant in Hz cannot serve both (2.2 Hz fixed is the best arm at
+   0.058 and 1.8 Hz fixed at 0.094). Harness, 6 seeds x 12 laps x both frames,
+   frozen args, `--plant-realistic --pose-noise 0.03 --pose-latency 0.044
+   --plant-brake-at-zero 4.6`, on `finals_mesh_hyb675b_race.csv`:
+
+   | metric, s 2-16 | 0.058 base -> fix | 0.094 base -> fix |
+   |---|---|---|
+   | 2.0 / 2.5 Hz amplitude | 0.0379 / 0.0299 -> 0.0043 / 0.0021 (**-89 / -93 %**) | 0.0290 / 0.0201 -> 0.0035 / 0.0058 (**-88 / -71 %**) |
+   | peak amplitude 1.5-3.5 Hz | 0.0388 -> 0.0080 (**-79 %**) | 0.0289 -> 0.0079 (**-73 %**) |
+   | actuator std, mean of 2 m bins | 0.0307 -> 0.0122 (**-60 %**) | 0.0264 -> 0.0127 (-52 %) |
+   | lap time | 12.358 -> 12.407 s | 13.128 -> 13.168 s |
+   | collisions / 72 laps | 18 -> 12 (all s 37.5) | 0 -> 0 |
+
+   (Pool the whole straight into one std and the reduction reads -47 %; that
+   number is mostly the slow drift of the MEAN steering from bin to bin, which
+   is not weave. Bin it.) On the FROZEN line `finals_mesh_race.csv` (3 seeds,
+   no collisions in either arm, so the lap times are comparable) it is
+   time-neutral and gains clearance: per-bin std -60 % / -48 %, lap 12.523 ->
+   12.527 and 13.217 -> 13.180 s, min footprint clearance 0.025 -> 0.050 and
+   0.175 -> 0.190 m, entry cut unchanged. Teleport-robust (`--teleport-every
+   4`, 3 seeds): 54 -> 37 collisions at 0.058, 6 -> 8 at 0.094.
+
+   Two traps found the hard way, both now closed in the code: the filter state
+   must be DROPPED when the gate shuts (carrying it across wedged the car on
+   the straight it was put down on, s 4.8, repeatedly), and the original
+   1.5 m / 0.30 gate left the notch ~20 % engaged into the s 43 hairpin and
+   took 186 teleport collisions against the ungated 54. And one arm that must
+   NOT ship despite being the best on clean laps: **`nd_delay_s` 0.180 +
+   `rate_terms=apply,thr,predict,enc,pose,delay_tick`** (the measured dead-time
+   law) gives 0 collisions, per-bin std -67 % / -50 % and 0.05 s/lap FASTER,
+   and then takes **247 collisions under teleports at 0.094 s**, all wedged at
+   the s 19 hairpin.
+
+   The live run this is waiting on:
+
+   ```bash
+   SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+     ./scripts/run_exp.sh weavefix hyb675b_race \
+     -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+     -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+     -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+     -p pub_gate_corr:=0.05 -p weave_notch_k:=0.227 -p weave_notch_q:=0.7 \
+     -p straight_d:=3.0 -p straight_kappa:=0.10
+   ```
 3. **`lon_v8b55a65`**, if a live slot remains after 1 and 2 (section 4).
 
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
