@@ -205,6 +205,12 @@ class MPC3Tracker(Node):
             # model in the node.  `model_cmd_tau` 1.0 additionally puts the
             # `cmd_tau` output filter inside the rollout.
             ('steer_tau', 0.0),
+            # `steer_tau_k` schedules that rack lag on the MEASURED period
+            # (`steer_tau + steer_tau_k * (T - steer_tau_ref)`); -0.5 is what
+            # the measured publish->rack lag implies against the CONSTANT
+            # `cmd_dead_time`, 0.0 is shipping. See mpc3_core's DEFAULTS.
+            ('steer_tau_k', 0.0),
+            ('steer_tau_ref', 0.058),
             ('model_cmd_tau', 0.0),
             # --- publish lead: seconds ('temporal') or metres ('spatial') ----
             # 'spatial' reads the published angle a DISTANCE ahead
@@ -491,7 +497,9 @@ class MPC3Tracker(Node):
             straight_lead_scale=v['straight_lead_scale'],
             straight_d=v['straight_d'], straight_kappa=v['straight_kappa'],
             straight_e=v['straight_e'],
-            steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
+            steer_tau=v['steer_tau'], steer_tau_k=v['steer_tau_k'],
+            steer_tau_ref=v['steer_tau_ref'],
+            model_cmd_tau=v['model_cmd_tau'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],
             lead_t0=v['lead_t0'], lead_tk=v['lead_tk'],

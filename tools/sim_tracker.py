@@ -454,7 +454,8 @@ class MPC3Sim:
                        'straight_hf_tau',
                        'straight_lead_scale', 'straight_d', 'straight_kappa',
                        'straight_e',
-                       'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
+                       'steer_tau', 'steer_tau_k', 'steer_tau_ref',
+                       'model_cmd_tau', 'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'lead_t0', 'lead_tk',
                        'nd_mode', 'nd_delay_s', 'dead_tick_c')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}

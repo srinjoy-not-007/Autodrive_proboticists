@@ -266,6 +266,178 @@ line family, ~2 s `rate_adaptive` + the dkappa line, ~1 s the display
 smoothing/barrier work. **Everything controller-generic already ships here**;
 every per-track knob was re-measured above.
 
+## 4b. LMPC-style learning from our own laps (Sep 19, agent, branch `lmpc`)
+
+Harness only — nothing here has been driven. Two things were built, one worked.
+
+**The papers, in five lines.** Rosolia & Borrelli's LMPC (arXiv:1609.01387,
+1610.06534, 2005.00826) improves a repeated task by keeping every previously
+*feasible* lap as a sampled safe set and a value function of realized
+cost-to-go, and constraining the next solve to end inside it — the guarantee is
+"never plan what no past lap achieved". Their own tractable version replaces the
+point set with a **convex hull of nearby stored points**, i.e. an interpolation
+across laps at the same progress. Kabzan et al. (RA-L 2019) learn a GP residual
+on the **lateral/yaw** slice only, keep it in a small dictionary, and use its
+variance to *tighten* constraints rather than to license aggression. The one
+paper that maps almost 1:1 onto a fixed offline CSV profile is
+arXiv:2606.10733 (FSD, 2026): per track position, measure a stability margin,
+step a bounded scale factor toward a target margin, smooth it spatially, and
+multiply it into `v = sqrt(scale * ay / kappa)`. **What does not transfer:** the
+online terminal safe set, the terminal cost, and the non-decreasing-performance
+theorem — we have no per-step solve against a safe-set constraint, a bang-bang
+brake and ~10 Hz sensing. **What does:** worst-case-over-laps margin per `s`,
+a bounded monotone gain, spatial smoothing, the friction-ellipse coupling, and
+the standing warning that a per-segment raise changes the ENTRY state of the
+next segment (so it needs a whole-lap re-check, not per-segment margin math).
+
+### `tools/learn_profile.py` — profile learning, worth ~0.05 s/lap
+
+Geometry untouched; only `vx`/`ax` move. Per 1 m bin of `s`, pooled over the
+clean laps: worst-body-corner wall distance p2 (the safe-set boundary), driven
+|offset| p95, driven/planned speed p50 (the feasibility gate — raising the plan
+where the car is already under it buys nothing here, measured many times), brake
+duty and driven |ay| p95. A bin is raised only if **margin > `m_lo`, the car
+tracked the plan, the driven offset is small, and it is not within 3 m of a
+collision in a FAILED iteration** (LMPC's discarded iterations, kept as hard
+evidence: `race_20260918_173633.csv` puts a veto band over s 35.6-42.1). Raises
+are Gaussian-smoothed; cuts are *eroded* first so smoothing cannot dilute the
+one bin that came close to a wall. Then the usual consistency passes, plus a
+**guard pass**: a raise must be sheddable at 3.2 m/s² before the next un-raised
+bin, because the plan's own 4.6 m/s² backward pass is not what the closed loop
+delivers, and without it the raise arrives as entry speed at the next corner.
+
+Inputs: the four clean logs (`race_20260918_185202`, `_194320` at 0.098 s,
+`_191411`, `_204004` at 0.058 s — 35 591 samples), veto from `_173633`.
+
+| line | ideal | 0.058 laps/coll | med | 0.098 laps/coll | med | min clear 0.058 | s38 wall p2 0.098 |
+|---|---|---|---|---|---|---|---|
+| `hyb675b` (shipping) | 10.836 | 72 / 0 | 12.48 | 72 / 0 | 12.88 | 0.035 | 0.159-0.177 |
+| `lmpc_a` α 0.08, no guard | 10.661 | 36 / **1** | 12.42 | 36 / 0 | 12.87 | 0.000 | 0.202 |
+| `lmpc_b` α 0.12, no guard | 10.599 | 36 / **3** | 12.38 | 36 / 0 | 12.93 | 0.000 | 0.152 |
+| **`lmpc_c` α 0.12 + guard 3.2** | **10.702** | **72 / 0** | 12.46 | **72 / 0** | **12.83** | 0.025 | 0.202 |
+| `lmpc_d` α 0.10 + cuts β 0.10 | 10.879 | 36 / **3** | 12.53 | 36 / 0 | 12.97 | 0.000 | 0.135 |
+| `lmpc_e` α 0.18 + guard | 10.634 | 36 / **3** | 12.44 | 36 / 0 | 12.77 | 0.000 | 0.201 |
+| `lmpc_f` α 0.12 + guard, vmax 8.6 | 10.663 | 36 / **1** | 12.37 | 36 / 0 | 12.81 | 0.025 | 0.185 |
+
+`pick_config finals_mesh --line finals_mesh_lmpc_c_race.csv` is unchanged from
+`hyb675b`: checkpoint margin 0.650 m, gate separation 0.781 m, occupancy 1,
+body clearance 0.388 / effective 0.376 m.
+
+**Three things the data said, all of them limits:**
+
+* Most of the demonstrated margin is on the **straight**, and the straight is
+  `vmax`-capped at 8.0 — so most of the learned raise has nowhere to go.
+  Lifting `vmax` to 8.6 (`lmpc_f`) collides at 0.058.
+* Every raise that is not guarded shows up as **entry speed at s 37.5**, which
+  is where `lmpc_a/b/d/e` collide. This is exactly the per-segment-optimism
+  failure the literature warns about; the guard pass is the fix and it costs
+  most of the ideal-lap gain (10.599 -> 10.702).
+* **Cuts do not pay.** 264 clean laps at a measured 0.15-0.23 m margin in the
+  s 24-26 and s 42-44 bands mean a cut there is a prior, not evidence; turned on
+  (`lmpc_d`) it moves the brake points and collides. `--beta 0` is the default.
+
+Net: `lmpc_c` is the only arm clean at both frames — **-0.05 s/lap at 0.098 and
+-0.02 at 0.058**, ~0.5 s/race at the organisers' period, for 0.010 m of min
+clearance at 0.058. It owes the usual two gates.
+
+### `steer_tau_k` — the rack IS period-dependent, and it is small
+
+`tools/steer_residual_id.py` fits `steer_fb(t) = lag(MAX_STEER*cmd(t-Td), tau)`
+from a race log. On the four clean logs, plus a low-passed cross-correlation as
+an independent estimator, the **publish -> rack effective lag** is
+
+| period | Td | tau | gain | effective lag (2 estimators) |
+|---|---|---|---|---|
+| 0.058 s (×2 logs) | 0.050 | 0.040 | 0.958 | **0.0846 / 0.0852 s** |
+| 0.098 s (×2 logs) | 0.095 | 0.005 | 0.989-0.991 | **0.1047 / 0.1051 s** |
+
+i.e. `0.056 + 0.50*T`, reproducible to 0.001 s. The `Td`/`tau` split is
+quantised by the sensor period and should not be read literally; the effective
+lag is robust. mpc3 models the same chain as `cmd_dead_time` 0.135 +
+`steer_tau` 0.04 = **0.175 s constant** (`delay_tick` is not in the shipping
+`rate_terms`), so the model is 0.090 s too slow at 0.058 and 0.070 s too slow at
+0.098 — the part `steer_tau` should carry SHRINKS by 0.020 s over the span, i.e.
+**`steer_tau_k = -0.5`**.
+
+New opt-in `steer_tau_k` / `steer_tau_ref` (defaults 0.0 / 0.058, verified
+byte-identical with `cmp` on `--dump-rec` against HEAD). It touches only the
+rollout's and the compensator's rack model — **not the readout index**, so it
+does not re-open the late-turn-in that killed `lead_mode:=time` and the
+throttle-lead pin.
+
+Harness (`finals_mesh_hyb675b_race.csv` and `_lmpc_c_race.csv`, shipping args,
+12 laps x seeds, corrected plant):
+
+| arm | 0.058 laps/coll | med | 0.098 laps/coll | med | s 38 wall p2 at 0.098 |
+|---|---|---|---|---|---|
+| `steer_tau_k` 0 (shipping) | 72 / 0 | 12.48 | 72 / 0 | 12.88 | 0.159-0.177 |
+| `steer_tau_k` **+0.5** | 36 / 0 | 12.44 | 36 / 0 | **13.02** | 0.152 |
+| `steer_tau_k` **-0.5**, shipping line | 72 / **1** | 12.46 | 72 / 0 | **12.825** | 0.214 |
+| `steer_tau_k` **-0.5**, `lmpc_c` | 72 / **2** | 12.41 | 72 / 0 | **12.745** | 0.202 |
+| `steer_tau_k` **-0.25**, shipping line | **72 / 0** | 12.470 | **72 / 0** | **12.830** | 0.202 |
+| `steer_tau_k` **-0.25**, `lmpc_c` | 72 / **3** | 12.47 | 72 / 0 | **12.760** | 0.183 |
+
+The sign the measurement implies is the one that goes faster. `+0.5` (the sign
+you get by wrongly assuming `cmd_dead_time` already scales with the period) is
+simply slower — do not re-derive it. `-0.5` is worth 0.06-0.09 s/lap at the
+organisers' period and takes 1-2 collisions per 72 laps at 0.058, so it is out.
+**`-0.25` on the shipping line is clean at both frames** (72/0 each) for
+-0.05 s/lap at 0.098 and the s 38 wall p2 0.177 -> 0.202 m — the same gain the
+`lmpc_c` profile buys, from a different mechanism.
+
+**They do NOT stack.** `lmpc_c` + `steer_tau_k -0.25` takes 3 collisions in 72
+laps at 0.058 (and `-0.5` takes 2): both arms spend the same display margin at
+the s 37.5-38 corner, and together they spend more than there is. Pick one.
+
+### How to regenerate, and the live lines
+
+```bash
+# the shipping arm (exactly the committed finals_mesh_lmpc_c_race.csv)
+.venv/bin/python tools/learn_profile.py \
+    data/racelines/finals_mesh_hyb675b_race.csv --map data/maps/finals_mesh \
+    --log data/logs/race_20260918_185202.csv --log data/logs/race_20260918_194320.csv \
+    --log data/logs/race_20260918_191411.csv --log data/logs/race_20260918_204004.csv \
+    --veto-log data/logs/race_20260918_173633.csv \
+    --bin 1.0 --cte-veto 0.20 --beta 0 --m-lo 0.25 --alpha 0.12 --report \
+    --out data/racelines/finals_mesh_lmpc_c_race
+.venv/bin/python tools/steer_residual_id.py data/logs/race_2026091*.csv
+```
+
+Live, in expected-value order. **1 and 2 are alternatives, not a stack** —
+together they collide at 0.058 in the harness.
+
+```bash
+# 1. lmpc_c profile, everything else the shipping config. Xvfb gate first
+#    (Gate C, 100 laps at ~0.097 s), then 32 display laps.
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+  ./scripts/run_exp.sh lmpc_c_x100 lmpc_c_race \
+  -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+  -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+  -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+  -p pub_gate_corr:=0.05 -p weave_notch_k:=0.227 -p weave_notch_q:=0.7 \
+  -p straight_d:=3.0 -p straight_kappa:=0.10
+# then, on the real display:
+VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 \
+  LAPS=32 ./scripts/run_exp.sh lmpc_c_disp lmpc_c_race <same -p flags>
+
+# 2. ALTERNATIVE to 1, same expected gain, different mechanism: the rack
+#    schedule on the SHIPPING line (harness 72/0 at both frames). Do NOT add
+#    it on top of lmpc_c_race -- that pairing collides at 0.058.
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+  ./scripts/run_exp.sh tk25_x100 hyb675b_race <same -p flags> -p steer_tau_k:=-0.25
+
+# 3. Only after 1 or 2 has both gates: re-test the OTHER one stacked at a
+#    smaller gain (-p steer_tau_k:=-0.10) on whichever line shipped. Abort on
+#    the first collision at either period.
+```
+
+**The honest reading: the rack carries only 0.020 s of period dependence,
+against the readout lead's 0.031 s swing — so it is a small lever, and what it
+buys is spent at the same corner the profile spends.** `steer_tau_k -0.25` and
+the `lmpc_c` profile are worth the same 0.05 s/lap at 0.098 and cannot be run
+together. Unlike the rejected lead laws it never touches the readout index, so
+it does not re-open the late turn-in; it needs the same two gates.
+
 ---
 
 ## 5. What is left, in order
