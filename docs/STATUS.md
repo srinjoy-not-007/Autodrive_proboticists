@@ -48,6 +48,34 @@ Driven: **real display (0.058 s) 32 laps / 0 collisions / OFFICIAL 114.042 s**
 **12 laps / 0 collisions / 119.57 s**. Without the brake the same line, the safe
 line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ.
 
+### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
+
+Eval score = organisers' period (~0.097 s, i.e. the Xvfb regime). Today 117.1 s
+(11.72 s laps); target 100 s = 10.0 s laps. Where the lap goes on the shipping
+line (`hyb675b`, median per 3 m segment, display 31 laps / Xvfb 99 laps):
+
+| segment | ideal | display 0.058 | Xvfb 0.098 |
+|---|---|---|---|
+| straight s 3-15 | 1.60 | 1.67 | 1.68 |
+| hairpin s 18-21 | 1.22 | 1.38 | 1.49 |
+| corner s 36-39 | 1.05 | 1.05 | 1.14 |
+| hairpin s 42-44 | 1.17 | 1.12 | 1.30 |
+| **lap** | **10.84** | **11.15** | **11.72** |
+
+The straight is at its ideal at both periods; the whole 0.57 s/lap of period
+overhead is in the hairpins. Levers, in order, with what each is worth:
+1. hairpin passage at 0.098 s equal to the display's: **~0.45 s/lap** (agent on
+   the period-dependent corner bias, worktree branch `win-stack-bias`);
+2. corner speed ay 6.75 -> ~9 (tyre is linear to 9.81): **~0.9 s/lap** of
+   ideal, only usable once 1 lands (agent, `win-stack-lines`);
+3. a line that opens the hairpins with the corridor: **~0.3 s/lap** of ideal
+   (same agent);
+4. corner exits (`servo_k_p`): 0.16 s/lap measured, 1 collision at k_p 0.5 —
+   retest at 0.25 on the hyb675b line;
+5. the straight weave (agent, `weave-fix`): time-neutral, user priority.
+All four together ≈ 10.1 s at 0.098; sub-100 needs everything to land. Every
+arm still takes both gates (100 Xvfb laps + 32 display laps) before the image.
+
 ### Corrections to the Sep 12 brief below (from reading the simulator source)
 
 - **The brake is throttle exactly 0.0, not negative throttle.** Negative
