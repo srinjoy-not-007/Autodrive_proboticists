@@ -95,7 +95,7 @@ COPY data/racelines/track_v2_safe.csv /home/data/racelines/porto_mesh_safe.csv
 # four files the entrypoint derives from that slug (a wrong slug fails the
 # COPY, i.e. the build, not the race). The default names a slug that already
 # ships, so every build of this tree succeeds unchanged.
-ARG FINALS_SLUG=icra2026_mesh
+ARG FINALS_SLUG=finals_mesh
 COPY data/racelines/${FINALS_SLUG}_centerline.csv \
      data/racelines/${FINALS_SLUG}_race.csv \
      data/racelines/${FINALS_SLUG}_safe.csv \

@@ -13,7 +13,9 @@ cd /home/autodrive_devkit
 # 0.1933 m forward offset applied in the filter: measured, this removes the
 # 0.12-0.17 m inside bias the recon map had in the hairpins. A recon map built
 # with PIT_CREW_LIDAR_OFFSET=0 must be run with PIT_CREW_LIDAR_OFFSET=0.
-MAP="${PIT_CREW_MAP:-/home/data/maps/porto_mesh}"
+# FINALS (Sep 18): the SRL 2026 IROS track ships as the default map; set
+# PIT_CREW_MAP=/home/data/maps/porto_mesh to race the qualification track.
+MAP="${PIT_CREW_MAP:-/home/data/maps/finals_mesh}"
 SLUG="$(basename "$MAP")"
 LIDAR_OFFSET="${PIT_CREW_LIDAR_OFFSET:-0.1933}"
 # Wide min-curvature line on the mesh map, driven by mpc3 (see STATUS, Sept 12
@@ -181,6 +183,14 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # on the two 2025 circuits the rule lands on 0.34 where the `case` line
     # above is currently giving them 0.40.
     # tests/test_pick_config.py runs this exact block against a fixture.
+    # FINALS (Sep 18, SRL 2026 IROS, 2026-iros-compete): the simulator brakes
+    # only when throttle == 0.0 exactly (VehicleController.cs); this stack had
+    # never published 0.0. brake_mode zero + the pick (barrier 0.40, brake
+    # lead 0.05) on finals_mesh_race: real display (0.058 s) 32 laps / 0
+    # collisions / 114.04 s, where every config without the brake took 10
+    # collisions in 11-14 laps at the s 19 entry. Applied on every map.
+    CTRL_ARGS+=(-p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05)
+    CTRL_ARGS+=(-p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6)
     # PICK_BLOCK_BEGIN
     # PICK="${PIT_CREW_PICK:-/home/data/racelines/${SLUG}_pick.json}"
     # if [[ -f "$PICK" ]]; then
