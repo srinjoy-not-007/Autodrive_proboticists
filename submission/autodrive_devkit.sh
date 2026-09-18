@@ -37,6 +37,14 @@ if [[ -n "${PIT_CREW_LINE:-}" ]]; then
     LINE="$PIT_CREW_LINE"
 elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == porto_mesh ]]; then
     LINE=/home/data/racelines/porto_mesh_cr_dk0.8.csv
+elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == finals_mesh ]]; then
+    # Sep 18: the finals race geometry with the ay 6.75 speed profile except
+    # over s 23.5-28.5 and s 34.5-41.5, where the frozen (ay 6.0) speeds are
+    # blended back in.  Pure ay 6.75 ran 110.83 s clean on the display but took
+    # 10 collisions in 24 Xvfb laps (0.098 s), all running wide at s 38.6; this
+    # hybrid passed 100 Xvfb laps / 0 / 117.72 s and the display 32 / 0 /
+    # 111.82 s (frozen `finals_mesh_race.csv`: 119.51 / 114.04 s).
+    LINE=/home/data/racelines/finals_mesh_hyb675_race.csv
 elif [[ "$CONTROLLER" == mpc3 ]]; then
     LINE="/home/data/racelines/${SLUG}_race.csv"
 else

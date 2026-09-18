@@ -96,6 +96,8 @@ COPY data/racelines/track_v2_safe.csv /home/data/racelines/porto_mesh_safe.csv
 # COPY, i.e. the build, not the race). The default names a slug that already
 # ships, so every build of this tree succeeds unchanged.
 ARG FINALS_SLUG=finals_mesh
+# Sep 18: the promoted finals line (hybrid ay 6.75 profile, see the entrypoint).
+COPY data/racelines/finals_mesh_hyb675_race.csv /home/data/racelines/
 COPY data/racelines/${FINALS_SLUG}_centerline.csv \
      data/racelines/${FINALS_SLUG}_race.csv \
      data/racelines/${FINALS_SLUG}_safe.csv \
