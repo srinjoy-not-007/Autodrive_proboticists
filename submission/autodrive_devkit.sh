@@ -416,6 +416,8 @@ fi
 # `wait -n` reaps exactly one child, so `kill -0` afterwards identifies it.
 RESTARTS=0
 MAX_RESTARTS=4
+LAST_RESTART=$SECONDS
+RESTART_FORGIVE_S=60
 while :; do
     result=0
     wait -n "$BRIDGE" "${WORKERS[@]}" || result=$?
@@ -423,6 +425,13 @@ while :; do
         echo "ROS bridge exited (status $result); shutting down" >&2
         exit 1
     fi
+    # Sep 19 audit (A1): the counter used to be cumulative for the whole
+    # session, so five node deaths that were each recovered from cleanly would
+    # still drop the race to follow_the_gap (57 s/lap on this track).  A
+    # replacement that survived RESTART_FORGIVE_S has recovered: forget the
+    # earlier deaths.  A node that dies instantly still trips MAX_RESTARTS.
+    if (( SECONDS - LAST_RESTART > RESTART_FORGIVE_S )); then RESTARTS=0; fi
+    LAST_RESTART=$SECONDS
     RESTARTS=$((RESTARTS + 1))
     sleep 0.5                       # never spin on a node that dies instantly
     if [[ "$MODE" == reactive ]]; then

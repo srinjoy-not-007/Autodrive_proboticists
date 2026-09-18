@@ -111,8 +111,17 @@ class TestTheSupervisorCannotFallBackOnSilence:
                          re.M), loop
         # No timeout, deadline or data-liveness check may gate the loop: those
         # would turn "the human has not clicked Connection yet" into a restart.
-        for forbidden in ('timeout', 'ros2 topic', 'SECONDS', 'date +%s'):
+        for forbidden in ('timeout', 'ros2 topic', 'date +%s'):
             assert forbidden not in loop, forbidden
+        # SECONDS may appear ONLY to FORGIVE earlier deaths after a child has
+        # already exited (Sep 19 audit A1) -- never to trigger a restart.
+        allowed = ('if (( SECONDS - LAST_RESTART > RESTART_FORGIVE_S )); '
+                   'then RESTARTS=0; fi', 'LAST_RESTART=$SECONDS')
+        for line in loop.splitlines():
+            code = line.split('#', 1)[0].strip()
+            if 'SECONDS' in code:
+                assert code in allowed, code
+                assert loop.index('wait -n') < loop.index(code)
 
     def test_the_restart_counter_only_advances_after_a_wait(self):
         loop = self.loop()

@@ -10,6 +10,10 @@
 #   ./scripts/check_pipeline.sh
 set -u
 cd "$(dirname "$0")/.."
+# Pin BLAS: unpinned, optimize_raceline.py takes every core (28 on this host,
+# load 40) and that disturbed the simulator's frame timing during scored runs
+# on Sep 19.  The pipeline is deterministic either way.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 TRACKS="${*:-track_v2 icra2026}"
 FAIL=0
 
