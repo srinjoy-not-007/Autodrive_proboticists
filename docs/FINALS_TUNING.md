@@ -202,6 +202,33 @@ that needs something we have not yet found.
       *Gate:* 0 collisions / 32 laps, reverse samples 0 %, and the driven lap
       improves by more than the run-to-run spread (~1–2 s per race on Xvfb).
 
+      **Retrace of the Porto 89.6 -> 69.2 s path, re-applied here (Sep 18):**
+      of ~20 s gained on Porto, ~2.3 s was dead-time compensation, ~7.2 s
+      the mesh map + LiDAR offset + the ay ladder, ~4.6 s mpc3 + the
+      speed-cut rescale (e_free/k_e), ~3.7 s the wide line family, ~2 s
+      rate_adaptive + the dkappa line, ~1 s the display smoothing/barrier
+      work. Everything controller-generic already ships here. Per-track
+      knobs re-measured on finals_mesh (corridor uniformly 1.34-1.36 m,
+      one 18 m straight, a corner at the steering lock, feasible barrier
+      cap 0.385): barrier 0.34 vs 0.40 indistinguishable (keep 0.40);
+      steer_tau 0.02/0.03 no gain and worse clearance (keep 0.04); e_free
+      0.25 -> 10 collisions/36, k_e 1.0 -> 5 (the defaults sit on a cliff:
+      keep 0.18/2.0; k_e 3.0 = +0.025 m for +0.10 s/lap); ay_budget 6.5 no
+      gain; max_step_mps 9.0 never binds (v_max 8, 0 m above 8.5 m/s);
+      **thr_brake_lead_s 0.08 is NOT a no-op here** (pick_config's "never
+      0.08" is a 0.097-s artefact): 0.0 -> 8 collisions/36 at 0.058, 0.05
+      -> 0/36 at 0.050 m clearance, 0.08 -> 0/36 at 0.135-0.146 m for
+      +0.37 s/lap. **The Porto cr_dk0.8 trick does not transfer**: every
+      dkappa <= 1.0 line here has 0.500 min half-width and the best of
+      them took 9/18 at 0.058 (clearance 0.000). w_veh is not a lever (the
+      0.53 floor binds on all 8 rungs). The checkpoint/gate constraints
+      cost 0.56 s of ideal for nothing (the shipping line already passes).
+      **The lever left is planned ay on the shipping geometry**: 6.75 ->
+      ideal 10.66, 7.5 -> 10.41, 8.0 -> 10.27 (shipping 10.99), all at the
+      same clearance and gates; the harness cannot arbitrate (plant clips
+      at 6.5), so: live, ascending, abort on driven ay p99 > 9.3 or cte
+      p95 rising. Lines: finals_mesh_rt_dr2_ay{675,75,80}_race.csv.
+
 - [ ] **3. Grip confirmation** — one rung only: ay 6.75 with `ay_budget`
       matched (*model* −0.35 s). Porto says this will not pay; confirm on this
       geometry rather than assume, then stop.
