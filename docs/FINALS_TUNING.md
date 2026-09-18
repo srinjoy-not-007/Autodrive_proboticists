@@ -264,6 +264,16 @@ periods; ay 8.0 and 7.5 rungs 10.26 / 10.39). Rebuilt here on the hyb675b
 geometry as `finals_mesh_win_b_ay90h1_race.csv` (ideal 10.10, s 36-40 window)
 and `_ay90h_race.csv` (10.51, also s 23.5-28.5). Abort per rung: driven ay p99
 > 9.3, cte p95 rising, any collision at s 36.5-38.5, wall p2 at s 38-41 < 0.20.
+Addendum (same agent): TUM iterative call converges at 2 iterations (5 and 8
+byte-identical); corner opening drops the reference's wall distance 0.559 ->
+0.461 and every line off it is "corridor exhausted" (this track's 1.34-1.36 m is
+all width, no slack, unlike Porto); the fully constrained TUM line is slower AND
+tighter than shipping (10.80 s, 0.236 m). **No understeer on this simulator**:
+achieved/kinematic curvature 0.96-1.01 to full lock on real display logs (the
+`vehicle.py` table says 0.40 at lock; CLAUDE.md note marked superseded). Driven
+ay p99 on those logs is 6.50 / 6.81, not 9.6. **Rule: a non-zero collision
+count at either period disqualifies a rung** — failures here are clusters (10
+in 11-24 laps), not a rate, which is why Gate C is 100 laps at zero.
 
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
