@@ -79,6 +79,18 @@ that needs something we have not yet found.
       0.02), then a line that sits further from the inside wall on the
       approach (clearance on s 17.5–18.5, not the lap minimum).
 
+      **Sep 18, this host (RTX 5090).** Xvfb baseline, pick args:
+      `race_20260918_154740.csv`, 32 laps, **0 collisions**, OFFICIAL
+      117.13 s, dt_p50 0.094 s -- but the cut is unchanged: most-inside at
+      s 17.5-19.5 per lap p50 **+0.444 m**, worst +0.496. The clean run is
+      the tail sitting just under the wall at this period. **Real display
+      (0.058 s): `race_20260918_155658.csv`, 11 laps, 10 collisions**, all
+      at s 18.1-18.5, +0.35..+0.49 m inside, at 1.0-1.5 m/s true speed
+      (crawling, and still steered into the inside wall). On the
+      organisers' setup this config is a DQ; the s 19 entry is the single
+      blocking problem. Live A/Bs in flight: the safe line on the display,
+      the race line at barrier 0.34.
+
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
