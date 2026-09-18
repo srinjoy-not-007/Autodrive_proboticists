@@ -50,6 +50,15 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
+**03:20 IST update — candidate ahead of the image:** ay 9.0 profile on the
+hyb675b geometry with the s 19 hairpin and the s 36-40 corner blended back to
+the safe speeds (`finals_mesh_win_b_ay90h2_race.csv`) + `pub_gate_corr 0.05` +
+the weave notch: **display 32 / 0 / 109.34 s, Xvfb 32 / 0 / 116.35 s** (image
+v2: 111.74 / 117.13). In its 100-lap Xvfb gate now. The weave notch
+(`weave_notch_k 0.227 q 0.7 straight_d 3.0 straight_kappa 0.10`) is a relay
+against the steering cap on the straight, not a delay effect; live it cut the
+display straight steering std 0.0224 -> 0.0105 rad at neutral time.
+
 Eval score = organisers' period (~0.097 s, i.e. the Xvfb regime). Today 117.1 s
 (11.72 s laps); target 100 s = 10.0 s laps. Where the lap goes on the shipping
 line (`hyb675b`, median per 3 m segment, display 31 laps / Xvfb 99 laps):
