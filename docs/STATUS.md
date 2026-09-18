@@ -64,8 +64,21 @@ line (`hyb675b`, median per 3 m segment, display 31 laps / Xvfb 99 laps):
 
 The straight is at its ideal at both periods; the whole 0.57 s/lap of period
 overhead is in the hairpins. Levers, in order, with what each is worth:
-1. hairpin passage at 0.098 s equal to the display's: **~0.45 s/lap** (agent on
-   the period-dependent corner bias, worktree branch `win-stack-bias`);
+1. hairpin passage at 0.098 s equal to the display's: **~0.45 s/lap**. ROOT
+   CAUSE FOUND (agent, merged from `win-stack-bias`): every dead-time
+   compensation in mpc3 is a constant in SECONDS while every delay in the stack
+   is a FRAME (pose->rack = period + 0.045 s). The steering readout lead
+   (nd 3 fixed + 0.865 period) is 4.0 periods at 0.058 and 2.8 at 0.098 — the
+   sign flip — and `rate_adaptive`'s `thr` term stretches the throttle lead
+   0.126 -> 0.212 s at 0.098, so the car brakes ~0.3 m early into every
+   hairpin (entry speed 3.86 -> 3.26 at s 36, apex/exit identical). Opt-in fix:
+   `lead_mode:=time lead_tk:=2.8 rate_terms:=apply,predict,enc,pose,delay_tick
+   dead_tick_c:=0.0 thr_lead_s:=0.126`; harness -0.67 s/lap at 0.098, period
+   gap 0.48 -> 0.18 s/lap. Costs margin (min clearance 0.112 -> 0.056 at 0.094,
+   s 19 entry cut grows at the slow rate). Live at both periods in flight. Two
+   harness defects fixed on the way: plant dead time was 0.045 s too long
+   (use `--plant-dead 0.045`) and cells stopped counting laps after 335 s (every
+   earlier "36/60-lap" harness cell was really 25-27 counted laps);
 2. corner speed ay 6.75 -> ~9 (tyre is linear to 9.81): **~0.9 s/lap** of
    ideal, only usable once 1 lands (agent, `win-stack-lines`);
 3. a line that opens the hairpins with the corridor: **~0.3 s/lap** of ideal
