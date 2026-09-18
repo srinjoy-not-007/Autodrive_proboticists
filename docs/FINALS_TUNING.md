@@ -38,7 +38,9 @@ that needs something we have not yet found.
       / 0 collisions / **114.04 s** (`race_20260918_162222.csv`, throttle exactly
       0 on 29% of samples through the s 19 entry, cut +0.19 p50 / +0.25 worst).
       Frozen into the entrypoint (finals_mesh default map, brake_mode zero +
-      pick args); Xvfb regression + image build/test running (freeze chain). — race line, shipping mpc3 args + pick
+      pick args). Xvfb regression: finals 32/0/119.5 s (`race_20260918_163645`);
+      Porto with the same finals args 32/0/75.1 s (4 s slower than Porto's own
+      tune -- expected, the qualifier is done). Image build/test running. — race line, shipping mpc3 args + pick
       (`barrier_margin 0.40`, `thr_brake_lead_s 0.05`). 32 laps Xvfb, then 32
       on the real display. Record race time, collisions, dt_p50, cross-track
       p95, speed deficit vs plan, achieved ay p95/p99 from the driven path,
