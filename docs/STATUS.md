@@ -8,8 +8,12 @@ commands. This block is the one-screen version.
 
 **State:** the finals image for the SRL 2026 IROS track (`2026-iros-compete`)
 is built, tested and ready to push as `bongracers/roboracer:iros2026-finals`;
-submission due **Sep 19 AoE = Sep 20, 17:30 IST**. Two ay-6.75 display arms are
-in flight; if neither passes both gates, the frozen config ships unchanged.
+submission due **Sep 19 AoE = Sep 20, 17:30 IST**. **Candidate: the same config
+on the ay-6.75 profile of the same geometry (`finals_mesh_rt_dr2_ay675_race.csv`)
+drove 32 / 0 / OFFICIAL 110.829 s on the display** (`race_20260918_172451.csv`,
+best lap 10.937 s, driven ay p99 6.62, entry cut +0.22 p50). Its gates (100-lap
+Xvfb, second display sample) are in flight; if it fails one, the frozen config
+ships unchanged. ay 6.75 + lead 0.12 was neutral (114.10 s).
 
 ```
 map / line   finals_mesh  ->  finals_mesh_race.csv   (mpc3)
