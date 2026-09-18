@@ -11,9 +11,13 @@ is built, tested and ready to push as `bongracers/roboracer:iros2026-finals`;
 submission due **Sep 19 AoE = Sep 20, 17:30 IST**. **Candidate: the same config
 on the ay-6.75 profile of the same geometry (`finals_mesh_rt_dr2_ay675_race.csv`)
 drove 32 / 0 / OFFICIAL 110.829 s on the display** (`race_20260918_172451.csv`,
-best lap 10.937 s, driven ay p99 6.62, entry cut +0.22 p50). Its gates (100-lap
-Xvfb, second display sample) are in flight; if it fails one, the frozen config
-ships unchanged. ay 6.75 + lead 0.12 was neutral (114.10 s).
+best lap 10.937 s, driven ay p99 6.62, entry cut +0.22 p50). **It failed Gate C: 10
+collisions in 24 Xvfb laps (0.098 s), all running wide at s 38.6**
+(`race_20260918_173633.csv`), so it does not ship. A hybrid profile with the
+frozen speeds at s 24-28 and s 35-41 (`finals_mesh_hyb675_race.csv`, ideal
+10.82 s) is in the 100-lap Xvfb gate; if it fails, the frozen config ships
+unchanged. Note the frozen profile's own wall margin at s 39 is 0.25 m at
+0.098 s (32 clean laps); its 100-lap Xvfb gate is still owed. ay 6.75 + lead 0.12 was neutral (114.10 s).
 
 ```
 map / line   finals_mesh  ->  finals_mesh_race.csv   (mpc3)

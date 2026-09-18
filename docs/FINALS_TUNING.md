@@ -105,7 +105,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_brk25_disp` | `brake_a_min` 2.5 | **113.981 s + 0** | **32 / 0** | unchanged | **no-op** (the `brake_dv` branch fires first); a second clean sample of the frozen config |
 | `fin_bl08_disp` | `thr_brake_lead_s` **0.08** | 115.343 s + 0 | 32 / 0 | p50 +0.206 / worst +0.278 — identical to 0.05's +0.202 / +0.279 | **REJECTED**: no margin bought live, 1.3 s/race lost |
 | `fin_ay675_bl12_disp` | ay 6.75 line + lead 0.12 | 114.103 s | 0 | +0.201 / +0.252 | neutral: driven ay p99 6.40 vs 6.27 on the frozen run, the lead's cost cancels the profile's gain (`race_20260918_171628`) |
-| `fin_ay675_bl05_disp` | ay 6.75 line + lead **0.05** | **110.829 s + 0** | **32 / 0** | +0.220 p50 / +0.276 worst | **NEW BEST, candidate** — best lap 10.937 s, driven ay p95 5.93 / p99 6.62 (abort limit 9.3), brake on 9.0% of samples. The harness predicted 6/18 collisions for this pairing; live it is clean, so the offline plant is pessimistic about the brake here (`race_20260918_172451`). Gates pending: 100-lap Xvfb + second display sample |
+| `fin_ay675_bl05_disp` | ay 6.75 line + lead **0.05** | **110.829 s + 0** | **32 / 0** | +0.220 p50 / +0.276 worst | **NEW BEST, candidate** — best lap 10.937 s, driven ay p95 5.93 / p99 6.62 (abort limit 9.3), brake on 9.0% of samples. The harness predicted 6/18 collisions for this pairing; live it is clean, so the offline plant is pessimistic about the brake here (`race_20260918_172451`). **FAILED Gate C**: Xvfb (0.098 s) 24 laps / **10 collisions**, all at s 38.5-38.9, 0.17-0.31 m wide (outside) at 2.4-3.1 m/s (`race_20260918_173633`). The harness's 6/18 was right for the organisers' period. Car-to-wall p2 at s 39 is 0.25 m on the frozen profile and 0.23 m on ay 6.75 at 0.098 s; the same corner runs 0.10 m *inside* at 0.058 s. Second marginal zone s 26-27 (0.35 -> 0.29). Follow-up: hybrid profile `finals_mesh_hyb675_race.csv` = ay 6.75 profile with the frozen speeds blended in over s 23.5-28.5 and s 34.5-41.5 (ideal 10.82 vs 11.02 / 10.70) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -206,7 +206,9 @@ every per-track knob was re-measured above.
    | ay 8.0 + lead 0.05 | 10 / 18 | — |
 
    Display order: **ay 6.75 + lead 0.12** (done: neutral), then ay 6.75 + lead
-   0.05 (done: **110.83 s clean**, candidate), then ay 7.5 + lead 0.05 and 0.12. **Abort a rung on driven ay p99 > 9.3
+   0.05 (display **110.83 s clean**, but **10 collisions in 24 Xvfb laps at
+   s 38.6** — rejected as-is; hybrid profile in flight). ay 7.5 is off the table
+   until a profile faster than frozen survives 100 Xvfb laps. **Abort a rung on driven ay p99 > 9.3
    or a rising cte p95.** Both first rungs are in flight (section 3).
 2. **The straight swivel / early turn-in.** The residual +0.08..+0.14 rad of
    command over s 16.5-18.0 against a line asking 0.03-0.11 is the only
