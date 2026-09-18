@@ -91,6 +91,24 @@ that needs something we have not yet found.
       blocking problem. Live A/Bs in flight: the safe line on the display,
       the race line at barrier 0.34.
 
+      **Display A/Bs (Sep 18): the line and the barrier are NOT the
+      variable.** Safe line: 10 collisions / 14 laps, s 18.0-18.4, +0.37..
+      +0.56 inside at 1.1-1.5 m/s. Race line at barrier 0.34: 10 / 13,
+      same corner. Binned by s, the published steering is already +0.08..
+      +0.14 rad over s 16.5-18.0 where the line's kappa is 0.03-0.11 (the
+      1.60 hairpin starts at s 19.0): the turn-in is applied 1-2.5 m early
+      on a curvature STEP, at BOTH periods (cte +0.35 display / +0.26 Xvfb
+      at s 18.0). **The finding that changes the game: the sim brakes only
+      when throttle == 0.0 exactly (VehicleController.cs) and our stack
+      never publishes 0.0 (0.4% of samples).** With the brake modelled,
+      the harness reproduces the display DQ for the first time (4-5
+      collisions / 20 laps at s 18.3-18.5) and `brake_mode:=zero` gives
+      0/20 with the entry offset +0.49 -> +0.25 (lap +0.7 s). Live A/B on
+      the display running (brake, then apply_lead_steps 1.0). Also
+      measured: the finals lines' curvature reverses 3.5-6.3 times per
+      10 m on the straights (Porto 2.4) -- the user's "rapid rights and
+      lefts on a straight road"; smoother candidates being generated.
+
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
