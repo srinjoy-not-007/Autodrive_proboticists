@@ -80,7 +80,19 @@ LIDAR_RANGE_MAX = 10.0
 
 
 def steer_to_cmd(angle_rad: float) -> float:
-    """Convert a steering angle in radians to a normalized [-1, 1] command."""
+    """Convert a steering angle in radians to a normalized [-1, 1] command.
+
+    A non-finite angle publishes STRAIGHT, not full lock.  Python's `min`/`max`
+    return the FIRST argument when the comparison with a NaN is False, so the
+    old `max(-1.0, min(1.0, nan))` evaluated `min(1.0, nan)` -> 1.0 and then
+    `max(-1.0, 1.0)` -> 1.0, i.e. a NaN steering angle was published as **full
+    LEFT lock** and latched there (this simulator holds the last command). The
+    same trap is documented in `mpc3_core.MPC3._solve`, which raises on a
+    non-finite state for exactly this reason; this is the backstop for every
+    other route to the actuator. Finite angles take the identical path.
+    """
+    if not math.isfinite(angle_rad):
+        return 0.0
     return max(-1.0, min(1.0, angle_rad / MAX_STEER))
 
 

@@ -524,6 +524,17 @@ class MPC3Tracker(Node):
                             steer_tau=float(v['steer_tau']))
         self.filt = PoseFilter(self.act, blend=float(v['pose_blend']),
                                gate_m=float(v['blend_gate_m']))
+        # The brake is the single most load-bearing knob on this stack: without
+        # `brake_mode:=zero` the finals config took 10 collisions in 11-14
+        # display laps (a DQ), and `ServoThrottle` treats ANY string that is
+        # not 'none' or 'pulse' as 'zero', so a typo brakes but an unknown
+        # spelling is never reported. Reject it at construction, the same way
+        # `control_mode` is, and say which mode is in force in the ready line
+        # so a launch that lost the flag is visible in the first second of log.
+        if str(v['brake_mode']) not in ('none', 'zero', 'pulse'):
+            raise RuntimeError(
+                f"brake_mode must be 'none', 'zero' or 'pulse', not "
+                f"{v['brake_mode']!r}")
         self.thr = ServoThrottle(
             K=v['servo_k'], drag=v['servo_drag'], tau=v['cmd_dead_time'],
             a_auth=v['servo_a_auth'], a_accel=v['servo_a_accel'],
@@ -667,22 +678,32 @@ class MPC3Tracker(Node):
         self._pose_ok = 0
         self._drop_log_t = 0.0
         self._solve_fail = 0
+        self._nonfinite_cmd = 0
+        self._cb_fail = 0
+        self._slow_solves = 0
 
         qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         ns = '/autodrive/roboracer_1'
-        self.create_subscription(PoseStamped, '/pit_crew/pose', self.on_pose, 1)
-        self.create_subscription(Imu, f'{ns}/imu', self.on_imu, qos)
-        self.create_subscription(Float32, f'{ns}/steering', self.on_steer_fb, qos)
+        self.create_subscription(PoseStamped, '/pit_crew/pose',
+                                 self._guarded(self.on_pose, 'pose'), 1)
+        self.create_subscription(Imu, f'{ns}/imu',
+                                 self._guarded(self.on_imu, 'imu'), qos)
+        self.create_subscription(Float32, f'{ns}/steering',
+                                 self._guarded(self.on_steer_fb, 'steer_fb'),
+                                 qos)
         for side in ('left', 'right'):
             self.create_subscription(
                 JointState, f'{ns}/{side}_encoder',
-                lambda m, w=side: self.on_enc(w, m), qos)
+                self._guarded(lambda m, w=side: self.on_enc(w, m),
+                              f'{side}_encoder'), qos)
         self.pub_steer = self.create_publisher(Float32, f'{ns}/steering_command', 1)
         self.pub_throttle = self.create_publisher(Float32, f'{ns}/throttle_command', 1)
         self.pub_cte = self.create_publisher(Float32, '/pit_crew/cte', 10)
-        self.create_timer(1.0 / max(float(v['watchdog_hz']), 1.0), self.watchdog)
+        self.create_timer(1.0 / max(float(v['watchdog_hz']), 1.0),
+                          self._guarded(self.watchdog, 'watchdog'))
         if self.control_mode == 'timer':
-            self.create_timer(self.control_period, self.on_control_tick)
+            self.create_timer(self.control_period,
+                              self._guarded(self.on_control_tick, 'tick'))
             self.get_logger().info(
                 f'control schedule: TIMER at {1.0 / self.control_period:.1f} Hz '
                 f'(apply_ahead {self.mpc.cfg["apply_ahead_s"]:.3f} s, nd '
@@ -690,10 +711,44 @@ class MPC3Tracker(Node):
         self.get_logger().info(
             f"mpc3 ready: {self.path.n} pts, horizon {v['horizon']}x"
             f"{v['step_dt']:.3f}s ({self.mpc.nd} committed), delay "
-            f"{v['delay_s']:.3f}s, ay_budget {v['ay_budget']:.1f}, barrier "
-            f"{'on' if self.path.has_corridor else 'off'}")
+            f"{v['delay_s']:.3f}s, ay_budget {v['ay_budget']:.1f}, ay_limit "
+            f"{float(v['ay_limit']):.1f}, barrier "
+            f"{'on' if self.path.has_corridor else 'off'}, brake "
+            f"{v['brake_mode']}"
+            + (f" (a_full {float(v['brake_a_full']):.1f}, dv "
+               f"{float(v['brake_dv']):.2f}, a_min "
+               f"{float(v['brake_a_min']):.1f})"
+               if str(v['brake_mode']) != 'none' else ' — NO BRAKE'))
 
     # ------------------------------------------------------------------
+    def _guarded(self, fn, what):
+        """Wrap an rclpy callback so one exception cannot end the race.
+
+        An exception raised inside a subscription or timer callback unwinds
+        `rclpy.spin()` and the process exits; the submission entrypoint then
+        sees a dead node, which is a DQ. `control_step` already guards the
+        solve for exactly this reason, but everything AROUND it -- the pose
+        filter, the reference search, the rate estimator, the encoder decode,
+        the watchdog's own publish -- was unguarded, so a single bad message or
+        an IndexError at a wrap could still take the node down mid-race.
+
+        This wraps the callback only. It changes nothing on the normal path
+        (no exception is raised there) and it deliberately does NOT publish
+        anything: the watchdog, which runs on its own timer, is the one place
+        the hold-steer/zero-throttle command comes from.
+        """
+        def run(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except Exception as exc:                      # noqa: BLE001
+                self._cb_fail += 1
+                if self._cb_fail in (1, 10) or self._cb_fail % 100 == 0:
+                    self.get_logger().error(
+                        f'{what} callback failed ({exc!r}); the watchdog still '
+                        f'holds the actuators (#{self._cb_fail})')
+                return None
+        return run
+
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
@@ -1112,6 +1167,12 @@ class MPC3Tracker(Node):
 
         self._solve_ms = (time.perf_counter() - t_solve) * 1e3
         self._solves += 1
+        # A solve longer than the sensor period means the next pose is already
+        # waiting (QoS depth 1, BEST_EFFORT: it is dropped, not queued) and the
+        # command in force is a frame older than the tune assumes. Counted, not
+        # warned per solve -- reported in the periodic line below.
+        if self._solve_ms > 1e3 * float(self.rate_ctl.est.period):
+            self._slow_solves += 1
         if self._solves % 200 == 0:          # ~every 18 s at 11 Hz
             self.get_logger().info(
                 f'solve {self._solve_ms:.1f} ms, e_lat {e_lat:+.3f} m, '
@@ -1125,18 +1186,35 @@ class MPC3Tracker(Node):
                 # [rate_lo, rate_hi] x rate_nominal the constants in force are
                 # the ones for the clamp EDGE, not the measured period, and
                 # nothing in the log said so.  Count, not a warning per pose.
-                f'{f", clamped x{self.rate_ctl.clamped}" if self.rate_ctl.clamped else ""})')
+                f'{f", clamped x{self.rate_ctl.clamped}" if self.rate_ctl.clamped else ""}'
+                f'{f", solve over period x{self._slow_solves}" if self._slow_solves else ""})')
 
     # ------------------------------------------------------------------
     def publish(self, steer, throttle):
-        self.steer = float(np.clip(steer, -vehicle.MAX_STEER, vehicle.MAX_STEER))
+        # A non-finite command must never reach the actuator, and must never be
+        # LATCHED into `self.steer` -- the watchdog republishes that value at
+        # 20 Hz, so one NaN would hold the wheel there for the rest of the
+        # race. `np.clip` passes a NaN straight through and `steer_to_cmd` used
+        # to turn it into full lock (see vehicle.steer_to_cmd). Hold the last
+        # good angle and cut the throttle instead; a finite pair takes the
+        # identical path, so nothing on the normal path moves.
+        st, th = float(steer), float(throttle)
+        if not (math.isfinite(st) and math.isfinite(th)):
+            self._nonfinite_cmd += 1
+            if self._nonfinite_cmd in (1, 10) or self._nonfinite_cmd % 100 == 0:
+                self.get_logger().error(
+                    f'non-finite command (steer={steer!r} throttle={throttle!r}); '
+                    f'holding {self.steer:+.3f} rad, zero throttle '
+                    f'(#{self._nonfinite_cmd})')
+            st, th = self.steer, 0.0
+        self.steer = float(np.clip(st, -vehicle.MAX_STEER, vehicle.MAX_STEER))
         self.pub_steer.publish(Float32(data=vehicle.steer_to_cmd(self.steer)))
         t_rec = self.now()
         if (self.control_mode == 'timer' and self.P['timer_sync_dead']
                 and self.pose is not None):
             t_rec = self.pickup_time(t_rec, self.pose[3])
         self.act.record(t_rec, self.steer)
-        self.pub_throttle.publish(Float32(data=float(throttle)))
+        self.pub_throttle.publish(Float32(data=th))
 
 
 def main():
