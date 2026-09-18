@@ -89,6 +89,29 @@ overhead is in the hairpins. Levers, in order, with what each is worth:
 All four together ≈ 10.1 s at 0.098; sub-100 needs everything to land. Every
 arm still takes both gates (100 Xvfb laps + 32 display laps) before the image.
 
+**Sep 19, LMPC agent (branch `lmpc`, harness only, see FINALS_TUNING 4b).**
+Lever 2 shrank. `tools/learn_profile.py` learns the speed profile per `s` from
+our own clean laps (safe-set margin = worst-body-corner wall p2 pooled over 264
+clean laps, a feasibility gate on driven/planned speed, a veto band from the
+failed ay-6.75 iteration, and a guard pass so a raise must be sheddable at
+3.2 m/s² before the next un-raised bin). Only one arm of seven is clean at both
+frames: `finals_mesh_lmpc_c_race.csv` (ideal 10.702 vs 10.836), **-0.05 s/lap at
+0.098 and -0.02 at 0.058, 72/0 laps at each frame**, `pick_config` metrics
+identical. Every ungarded or larger raise collides at **s 37.5** at 0.058 — the
+raise lands as entry speed one corner later — and cutting speed where the margin
+is thin (0.15-0.23 m at s 24-26 / 42-44) is a prior, not evidence, and collides
+too. Most of the demonstrated margin is on the `vmax`-capped straight, so the
+profile has little left to give. The rack was measured too
+(`tools/steer_residual_id.py`): publish->rack effective lag `0.056 + 0.50*T`
+(0.0846-0.0854 s at 0.058, 0.1047-0.1051 s at 0.098, two estimators, four
+logs) against mpc3's constant 0.175 s model — new opt-in `steer_tau_k`
+(byte-identical at its 0.0 default). `-0.5` takes 1-2 collisions per 72 laps at
+0.058; **`-0.25` on the shipping line is 72/0 at both frames for the same
+-0.05 s/lap at 0.098**. It does NOT stack with `lmpc_c` (3 collisions/72 at
+0.058) — both spend the same display margin at s 37.5, so they are
+alternatives. Two live arms, each owing Gate C then Gate D; the exact
+`run_exp.sh` lines are in FINALS_TUNING 4b.
+
 ### Corrections to the Sep 12 brief below (from reading the simulator source)
 
 - **The brake is throttle exactly 0.0, not negative throttle.** Negative

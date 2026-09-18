@@ -303,6 +303,42 @@ DEFAULTS = dict(
     # At `steer_tau` 0 and `model_cmd_tau` 0 the rollout takes the original
     # branch untouched, so every committed number is reproduced byte for byte.
     steer_tau=0.0,
+    # `steer_tau_k`    OPT-IN period schedule for the rack lag above, and the
+    #                  ONLY thing in this stack that is scheduled on the
+    #                  measured rack rather than on the readout lead:
+    #                      steer_tau_eff = steer_tau + steer_tau_k*(T - ref)
+    #                  MEASURED (`tools/steer_residual_id.py`, and a
+    #                  low-passed cross-correlation as a second estimator, on
+    #                  four clean finals logs, two per period): the PUBLISH ->
+    #                  RACK effective lag is 0.0846-0.0854 s at T = 0.058 and
+    #                  0.1047-0.1051 s at T = 0.098 -- i.e. `0.056 + 0.50 * T`,
+    #                  reproducible to 0.001 s across logs and across both
+    #                  estimators.  The model it is compared against is
+    #                  `Actuator.dead_time` + `steer_tau` = 0.135 + 0.04 =
+    #                  **0.175 s, CONSTANT**, because `delay_tick` is not in
+    #                  the shipping `rate_terms`.  So the model is 0.090 s too
+    #                  slow at 0.058 and only 0.070 s too slow at 0.098: the
+    #                  part `steer_tau` should carry SHRINKS by 0.020 s as the
+    #                  period grows by 0.040, which is `steer_tau_k = -0.5`.
+    #                  Harness (12 laps x 3 seeds x both frames, shipping args,
+    #                  `finals_mesh_hyb675b_race.csv`): `+0.5` (the sign you
+    #                  get by assuming the dead time already scales) is WORSE
+    #                  -- 0.098 median 12.890 -> 13.020 s, entry cut +0.148 ->
+    #                  +0.167; `-0.5` is 12.890 -> 12.820 s with the s 38
+    #                  clearance p2 0.177 -> 0.214 m and no collisions at
+    #                  either frame.  Shipping value 0.0 keeps the constant
+    #                  0.04 s lag and is byte-identical (verified with `cmp`
+    #                  on `--dump-rec`).
+    #                  Note the SCALE before expecting much: 0.020 s of
+    #                  period-dependence here against the readout lead's
+    #                  0.031 s swing (4.0 periods of anticipation at 0.058,
+    #                  2.8 at 0.098).  The rack is not the main seat of the
+    #                  period bias -- but unlike the lead laws, this one does
+    #                  not touch the readout index at all, so it does not
+    #                  re-open the late-turn-in failure those were rejected
+    #                  for.
+    steer_tau_k=0.0,
+    steer_tau_ref=0.058,
     model_cmd_tau=0.0,
     # --- where the published angle is read out of the plan (OPT-IN) --------
     # `lead_mode` 'temporal' is the shipping behaviour: the publish index is
@@ -748,6 +784,11 @@ class RateControl:
         # enabled: `cmd_tau` is a lag in seconds and needs it to stay a lag in
         # seconds at any sensor rate.  Nothing reads it while `cmd_tau` is 0.0.
         self.mpc.period = p
+        # Keep the compensator's rack and the rollout's rack the same object
+        # when `steer_tau_k` schedules it (inert at the shipping 0.0).
+        cfg = getattr(self.mpc, 'cfg', None)
+        if cfg is not None and float(cfg.get('steer_tau_k', 0.0) or 0.0):
+            self.act.steer_tau = self.mpc.steer_tau_eff
         if not (self.enabled and self.est.ready):
             return self.values
         if not (self.rate_lo <= p <= self.rate_hi):
@@ -1333,6 +1374,19 @@ class MPC3:
             self.nd = self._nd_for(self.cfg['delay_s'])
 
     @property
+    def steer_tau_eff(self):
+        """Rack lag for the rollout, period-scheduled when `steer_tau_k` is on.
+
+        Returns `cfg['steer_tau']` unchanged at the shipping `steer_tau_k` 0.0,
+        so every committed number is reproduced byte for byte.
+        """
+        k = float(self.cfg.get('steer_tau_k', 0.0) or 0.0)
+        if k == 0.0:
+            return float(self.cfg['steer_tau'])
+        return max(0.0, float(self.cfg['steer_tau'])
+                   + k * (self._period - float(self.cfg['steer_tau_ref'])))
+
+    @property
     def period(self):
         """The measured sensor period, as last seen by `RateControl`."""
         return self._period
@@ -1523,7 +1577,7 @@ class MPC3:
         # after the `cmd_tau` output filter, and `d` the rack angle that
         # actually steers the car.  With both taus 0 the three collapse into
         # one and the original branch below runs untouched.
-        tau_a = float(c['steer_tau'])
+        tau_a = self.steer_tau_eff
         tau_c = float(c['cmd_tau']) if float(c['model_cmd_tau']) else 0.0
         lag_on = tau_a > 0.0 or tau_c > 0.0
         dc = fl = Sdc_out = None
