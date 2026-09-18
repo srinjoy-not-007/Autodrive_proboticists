@@ -666,6 +666,24 @@ ay p99 on those logs is 6.50 / 6.81, not 9.6. **Rule: a non-zero collision
 count at either period disqualifies a rung** — failures here are clusters (10
 in 11-24 laps), not a rate, which is why Gate C is 100 laps at zero.
 
+**Localization audit (Sep 19, Opus agent, merged from `audit-localization`).**
+The pose error is PERIOD-INDEPENDENT in every segment (|lat| p95 0.095/0.094 at
+the s 19 hairpin, 0.165/0.127 at s 43, straight 0.013/0.012; display/Xvfb), so
+the 0.45 s/lap hairpin overhead cannot be bought back in localization. New
+facts: the IPS truth is the REAR AXLE, so the published pose sits +0.08..0.10 m
+ahead everywhere (the map yaml's `lidar_offset` 0.1933 should be 0.2733 against
+it); a curvature-proportional lateral bias toward the OUTSIDE of corners reaches
+−0.09..−0.105 m at the s 43 apex and reproduces on a closed replay (likelihood
+field, tunable: `beam_temp 4.0`, `n_beams 240`, `motion_noise_theta 0.01`, none
+driven yet); **the wheels spin at every launch and the estimate runs +5 m ahead
+for the first 3 s** and after any straight collision (opt-in `dr_accel_max 4.0`).
+Bugs fixed, normal path byte-identical: a clock reset made the node reject every
+later scan for the rest of the run; one future-stamped encoder sample froze the
+speed estimate forever; int-truncated grid index below the map origin; NaN pose
+publish; zero `sigma_hit`/`beam_temp`. The log's `speed` column is the LOGGER's
+left-wheel filter, not localization's estimator — the "enc_tau lags p2 −1.1 m/s"
+note was about the logger. Always pass `LOC_ARGS` on live arms (done tonight).
+
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
 11.00 s best lap** (silver 12.10, bronze 12.53 s laps) on an unseen track — the
