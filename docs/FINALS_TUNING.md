@@ -250,6 +250,21 @@ every per-track knob was re-measured above.
 
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
 
+**Win-stack lines (Sep 19, Opus agent, branch `win-stack-lines`).** Ideal
+<= 9.3 s IS reachable on this corridor (min-half-width 0.42-0.46 geometries at
+ay 9.0: 8.90-9.27 s) but only by breaking the checkpoint/gate rules, cutting
+effective clearance 0.377 -> 0.300, and taking **25-88 collisions per 36 harness
+laps at both periods** — every one at s 37.0-37.5, the corner the flat
+geometries move curvature INTO. The jerk limiter's split-budget fix is already
+in; bypassing it (`--jerk-lat 0`) buys 0.2-0.35 s of ideal for 20-35
+collisions/36. `w_veh` is inert. **The honest gain is the profile, not the
+geometry: ay 9.0 on the shipping geometry with s 36-40 blended back to the
+shipping speeds** (`A_ay90h`, ideal 10.06 vs 10.82, 60/0 harness laps at both
+periods; ay 8.0 and 7.5 rungs 10.26 / 10.39). Rebuilt here on the hyb675b
+geometry as `finals_mesh_win_b_ay90h1_race.csv` (ideal 10.10, s 36-40 window)
+and `_ay90h_race.csv` (10.51, also s 23.5-28.5). Abort per rung: driven ay p99
+> 9.3, cte p95 rising, any collision at s 36.5-38.5, wall p2 at s 38-41 < 0.20.
+
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
 11.00 s best lap** (silver 12.10, bronze 12.53 s laps) on an unseen track — the
