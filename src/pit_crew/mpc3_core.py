@@ -329,6 +329,29 @@ DEFAULTS = dict(
     lead_m0=0.0,
     lead_k=0.09,
     lead_min_m=0.30,
+    # 'time' is the THIRD law, and the one that makes the driven corner offset
+    # period-invariant: the readout lead is `lead_t0 + lead_tk * period`
+    # SECONDS from the pose, measured on the period `RateControl` reports, and
+    # the index is `max(nd, lead / step_dt)` -- continuous in the period, so
+    # nothing steps as `nd` crosses a `step_dt` boundary.
+    #
+    # WHY a multiple of the PERIOD and not a constant: every delay between the
+    # pose and the rack is a frame, not a fixed time -- the pose is one frame
+    # old, the bridge picks the command up at the next frame, and the rack then
+    # holds it for a frame (measured pose-to-rack = period + 0.045 s over six
+    # race logs).  The shipping 'temporal' law is `nd * step_dt + 0.865 *
+    # period` = 0.230 s at a 0.058 s period and 0.261 s at 0.094 -- i.e. **4.0
+    # periods of lead at the fast rate and 2.8 at the slow one**.  That is the
+    # sign flip: at 0.058 the turn-in is applied too early and the car runs
+    # 0.12 m INSIDE the line at the s 38 corner of the finals track, at 0.094
+    # it is applied too late and runs 0.13-0.32 m WIDE and hits the wall
+    # (`race_20260918_162222.csv` vs `race_20260918_173633.csv`).  Held at a
+    # constant number of periods the two agree.  Measured in the harness on
+    # the corrected plant (`--plant-dead 0.045`), driven offset at s 37.5-39:
+    # 0.058 / 0.094 s = +0.286 / +0.110 m on the shipping law, +0.13 / +0.12 m
+    # at `lead_tk` 3.2.
+    lead_t0=0.0,
+    lead_tk=0.0,
     # --- no-anticipation publish gate (OPT-IN, 0.0 = off) -----------------
     # WHY: the published angle is read `nd + apply` steps into the plan, and on
     # this track the plan knot it lands on can already be ON the curvature step
@@ -1661,6 +1684,18 @@ class MPC3:
                     break
                 acc += dsj
             _f = max(_f, nd + float(c['apply_floor_steps']))
+        elif str(c['lead_mode']).strip().lower() == 'time':
+            # OPT-IN: the lead as a fixed number of SENSOR PERIODS (plus a
+            # constant), floored at the first free step.  `apply_ahead_s`,
+            # `apply_lead_steps` and `apply_floor_steps` are all unread here.
+            # The floor is `apply_floor_steps` PAST `nd`, exactly as in the
+            # 'temporal' branch: reading the plan at the `nd` knot itself
+            # publishes the angle the in-flight commands already produce, so
+            # the command stops changing (measured: floored at `nd`, a 0.058 s
+            # cell went 0 -> 236 collisions).
+            lead = (float(c['lead_t0'])
+                    + float(c['lead_tk']) * float(self._period))
+            _f = max(nd + float(c['apply_floor_steps']), lead / self.dt)
         elif float(c['apply_lead_steps']) >= 0.0:
             # OPT-IN: the readout lead, decoupled from `nd` (see DEFAULTS).
             _f = nd + float(c['apply_lead_steps'])

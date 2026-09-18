@@ -126,6 +126,70 @@ for gating.
 
 ---
 
+## 3b. The period-dependent corner bias — root cause and the opt-in fix (Sep 19, agent)
+
+**Everything mpc3 uses to compensate dead time is a constant in seconds, but
+every delay in this stack is a FRAME.** Measured pose-to-rack is `period +
+0.045 s`, so at 0.058 s the loop's whole transport delay is 0.10 s and at 0.098
+it is 0.14. The shipping readout lead is `nd * step_dt + 0.865 * period` =
+0.230 s at 0.058 and 0.261 at 0.094 — i.e. **4.0 periods of anticipation at the
+display rate and 2.8 at the Xvfb rate**. That is the sign flip: at 0.058 the
+turn-in is applied too early and the car runs **+0.120 m inside** the line at
+s 37.5-39 (`race_20260918_162222.csv`), at 0.094-0.098 it is applied late and
+runs **-0.010 p50 / -0.23 p5 (wide)** and hits the wall
+(`race_20260918_173633.csv`). Live, measured on the same band.
+
+**The bigger half of it is the THROTTLE lead, not the steering.**
+`rate_adaptive`'s `thr` term scales `thr_lead_s` with the period (0.126 s at
+0.058, 0.212 at 0.098), so at the organisers' rate the speed plan's brake
+points are read ~0.3 m further ahead: the car brakes earlier and arrives
+0.3-0.6 m/s slower at every corner. Live hairpin passage on
+`finals_mesh_hyb675b_race.csv` (display `race_20260918_191411`, Xvfb
+`race_20260918_185202`, both clean): s 18-21 1.340 -> 1.391 s with apex speed
+1.63 -> 1.37 m/s and the brake on 9 % -> 19 % of samples; s 36-39 0.992 ->
+1.036 with entry speed 3.86 -> 3.26; s 42-44 0.641 -> 0.781 with entry 3.46 ->
+3.19. Same apex and exit speeds — the loss is all on entry.
+
+**Two harness defects were found and fixed on the way** (`tools/sim_tracker.py`):
+
+* the plant's `pose -> rack` delay is `period + EXTRA_DEAD` = `period + 0.090`,
+  **0.045 s longer than the measured live law**; run with `--plant-dead 0.045`
+  and the harness's absolute corner offset lands on the live one. This is why
+  the harness "predicted collisions at the wrong period".
+* the bookkeeping test `abs(t / DT - round(t / DT)) < 1e-6` stops firing past
+  t ~ 335 s of float accumulation, so **every `--laps 36` cell silently
+  measured only 25-27 laps** and then drove on uncounted. Now an integer step
+  counter; cells before 335 s are byte-identical.
+
+**The fix is opt-in, defaults byte-identical** (verified with `cmp` on
+`--dump-rec`): new `lead_mode:=time`, which reads the published angle
+`lead_t0 + lead_tk * period` seconds ahead (floored, as ever, at
+`nd + apply_floor_steps`), plus the existing `delay_tick` rate term with
+`dead_tick_c:=0.0` (the actuator model's dead time becomes the period) and a
+**pinned** `thr_lead_s:=0.126` with `thr` dropped from `rate_terms` (the
+throttle lead stops scaling). Harness, 36 laps/cell, corrected plant:
+
+| line | frame | arm | laps/coll | lap median | s 37.5-39 | s 17.5-19.5 | s18-21 | s42-44 |
+|---|---|---|---|---|---|---|---|---|
+| hyb675 | 0.058 | shipping | 36 / 0 | 12.610 | +0.284 | +0.193 | 1.600 | 0.930 |
+| hyb675 | 0.094 | shipping | 36 / 0 | 13.090 | +0.112 | +0.061 | 1.670 | 1.080 |
+| hyb675 | 0.098 | shipping | 36 / **1** | 13.150 | +0.127 | +0.088 | 1.680 | 1.120 |
+| hyb675 | 0.058 | **fix** | 36 / 0 | **12.370** | +0.114 | +0.114 | 1.680 | 0.900 |
+| hyb675 | 0.094 | **fix** | 36 / 0 | **12.550** | +0.235 | +0.263 | 1.600 | 0.880 |
+| hyb675 | 0.098 | **fix** | 36 / 0 | **12.480** | +0.218 | +0.301 | 1.510 | 0.820 |
+| ay 7.5 | 0.058 | shipping | 36 / **1** | 12.260 | +0.347 | +0.190 | — | — |
+| ay 7.5 | 0.094 | shipping | 36 / **1** | 12.920 | +0.214 | +0.075 | — | — |
+| ay 7.5 | 0.058 | **fix** | 36 / 0 | **12.160** | +0.246 | +0.120 | 1.720 | 0.890 |
+| ay 7.5 | 0.094 | **fix** | 36 / **1** (s 0.1) | **12.110** | +0.301 | +0.265 | 1.450 | 0.840 |
+
+The period gap in lap time closes from 0.48 to 0.18 s/lap, the hairpin passage
+at the organisers' rate goes 1.680 -> 1.510 (s 18-21) and 1.120 -> 0.820
+(s 42-44), and the s 38 corner stops running wide at the slow rate (p5 +0.038
+against +0.003). **The cost is margin**: min footprint clearance 0.112 -> 0.056
+at 0.094, and the s 19 entry cut GROWS at the slow rate (+0.088 -> +0.301),
+because the car now arrives at the display's entry speed. This is a
+speed-gaining change and needs Gate C (100 Xvfb laps) before it can ship.
+
 ## 4. Measured and closed (do not re-open)
 
 **Longitudinal envelope — spent.** The whole reprofile grid (vmax 8-12 × brake
