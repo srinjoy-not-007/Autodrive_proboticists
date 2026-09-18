@@ -3138,3 +3138,84 @@ Simulated on the identified model: **61 cells, ~420 s, 32 drives home, never
 more than 17.7 m from the spawn**; on the pessimistic hard-clip grip model,
 434 s and 16.2 m. The aborted run reached 18.2 m with no LiDAR return in any
 direction, so that much floor is known clear. Still not driven at full length.
+
+## Sept 19 — the finals straight: what the along-track error actually is
+
+Branch `loc-straight`, offline only, from four finals logs (truth interpolated
+at `pstamp` and projected on the line tangent, so the publish lag is removed;
+`+` = estimate AHEAD of the car):
+
+| log | period | laps/coll | along p98 (s 2-16, warm, collisions masked) | lat p98 |
+|---|---|---|---|---|
+| `race_20260918_194320` hyb675b | 0.099 | 100/0 | +0.18 | 0.016 |
+| `race_20260918_210358` ay90h2 | 0.096 | 32/0 | +0.35 | 0.021 |
+| `race_20260918_211852` ay90h2 | 0.097 | 100/5 | +0.34 | 0.017 |
+| `race_20260918_211133` ay90h2 | 0.059 | 32/0 | +0.20 | 0.015 |
+
+**The 3-4 m "jumps" are not a steady-state failure.** Every excursion above
+1.9 m in these logs is either the first 2.7-2.8 s of the run (the cloud
+converging from the centerline seed, peak +4.9 to +5.9 m, car stationary) or
+the 2.3-3.2 s after a collision teleport (same shape). Mask those two windows
+and the straight's p99.9 is +0.25 to +0.89 m. A 1.5 s teleport mask leaves
+them in and reports p98 +2.4 to +3.6; a 3 s mask plus a 25 s warm-up does not.
+
+**What IS real on the straight** is a random walk. The along-track error over
+s 2-16 is, per lap (mean over s 8.5-10.4): mean -0.09 to -0.24 m, **sd 0.17 m
+(display) to 0.32 m (Xvfb)**, range -1.15 to +0.61 m — against a lateral error
+of 0.015-0.021 m (p98) on the same stretch. It is released as a systematic
+**+0.28 to +0.35 m step at s ~ 10.5** (p90 +0.53, max **+1.27 m in one
+0.097 s scan**, where the car covers 0.78 m) — the first place on the straight
+whose geometry says anything along-track. Measured as unexplained advance,
+`|advance_of_the_estimate - v_enc*dt| / dt`: p50 0.36 m/s lap-wide, but on the
+straight **p98 3.0-3.8 m/s and max 11.9-13.8 m/s**.
+
+The encoder is not the cause: on the straight `v_enc - v_truth` is p50 -0.10,
+p2 -1.1 m/s (the 0.193 s low-pass lagging the hairpin-exit acceleration), and
+integrating it accounts for -0.03 m of the excursion, not +0.6. It is
+along-track **unobservability**: parallel featureless walls pin the lateral
+offset and the heading and leave `s` to the process noise.
+
+**The five straight collisions in `race_20260918_211852` are NOT caused by it.**
+Attributed at c-2 they sit at s 12.88, 7.89, 8.39, 4.39, 4.39, and in each the
+along-track error at the point of no return is between -0.28 and -0.01 m while
+`cte` grows monotonically from 0 at s ~ 1.5 to -0.37/-0.42 m by s ~ 4.3, i.e.
+in ~0.55 s. Localization lateral error over that stretch is 0.017 m (p98), so
+the controller was told the truth and the car really did run off the line.
+Per-lap `max|cte|` over s 2-7:
+
+| arm | p50 | p90 | max | laps > 0.30 m |
+|---|---|---|---|---|
+| ay90h2, 0.097 s (5 coll) | 0.179 | 0.273 | 0.490 | 4.3% |
+| ay90h2, 0.096 s (clean) | 0.208 | 0.288 | 0.366 | 6.7% |
+| hyb675b, 0.099 s | 0.134 | 0.198 | 0.238 | 0% |
+| ay90h2, 0.058 s display | 0.085 | 0.144 | 0.188 | 0% |
+
+So ay90h2's hairpin exit is a **lateral tracking** failure that the 0.058 s
+display period hides and the 0.097 s period does not: 2.4x the median error at
+the same place on the same line. The along-track error is a separate, smaller
+problem. The along error also cannot steer the car here — the line's heading
+turns 0.015 rad over the whole 14 m, so 0.5 m of `s` error moves the lateral
+target by under 3 mm; it can only mis-time the speed profile, which is flat at
+8.00 m/s from s 4.6 to 12.0.
+
+**Opt-in fix added, default off, nothing shipped changes.**
+`localization.py` gains `along_clamp_mps` (0 = off), `along_clamp_min_v` (1.0)
+and `motion_noise_along` (0 = isotropic, the shipped behaviour).
+`anchor_along()` holds the along-heading motion of the cloud's weighted mean
+to the distance the motion model was given by the encoders, ± `clamp * dt`,
+shifting **every particle** so the filter stays self-consistent; it stands
+down on the first scan, on a relocalization, on a teleport or encoder jump and
+below `along_clamp_min_v`, which are the cases where a big jump is right.
+Replayed over the logged pose stream, `along_clamp_mps:=6.0` would have fired
+on **4-9 scans per run (0.03-0.13% of live scans)**, trimming at most
+0.19-1.05 m; 4.0 fires on 0.22-0.34% and trims up to 1.17 m.
+
+**Not verified offline:** whether the clamp helps. The open-loop replay has no
+scan update to pull a shifted cloud back, so the accumulated offset never
+decays and the replayed error diverges by construction — it can measure *when*
+and *how much* the clamp would cut, not the filter's response. `offline_pf.py`
+still does not reproduce live behaviour. This needs a driven run, and on the
+evidence above the higher-value target on this line is the hairpin-exit
+lateral tracking, not `s`.
+
+    LOC_ARGS="-p max_step_mps:=9.0 -p publish_on_reloc:=false -p along_clamp_mps:=6.0"

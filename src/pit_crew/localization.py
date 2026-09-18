@@ -149,6 +149,40 @@ class ParticleFilter(Node):
                                             # of 0.5 s or more is dead-reckoned
                                             # at 100% of the STALE pre-gap
                                             # speed. Raise BOTH together.
+            # ---- along-track anchoring (Sep 19), ALL default-off -----------
+            # The finals track's s 2-16 is an 18 m straight with parallel,
+            # featureless walls. The scan likelihood pins the LATERAL offset
+            # and the heading there and says almost nothing about how far
+            # along the car is, so the along-track posterior is driven by the
+            # process noise alone. Measured on four 0.097/0.058 s finals logs
+            # (see docs/STATUS.md): the along-track error is a random walk
+            # over the straight with per-lap sd 0.17-0.32 m and a range of
+            # -1.15 to +0.61 m, released as a systematic +0.28-0.35 m STEP at
+            # s ~ 10.5 (p90 0.53, max 1.27 m in one 0.097 s scan) where the
+            # first along-track feature comes into view.
+            #
+            # `along_clamp_mps` bounds how far the cloud's weighted mean may
+            # move ALONG its own heading between scans, relative to the
+            # distance the motion model was given by the encoders. It is a
+            # SPEED so it means the same thing at every sensor period; the
+            # per-scan allowance is `along_clamp_mps * dt`. The clamp shifts
+            # the whole cloud, not just the published mean, so the filter
+            # stays self-consistent. It stands down for a relocalization, a
+            # detected teleport and below `along_clamp_min_v`, because those
+            # are exactly the cases where a large along-track jump is the
+            # correct answer. 0 = off.
+            ('along_clamp_mps', 0.0),
+            ('along_clamp_min_v', 1.0),     # m/s; below this the clamp is
+                                            # inert (standing still, a reset,
+                                            # the grid start).
+            # Process noise ALONG the heading, separately from the lateral
+            # one. On an unobservable straight the along-track spread is pure
+            # diffusion: 0.18 m per update over the ~19 scans of this straight
+            # is 0.78 m of spread, which is the scale of the excursions above,
+            # while the lateral noise is pulled straight back by the walls and
+            # is the component that earns its keep. 0 = use `motion_noise_xy`
+            # for both, which is the shipped, isotropic behaviour.
+            ('motion_noise_along', 0.0),
             ('teleport_cp_radius', 2.5),    # m; only checkpoints this close to
                                             # the current estimate are seeded.
                                             # 0 = all of them, which measured
@@ -167,6 +201,7 @@ class ParticleFilter(Node):
          self.tp_hold_n, self.tp_reseed,
          self.gap_dt, self.gap_step_cap_m, self.gap_noise_mult,
          self.lost_patience_min, self.scan_dt_max, self.enc_gap_max,
+         self.along_clamp_mps, self.along_clamp_min_v, self.noise_along,
          self.tp_cp_radius) = [x.value for x in p]
         self.speed_cmd = 0.0
         # Teleport handler state. Every one of these is inert while both
@@ -176,6 +211,13 @@ class ParticleFilter(Node):
         self._tp_hold = 0
         self._tp_events = 0
         self.imu_accel = 0.0
+        # Along-track anchor state. Inert while `along_clamp_mps` is 0.0.
+        self._prev_mean = None
+        self._last_step = 0.0
+        self._last_v = 0.0
+        self._last_jumped = False
+        self._anchor_events = 0
+        self._anchor_total = 0.0
         if checkpoints_csv:
             self.load_checkpoints(checkpoints_csv)
 
@@ -471,6 +513,8 @@ class ParticleFilter(Node):
 
         self.predict(dt)
         self.update(scan)
+        # Inert while `along_clamp_mps` is 0.0.
+        self.anchor_along(dt)
         self.imu_yaw_prev = self.imu_yaw
         if self._just_relocalized and not self.publish_on_reloc:
             # The centroid of a track-wide cloud is not a pose; let the
@@ -578,12 +622,85 @@ class ParticleFilter(Node):
             noise = max(noise, self.noise_xy * ns * gm)
         if jumped:
             self.get_logger().warn('encoder jump: teleport assumed, spreading particles')
-        self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
-        self.py += step * np.sin(head) + np.random.normal(0, noise, self.n_p)
+        # What the motion model was told, kept for `anchor_along`. getattr is
+        # not needed to WRITE onto the synthetic namespace the rate-invariance
+        # tests lift `predict` onto.
+        self._last_step = float(step)
+        self._last_v = float(v)
+        self._last_jumped = bool(jumped)
+        # Process noise, isotropic by default. `motion_noise_along` > 0 splits
+        # it into an along-heading and a lateral component: on a straight only
+        # the lateral one is ever corrected by the scan, so the along one is
+        # free diffusion that the filter cannot undo. The default path below
+        # is untouched, RNG draws included, so the shipped filter is
+        # bit-identical.
+        noise_a = float(getattr(self, 'noise_along', 0.0))
+        if noise_a > 0.0 and self.noise_xy > 0.0:
+            # Carry whatever `noise` picked up from the jump and gap
+            # multipliers, so a teleport still spreads the cloud in BOTH
+            # directions; only the ratio of the two is `motion_noise_along`.
+            na = np.random.normal(0, noise * (noise_a / self.noise_xy),
+                                  self.n_p)
+            nl = np.random.normal(0, noise, self.n_p)
+            c, s = np.cos(head), np.sin(head)
+            self.px += step * c + na * c - nl * s
+            self.py += step * s + na * s + nl * c
+        else:
+            self.px += step * np.cos(head) + np.random.normal(0, noise, self.n_p)
+            self.py += step * np.sin(head) + np.random.normal(0, noise, self.n_p)
         # The heading-offset walk is per-update too, and scaling only the xy
         # one would make the RATIO of translational to rotational diffusion
         # rate-dependent -- worse than either being uniformly wrong.
         self.pth += np.random.normal(0, self.noise_th * ns * gm, self.n_p)
+
+    def anchor_along(self, dt):
+        """Bound the cloud's along-track motion by the encoder's own distance.
+
+        On a long straight with parallel walls the scan update constrains the
+        lateral offset and the heading and leaves the along-track coordinate
+        free, so the weighted mean walks along the corridor at whatever rate
+        the process noise and the resampling happen to allow. Measured on the
+        finals logs it moves the published pose by up to 1.27 m in ONE 0.097 s
+        scan, where the car itself covers 0.78 m.
+
+        The encoders do measure that direction, and well: on the straight the
+        filtered encoder speed sits within -0.10 m/s (p50) of the IPS truth.
+        So the along-track advance of the estimate is held to the distance the
+        motion model was given, plus or minus `along_clamp_mps * dt`. The
+        correction shifts every particle, not just the mean, so the cloud the
+        next scan sees is the cloud the controller was told about.
+
+        Returns the metres removed (signed, 0.0 when the clamp is off or
+        stood down), so a caller can measure how often it fires.
+        """
+        if not (float(getattr(self, 'along_clamp_mps', 0.0)) > 0.0) \
+                or not dt > 0.0:
+            return 0.0
+        hx = float(np.average(self.px, weights=self.w))
+        hy = float(np.average(self.py, weights=self.w))
+        head = self.imu_yaw + float(np.average(self.pth, weights=self.w))
+        prev, self._prev_mean = self._prev_mean, (hx, hy)
+        # Stand down wherever a big along-track jump is the RIGHT answer: the
+        # first scan, a centerline-wide relocalization, a detected teleport or
+        # encoder jump, and any speed at which the encoder cannot vouch for a
+        # distance.
+        if (prev is None or self._just_relocalized or self._last_jumped
+                or getattr(self, '_tp_hold', 0) > 0
+                or abs(self._last_v) < float(self.along_clamp_min_v)):
+            return 0.0
+        c, s = math.cos(head), math.sin(head)
+        adv = (hx - prev[0]) * c + (hy - prev[1]) * s
+        slack = float(self.along_clamp_mps) * dt
+        hi, lo = self._last_step + slack, self._last_step - slack
+        excess = adv - hi if adv > hi else (adv - lo if adv < lo else 0.0)
+        if excess == 0.0:
+            return 0.0
+        self.px -= excess * c
+        self.py -= excess * s
+        self._prev_mean = (hx - excess * c, hy - excess * s)
+        self._anchor_events += 1
+        self._anchor_total += abs(excess)
+        return excess
 
     def update(self, scan: LaserScan):
         r = np.asarray(scan.ranges, dtype=np.float64)
