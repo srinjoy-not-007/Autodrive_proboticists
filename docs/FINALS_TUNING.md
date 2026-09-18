@@ -237,7 +237,12 @@ that needs something we have not yet found.
       10/18 at 0.05. w_lat 16 collides, 36 costs 0.08 s: keep 24. k_e 3.0
       does not stack (1/18). Revised order for the display: ay 6.75 +
       lead 0.12, then frozen + lead 0.08 (pure insurance), then ay 7.5 +
-      lead 0.12 only if the first is clean.
+      lead 0.12 only if the first is clean. **Display: frozen line + lead
+      0.08 = 32/0/115.34 s, entry cut p50 +0.206 / worst +0.278 -- identical
+      to lead 0.05's +0.202 / +0.279: no margin bought live, 1.3 s/race
+      lost. REJECTED as insurance.** (With the brake on, the live entry cut
+      is already 0.05-0.07 m better than the harness's; the harness is
+      pessimistic here.) Running: ay 6.75 + lead 0.12, then ay 6.75 + 0.05.
 
 - [ ] **3. Grip confirmation** — one rung only: ay 6.75 with `ay_budget`
       matched (*model* −0.35 s). Porto says this will not pay; confirm on this
