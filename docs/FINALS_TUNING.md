@@ -250,6 +250,20 @@ every per-track knob was re-measured above.
 
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
 
+**Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
+published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
+11.00 s best lap** (silver 12.10, bronze 12.53 s laps) on an unseen track — the
+finals are far softer than the qualifiers, so collision risk outweighs a second
+of lap time. VAUL (6.46 s Porto qualifier) ships the TUM optimiser verbatim with
+a **flat 12 m/s² ggv**; their edge is corner-radius opening. ForzaETH's MAP
+controller (arXiv 2209.04346) plans steering by inverting a velocity × steer →
+achieved-ay table (0.055 m lateral error at 11 m/s, 40 Hz+), the published form
+of putting `achieved_curvature()` in the planner; a speed-scheduled lookahead
+Ld = m + q·v is their latency fix. The AutoDRIVE paper says actuator delays are
+modelled (value unpublished); another 2026 entrant logs 0.017-0.050 s command
+age, consistent with `steer_tau` 0.04. No public source for the WheelCollider
+curve, timestep, checkpoint or collision logic — our decompiled findings stand.
+
 ---
 
 ## 6. Submitting
