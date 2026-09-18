@@ -300,3 +300,208 @@ class TestTheLineDefaultFollowsTheMap:
         got = self.line_for('finals_mesh', 'mpc3',
                             {'PIT_CREW_LINE': '/home/data/racelines/x.csv'})
         assert got == '/home/data/racelines/x.csv'
+
+
+# ---------------------------------------------------------------- race-day
+# Audit, Sep 19. Everything below pins what the script ACTUALLY does on the
+# organisers' box, as opposed to what any one line of it reads like. Three
+# failures these close, each of which is a scored race and none of which the
+# tests above could see:
+#
+#   * a `-p name:=value` whose parameter the node does not declare -- rclpy
+#     refuses the override and the node exits ON LAUNCH, so the supervisor
+#     restarts it four times and then drops the race to Follow-the-Gap. The
+#     hand-maintained list in `TestThePreparedFinalsLines` covered ten names
+#     and missed every brake parameter and `pub_gate_corr`, i.e. the entire
+#     change that made the finals config clean;
+#   * an earlier `-p barrier_margin:=...` being read as the shipping value
+#     when a later one overrides it (ROS takes the last);
+#   * a commented `*_ARGS+=(` split over two lines, where uncommenting one
+#     half is a syntax error and the container never starts at all.
+
+ARG_RE = re.compile(r'-p\s+([A-Za-z_][A-Za-z0-9_]*):=(\S+?)(?=[\s)]|$)')
+
+
+def arg_lines():
+    """(node, param, value, raw line) for every `-p` the script can emit.
+
+    Commented lines count: they are the prepared knobs, and the runbook's
+    procedure for each of them is "uncomment this one line".
+    """
+    out = []
+    for raw in source().splitlines():
+        line = raw.strip()
+        body = line[1:].strip() if line.startswith('#') else line
+        if 'LOC_ARGS' in body:
+            node = 'localization'
+        elif 'CTRL_ARGS' in body:
+            node = 'mpc3'
+        elif 'ros2 run pit_crew localization' in body or 'centerline_csv' in body:
+            node = 'localization'
+        elif 'raceline_csv' in body or 'speed_scale' in body:
+            node = 'mpc3'
+        else:
+            continue
+        for param, value in ARG_RE.findall(body):
+            out.append((node, param, value, raw))
+    return out
+
+
+def declared(node):
+    with open(os.path.join(REPO, 'src', 'pit_crew', node + '.py')) as fh:
+        return fh.read()
+
+
+class TestEveryParameterTheScriptCanEmitIsDeclared:
+    """Generic replacement for the hand-kept list: nothing may be missed."""
+
+    def test_at_least_the_known_set_is_found(self):
+        params = {(n, p) for n, p, _v, _l in arg_lines()}
+        for want in [('mpc3', 'barrier_margin'), ('mpc3', 'brake_mode'),
+                     ('mpc3', 'pub_gate_corr'), ('mpc3', 'raceline_csv'),
+                     ('localization', 'max_step_mps'),
+                     ('localization', 'teleport_scan_jump')]:
+            assert want in params, (want, sorted(params))
+
+    def test_every_one_of_them_exists_in_its_node(self):
+        missing = [(n, p, line.strip()) for n, p, _v, line in arg_lines()
+                   if "'%s'" % p not in declared(n)]
+        assert not missing, (
+            'these `-p name:=value` overrides name parameters the node does '
+            'not declare; rclpy rejects them and the node exits on launch: %r'
+            % missing)
+
+    def test_no_double_is_written_as_an_integer(self):
+        """`gap_noise_mult:=3` cost a run: rclpy refuses an int for a double.
+
+        Any value with a decimal point somewhere else in the file must not
+        appear without one here, so check the file is self-consistent: a
+        parameter written `x.y` anywhere is never written bare elsewhere.
+        """
+        seen = {}
+        for _n, param, value, _l in arg_lines():
+            if not re.fullmatch(r'-?\d+(\.\d+)?', value):
+                continue                      # "$LINE", true/false, zero, ...
+            seen.setdefault(param, set()).add('.' in value)
+        mixed = [p for p, kinds in seen.items() if kinds == {True, False}]
+        assert not mixed, ('written both as an int and as a double: %r' % mixed)
+
+
+class TestTheEffectiveArgsAreTheFrozenFinalsSet:
+    """What the controller is actually launched with, per map slug.
+
+    Built by running the script's own LINE / CTRL_ARGS / LOC_ARGS blocks, so
+    it cannot drift from them, and reduced the way ROS reduces a repeated
+    `-p name:=value`: the LAST one wins.
+    """
+
+    def blocks(self):
+        src = source()
+        return '\n'.join([
+            re.search(r'^if \[\[ -n "\$\{PIT_CREW_LINE.*?^fi$', src,
+                      re.M | re.S).group(0),
+            src[src.index('CTRL_ARGS=()'):
+                src.index('# Built-in localization parameters')],
+            src[src.index('LOC_ARGS=()'):
+                src.index('# Extra `-p name:=value` parameters')],
+        ])
+
+    def effective(self, slug, controller):
+        script = '\n'.join([
+            'MAP=/home/data/maps/%s; SLUG=%s; CONTROLLER=%s'
+            % (slug, slug, controller),
+            self.blocks(),
+            'printf "%s\\n" "$LINE"',
+            'printf "%s\\n" "${CTRL_ARGS[*]}"',
+            'printf "%s\\n" "${LOC_ARGS[*]}"',
+        ])
+        env = {k: v for k, v in os.environ.items()}
+        for k in ('PIT_CREW_LINE', 'PIT_CREW_CONTROLLER_ARGS',
+                  'PIT_CREW_LOCALIZATION_ARGS'):
+            env.pop(k, None)
+        out = subprocess.run(['bash', '-c', script], env=env, check=True,
+                             capture_output=True, text=True)
+        line, ctrl, loc = out.stdout.split('\n')[:3]
+        last = {}
+        for text in (ctrl, loc):
+            for param, value in ARG_RE.findall(text):
+                last[param] = value           # ROS takes the last
+        return line, last
+
+    FROZEN = {
+        'rate_adaptive': 'true', 'w_dcmd': '50.0', 'cmd_tau': '0.10',
+        'steer_tau': '0.04', 'barrier_margin': '0.40',
+        'thr_brake_lead_s': '0.05', 'brake_mode': 'zero',
+        'brake_a_min': '1.5', 'brake_dv': '0.3', 'brake_a_full': '4.6',
+        'pub_gate_corr': '0.05',
+        'max_step_mps': '9.0', 'publish_on_reloc': 'false',
+    }
+
+    def test_the_finals_default_is_the_frozen_config(self):
+        """docs/FINALS_TUNING.md section 1, plus `pub_gate_corr` (Sep 19).
+
+        Gate D was passed on exactly this set. If this test fails, either the
+        image and the documentation have diverged or somebody has changed the
+        race after the gate.
+        """
+        line, eff = self.effective('finals_mesh', 'mpc3')
+        assert line == '/home/data/racelines/finals_mesh_hyb675b_race.csv', line
+        assert eff['map_prefix'] == '/home/data/maps/finals_mesh'
+        for param, value in self.FROZEN.items():
+            assert eff.get(param) == value, (param, eff.get(param), value)
+
+    def test_the_barrier_margin_that_ships_is_the_last_one_written(self):
+        """0.34 and the `case *cr_dk0.8.csv` line are both dead. Reading
+        either of them as the shipping value is how a 0.40-only regression
+        gets attributed to the wrong knob."""
+        src = source()
+        assert 'barrier_margin:=0.34' in src      # still present, still dead
+        for slug in ('finals_mesh', 'porto_mesh', 'icra2026_mesh'):
+            _line, eff = self.effective(slug, 'mpc3')
+            assert eff['barrier_margin'] == '0.40', slug
+
+    def test_the_legacy_mpc_is_passed_no_mpc3_only_parameter(self):
+        """`mpc` does not declare `map_prefix`, `brake_mode` or the rest, and
+        a node handed an undeclared override exits on launch."""
+        _line, eff = self.effective('finals_mesh', 'mpc')
+        for param in ('map_prefix', 'brake_mode', 'barrier_margin',
+                      'pub_gate_corr', 'thr_brake_lead_s'):
+            assert param not in eff, param
+        assert eff.get('max_step_mps') == '9.0'   # localization still gets its
+
+
+class TestACommentedArgLineCanBeUncommentedAlone:
+    """Every prepared knob's procedure is "strip the leading `# `" from one
+    line. A commented `LOC_ARGS+=(` continued onto a second comment line is an
+    unbalanced array literal: uncomment the first half and the container dies
+    with a syntax error, on the day, with no shell history to read."""
+
+    def test_each_commented_arg_line_is_balanced(self):
+        bad = []
+        for raw in source().splitlines():
+            line = raw.strip()
+            if not line.startswith('#'):
+                continue
+            body = line[1:].strip()
+            if not re.match(r'(CTRL_ARGS|LOC_ARGS)\+?=\(', body):
+                continue
+            if body.count('(') != body.count(')'):
+                bad.append(raw)
+        assert not bad, (
+            'commented argument lines that are not self-contained; '
+            'uncommenting one of them alone is a syntax error: %r' % bad)
+
+    def test_uncommenting_any_one_of_them_still_parses(self):
+        src = source()
+        for raw in src.splitlines():
+            body = raw.strip()
+            if not body.startswith('#'):
+                continue
+            inner = body[1:].strip()
+            if not re.match(r'(CTRL_ARGS|LOC_ARGS)\+?=\(', inner):
+                continue
+            indent = raw[:len(raw) - len(raw.lstrip())]
+            patched = src.replace(raw, indent + inner, 1)
+            proc = subprocess.run(['bash', '-n'], input=patched, text=True,
+                                  capture_output=True)
+            assert proc.returncode == 0, (raw, proc.stderr)

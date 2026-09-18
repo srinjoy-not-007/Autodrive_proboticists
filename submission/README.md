@@ -19,7 +19,10 @@ that this file cannot go stale.
 
 `--build-arg TAG` selects the devkit base image and must name the track image
 being raced: `2026-iros-compete` for the final submission,
-`2026-iros-practice` for qualification. `--build-arg FINALS_SLUG` names the
+`2026-iros-practice` for qualification. It **defaults to `2026-iros-compete`**,
+so a build that forgets the flag still gets the finals base image; the
+qualification image is now the one that needs the flag typed on purpose.
+`--build-arg FINALS_SLUG` names the
 raceline set to COPY and already defaults to `finals_mesh`, so the finals build
 takes no edit.
 
@@ -105,16 +108,27 @@ Paste the block below into the DockerHub repository description for
 > separately (autonomous mode, **Ultra** graphics), then press **Connection** —
 > the bridge, localization and the MPC are already up and waiting for sensor
 > data. A second shell (`docker exec -it autodrive_roboracer_api bash`) starts no
-> second controller. Orderly shutdown:
-> `docker stop --time 10 autodrive_roboracer_api`; the stack zeroes both
-> actuators before the bridge goes down. The team nodes are CPU-only.
+> second controller.
+>
+> If **Connection** was pressed before this container was started, press it
+> again: the simulator is the WebSocket client and the bridge in this container
+> is the server, so a press made before the bridge is listening has nothing to
+> connect to. (Architecture, not a measured retry policy — pressing again costs
+> nothing and is the safe habit.)
+>
+> Orderly shutdown: press **Ctrl-C** in the shell running the script, or --
+> if it was started through the image's default `CMD` -- `docker stop --time 10
+> autodrive_roboracer_api`; the stack zeroes both actuators before the bridge
+> goes down. On the `-it --entrypoint /bin/bash` path `docker stop` reaches
+> only the interactive shell, which ignores `SIGTERM`, so Ctrl-C is the
+> orderly stop there. The team nodes are CPU-only.
 >
 > Optional environment overrides (the defaults are the validated finals config):
 >
 > | Variable | Default |
 > |---|---|
 > | `PIT_CREW_MAP` | `/home/data/maps/finals_mesh` |
-> | `PIT_CREW_LINE` | `/home/data/racelines/finals_mesh_race.csv` |
+> | `PIT_CREW_LINE` | `/home/data/racelines/finals_mesh_hyb675b_race.csv` |
 > | `PIT_CREW_CENTERLINE` | `/home/data/racelines/<map basename>_centerline.csv` |
 > | `PIT_CREW_LIDAR_OFFSET` | `0.1933` |
 > | `PIT_CREW_CONTROLLER` | `mpc3` (`mpc` = legacy tracker + safe line) |
@@ -161,8 +175,14 @@ docker stop --time 10 autodrive_roboracer_api
 The team nodes are CPU-only and need no GPU; the official simulator keeps its own
 GPU/display requirements. On shutdown the script stops the producer nodes first,
 publishes zeros to `throttle_command` and `steering_command` while the bridge is
-still alive (commands latch), then stops the bridge. Abrupt host loss or SIGKILL
-cannot run that cleanup.
+still alive (commands latch), then stops the bridge. Abrupt host loss or
+SIGKILL cannot run that cleanup -- **and neither can `docker stop` on the `-it
+--entrypoint /bin/bash` path**, where PID 1 is the interactive shell and an
+interactive bash ignores `SIGTERM`: the script never sees it and is killed when
+the grace period ends, leaving the last commands latched in the simulator. On
+that path the orderly stop is **Ctrl-C** in the shell running the script
+(`trap 'exit 130' INT` runs the same cleanup). The `CMD` path, where the script
+is PID 1, takes `docker stop` correctly.
 
 ## Environment variables
 
@@ -179,9 +199,9 @@ all. Nothing else is read.
 | `PIT_CREW_CONTROLLER` | `mpc3` | `mpc3` or `mpc` only; anything else exits 2 (use `PIT_CREW_MODE=reactive` for Follow-the-Gap). `mpc3`/`mpc2` are passed `-p map_prefix:=` for the corridor barrier; the legacy `mpc` does not declare it. `mpc` defaults to the centerline — **never pair `mpc` with the wide min-curvature line.** |
 | `PIT_CREW_SPEED_SCALE` | `1.00` | Multiplier on the line's speed profile; preflight requires finite and in (0, 1.5]. |
 | `PIT_CREW_MODE` | `raceline` | `raceline` = localization + controller. `reactive` = map-free Follow-the-Gap only (no map, line, centerline or preflight). Any other value exits 2. |
-| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--what-ships-what-is-opt-in-and-what-stays-off) for what is already on (`rate_adaptive`, `w_dcmd`, `cmd_tau`), what is prepared but not enabled (`barrier_margin`), what is opt-in (`steer_tau`, `gap_predict_s`, the teleport and telemetry-gap sets) and what stays off (ILC, `nd_mode`, the spatial lead, `apply_floor_steps`). Appended **after** the script's own `CTRL_ARGS`, so an override here wins. |
+| `PIT_CREW_CONTROLLER_ARGS` | *(empty)* | Extra `-p name:=value` arguments appended verbatim to the controller at **every** launch, initial and supervisor restart. Word-split on purpose, e.g. `"-p rate_adaptive:=true -p ilc_enable:=true"`. See the runbook's [5D](../docs/FINALS_RUNBOOK.md#5d--what-ships-what-is-opt-in-and-what-stays-off) for what is already on (`rate_adaptive`, `w_dcmd`, `cmd_tau`), what is prepared but not enabled, what is opt-in (`steer_tau`, `gap_predict_s`, the teleport and telemetry-gap sets) and what stays off (ILC, `nd_mode`, the spatial lead, `apply_floor_steps`). Appended **after** the script's own `CTRL_ARGS`, so an override here wins. |
 | `PIT_CREW_LOCALIZATION_ARGS` | *(empty)* | Same, for the localization node. Appended **after** the script's own `LOC_ARGS` (which ships `max_step_mps:=9.0 publish_on_reloc:=false`), so an override here wins (ROS takes the last `-p name:=value` for a repeated name). |
-| `PIT_CREW_FTG_PARAMS` | `…/src/pit_crew/config/ftg_mapping.yaml` | Parameter file for the reactive stack (`PIT_CREW_MODE=reactive`, and the supervisor's last-resort fallback). The default is the **mapping** profile, `v_max` 1.0 m/s: deliberately slow, and the only profile carrying the stuck/escape keys that unwedge an unattended car. `…/config/ftg.yaml` is the faster racing profile (`v_max` 1.5) with no escape behaviour. Which is right depends on how tight the finals circuit is — Follow-the-Gap took 24 collisions in 194 s on SRL 2025 ICRA, which is a DQ. |
+| `PIT_CREW_FTG_PARAMS` | `…/src/pit_crew/config/ftg_mapping.yaml` | Parameter file for the reactive stack (`PIT_CREW_MODE=reactive`, and the supervisor's last-resort fallback). The default is the **mapping** profile, `v_max` 1.0 m/s: deliberately slow, and the only profile carrying the stuck/escape keys that unwedge an unattended car. `…/config/ftg.yaml` is the faster racing profile (`v_max` 1.5) with no escape behaviour. Which is right depends on how tight the finals circuit is — Follow-the-Gap took 24 collisions in 194 s on SRL 2025 ICRA, which is a DQ. Measured on the FINALS map with `tools/ftg_sim.py` (Sep 19): the mapping profile is 12 laps / 1 collision / ~57 s per lap, `ftg.yaml` 12 / 7. **The entrypoint only checks that this file exists when `PIT_CREW_MODE=reactive` was asked for, never on the supervisor's fallback path** -- `tests/test_submission_assets.py::TestTheReactiveFallbackIsInTheImage` covers it on the host instead. |
 
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` are pinned to 1
 by the script: the controller's numpy solves are 20x30 matrices, and OpenBLAS
@@ -218,6 +238,10 @@ A supervisor loop then `wait -n`s on the children:
 - **More than 4 restarts in `raceline` mode** → stop the race stack and fall
   back to `reactive` (Follow-the-Gap needs no map, no line and no localization),
   with the restart counter reset so the fallback gets its own 4 attempts.
+  **`RESTARTS` is cumulative over the whole session and is never reset on a
+  successful recovery**, so five node deaths spread over twelve laps drop the
+  race to Follow-the-Gap even though every one of them was recovered from. At
+  ~57 s per fallback lap that is the difference between a race and a finish.
 - **Reactive fallback also exhausts its restarts** → exit 1.
 
 This exists because the organisers run all 12 laps in one go: a single unhandled
@@ -264,7 +288,16 @@ The script runs `xhost local:root` first, sets Ultra, and checks that a second
   for the runbook's real-display gate (`VISIBLE=1 ... ./scripts/run_exp.sh`);
   run both.
 - Test stale sensor inputs, child-process failure (kill a worker, confirm only
-  it restarts) and orderly shutdown (`docker stop --time 10`, actuators zeroed).
+  it restarts) and orderly shutdown (Ctrl-C on the `-it` path, `docker stop
+  --time 10` on the `CMD` path; actuators zeroed either way).
+- Measure the reactive fallback on the track being raced before trusting it:
+  `.venv/bin/python tools/ftg_sim.py finals_mesh --params
+  src/config/ftg_mapping.yaml --laps 12`. On the finals map (Sep 19) the
+  shipped `ftg_mapping.yaml` profile completes 12 laps in the right direction
+  with 1 collision at ~57 s/lap; `ftg.yaml` (`v_max` 1.5) takes 7. The fallback
+  is survivable here, not competitive -- the right shape for a last resort, but
+  it is only ever reached after five node deaths, and the restart counter that
+  gets there never resets (see below).
 - Preserve the validated image digest before any performance experiments, and
   keep experiments on a separate branch.
 

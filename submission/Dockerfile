@@ -3,7 +3,14 @@
 # Rules: must build FROM the official devkit container, must not modify the
 # provided autodrive_roboracer package, and everything must start from
 # autodrive_devkit.sh (never ~/.bashrc).
-ARG TAG=2026-iros-practice
+# The default names the FINALS api image, not the practice one: every
+# documented build passes `--build-arg TAG=2026-iros-compete` explicitly, so
+# the default only ever takes effect when somebody forgets it -- and forgetting
+# it used to build the submission FROM the wrong track's devkit image, silently
+# and with no test that could see it. `2026-iros-practice` is now the value you
+# type on purpose to rebuild the qualification image.
+# tests/test_submission_assets.py::TestTheBaseImageDefaultsToTheFinalsTag pins it.
+ARG TAG=2026-iros-compete
 FROM autodriveecosystem/autodrive_roboracer_api:${TAG}
 
 # Runtime deps our stack needs that the base image lacks. The base image is
