@@ -1701,6 +1701,11 @@ def main():
                          'does (locked ~4.6, modulated up to ~7.1). '
                          '0 = off, the historical servo-only plant.')
     ap.add_argument('--plot', default='')
+    # OPT-IN, '' = off: write the raw per-tick record of the LAST tracker run
+    # to a CSV (columns: t,x,y,yaw,v,delta,s,e,clear,lap,thr_plant,thr_cmd,
+    # enc_v,log_enc), so the achieved lateral acceleration and anything else
+    # off the driven trajectory can be measured without re-running.
+    ap.add_argument('--dump-rec', default='', metavar='CSV')
     args = ap.parse_args()
     lo, hi = (float(x) for x in args.hairpin.split(','))
 
@@ -1813,6 +1818,10 @@ def main():
             print(f'  solve time  median {np.median(sm):.2f} ms  '
                   f'p95 {np.percentile(sm,95):.2f} ms  max {sm.max():.2f} ms')
         results[which] = (out, path)
+        if args.dump_rec:
+            np.savetxt(args.dump_rec, np.asarray(out['rec']), delimiter=',',
+                       header='t,x,y,yaw,v,delta,s,e,clear,lap,thr_plant,'
+                              'thr_cmd,enc_v,log_enc')
 
     if args.plot:
         import matplotlib
