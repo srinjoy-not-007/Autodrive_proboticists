@@ -16,7 +16,12 @@ collisions in 24 Xvfb laps (0.098 s), all running wide at s 38.6**
 (`race_20260918_173633.csv`), so it does not ship. A hybrid profile with the
 frozen speeds at s 24-28 and s 35-41 (`finals_mesh_hyb675_race.csv`, ideal
 10.82 s) **passed the 100-lap Xvfb gate: 100 / 0 / 117.72 s** (frozen: 119.51 s on
-32 Xvfb laps; `race_20260918_174633.csv`); its display run is in flight, with
+32 Xvfb laps; `race_20260918_174633.csv`); display **32 / 0 / 111.82 s**; it is the
+entrypoint's finals line and the built image raced 117.26 s (cmd entry, clean),
+118.40 s + 1 collision (default entry, at s 38.7, 0.093 s) and 112.09 s (display),
+all 12 laps. That corner is marginal at the organisers' period on the frozen
+speeds too, so `finals_mesh_hyb675b_race.csv` (0.08 m inward there, exit capped
+at 3.0 m/s) is in its 100-lap Xvfb gate. Behind it,
 two single-knob arms on the frozen line behind it (`servo_k_p 0.5 +
 servo_head_max 0.3` for the corner exits; `pub_gate_corr 0.05` for the straight
 weave — both opt-in, committed, defaults off, see FINALS_TUNING section 5). Note the frozen profile's own wall margin at s 39 is 0.25 m at
