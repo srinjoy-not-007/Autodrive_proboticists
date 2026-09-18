@@ -229,6 +229,15 @@ that needs something we have not yet found.
       same clearance and gates; the harness cannot arbitrate (plant clips
       at 6.5), so: live, ascending, abort on driven ay p99 > 9.3 or cte
       p95 rising. Lines: finals_mesh_rt_dr2_ay{675,75,80}_race.csv.
+      CORRECTION (harness, 18 laps/cell at 0.058): the ay rung and the
+      brake lead are ONE knob: ay 6.75 + lead 0.05 = 6 collisions/18; +
+      lead 0.08 = 0/18 at 0.050 m clearance; + lead 0.12 = 0/18 at 0.103 m
+      with the entry cut 0.188 (frozen line + lead 0.08: 0/18, 0.135,
+      0.246, same lap). ay 7.5 needs lead >= 0.12 (1/18 at 0.08); ay 8.0
+      10/18 at 0.05. w_lat 16 collides, 36 costs 0.08 s: keep 24. k_e 3.0
+      does not stack (1/18). Revised order for the display: ay 6.75 +
+      lead 0.12, then frozen + lead 0.08 (pure insurance), then ay 7.5 +
+      lead 0.12 only if the first is clean.
 
 - [ ] **3. Grip confirmation** — one rung only: ay 6.75 with `ay_budget`
       matched (*model* −0.35 s). Porto says this will not pay; confirm on this
