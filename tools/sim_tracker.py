@@ -441,11 +441,14 @@ class MPC3Sim:
                        'w_lat_T', 'w_yaw_T', 'w_barrier', 'barrier_margin',
                        'yaw_gain', 'ay_deliver', 'sat_knee', 'ay_budget',
                        'a_brake', 'a_accel', 'e_free', 'k_e', 'v_mod_min',
+                       'e_cut_accel_scale', 'e_cut_accel_kappa',
                        'thr_lead_s', 'thr_lead_mode', 'thr_source',
                        'thr_brake_lead_s', 'thr_enc_tau', 'delay_s',
                        'apply_ahead_s', 'apply_floor_steps', 'apply_lead_steps',
                        'steer_rate',
                        'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
+                       'pub_gate_corr', 'pub_gate_d', 'pub_gate_kappa',
+                       'pub_gate_e',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'nd_mode', 'nd_delay_s', 'dead_tick_c')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}

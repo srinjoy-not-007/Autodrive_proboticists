@@ -113,6 +113,8 @@ class MPC3Tracker(Node):
             ('e_free', 0.18),
             ('k_e', 2.0),
             ('v_mod_min', 0.55),
+            ('e_cut_accel_scale', 1.0),
+            ('e_cut_accel_kappa', 0.0),
             ('thr_lead_s', 0.225),
             ('thr_lead_mode', 'point'),   # 'min' = brake-only lead, opt-in
             # OPT-IN, defaults reproduce the shipping tune exactly:
@@ -165,6 +167,17 @@ class MPC3Tracker(Node):
             ('cmd_tau', 0.0),
             ('cmd_notch', 0.0),
             ('e_dead', 0.0),
+            # OPT-IN, 0.0 = off: cap the PUBLISHED angle at the
+            # line-matching angle plus `pub_gate_corr` rad while no corner
+            # (|kappa| >= `pub_gate_kappa`) is within `pub_gate_d` m ahead.
+            # Stops the publish lead turning in on a curvature step it is
+            # still metres away from.  See `mpc3_core.DEFAULTS`.
+            ('pub_gate_corr', 0.0),
+            ('pub_gate_d', 1.5),
+            ('pub_gate_kappa', 0.30),
+            # Release: no gate while the car is further than this off line
+            # (a collision reset needs full authority to rejoin).
+            ('pub_gate_e', 0.25),
             # --- the rack inside the rollout (OPT-IN; see mpc3_core) ---------
             # `steer_tau` is handed to BOTH the solver's rollout and the
             # `Actuator` that does the delay compensation, so there is one rack
@@ -426,6 +439,8 @@ class MPC3Tracker(Node):
             sat_knee=v['sat_knee'], ay_budget=v['ay_budget'],
             a_brake=v['a_brake'], a_accel=v['a_accel'], e_free=v['e_free'],
             k_e=v['k_e'], v_mod_min=v['v_mod_min'],
+            e_cut_accel_scale=v['e_cut_accel_scale'],
+            e_cut_accel_kappa=v['e_cut_accel_kappa'],
             thr_lead_s=v['thr_lead_s'], thr_lead_mode=v['thr_lead_mode'],
             thr_source=v['thr_source'],
             thr_brake_lead_s=v['thr_brake_lead_s'],
@@ -437,6 +452,9 @@ class MPC3Tracker(Node):
             dead_tick_c=v['dead_tick_c'],
             w_dcmd=v['w_dcmd'], cmd_tau=v['cmd_tau'],
             cmd_notch=v['cmd_notch'], e_dead=v['e_dead'],
+            pub_gate_corr=v['pub_gate_corr'], pub_gate_d=v['pub_gate_d'],
+            pub_gate_kappa=v['pub_gate_kappa'],
+            pub_gate_e=v['pub_gate_e'],
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],

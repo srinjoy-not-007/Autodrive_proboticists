@@ -174,6 +174,26 @@ DEFAULTS = dict(
     # still bites hard when the car is genuinely off line.
     e_free=0.18,              # lateral error tolerated before slowing, m
     k_e=2.0,                  # speed cut per metre of error beyond e_free
+    # OPT-IN (1.0 = off, byte-identical to the shipping tune).  Scales the
+    # `e_free`/`k_e` cut at the horizon steps where the OFFLINE PROFILE is
+    # accelerating (`a_prof > 0`), i.e. on a corner EXIT.  The cut exists as an
+    # emergency brake for a car that is off line going INTO a corner; on the
+    # way out it is the opposite of useful -- measured on the IROS finals line
+    # (harness, 0.058 s, frozen args), it is the ONLY term of this function
+    # that binds anywhere on the lap, and it holds the throttle ceiling 0.21
+    # m/s under the profile through the s 19 hairpin exit and 0.34 m/s under it
+    # through the s 37.6 exit, exactly where the car is already 0.5-0.9 m/s
+    # below plan.  The grip cap and the backward brake pass contribute 0.000.
+    # 0.0 removes the cut on exits only; the entry cut is untouched.
+    e_cut_accel_scale=1.0,
+    # Companion gate for `e_cut_accel_scale` (0.0 = no extra condition).  When
+    # > 0 the relaxation additionally requires the REFERENCE curvature at that
+    # step to be below this value, so it starts only once the corner has opened
+    # up.  Measured: with the scale alone, `a_prof` turns positive a few tenths
+    # of a metre BEFORE the s 37.6 apex, the backward brake pass carries the
+    # raised ceiling back into the entry, and the harness takes 9 collisions in
+    # 36 laps, all at s 37.4-37.5.
+    e_cut_accel_kappa=0.0,
     v_mod_min=0.55,           # never cut the profile speed below this fraction
     thr_lead_s=0.225,         # plan speed at the time the command is in force
     # How the lead is taken.  'point' is what raced: the ceiling AT
@@ -309,6 +329,32 @@ DEFAULTS = dict(
     lead_m0=0.0,
     lead_k=0.09,
     lead_min_m=0.30,
+    # --- no-anticipation publish gate (OPT-IN, 0.0 = off) -----------------
+    # WHY: the published angle is read `nd + apply` steps into the plan, and on
+    # this track the plan knot it lands on can already be ON the curvature step
+    # into the s 19 hairpin (kappa 0.09 -> 1.60 in 0.5 m).  Measured live
+    # (`race_20260918_162222.csv`, display, 0.058 s): the published angle
+    # averages +0.067 rad over s 16-18 where the line asks 0.03, i.e. the
+    # turn-in is applied 1-2.5 m early -- the "swivel before the turn".
+    # WHAT: while no corner is within `pub_gate_d` metres AHEAD of the car
+    # (`|kappa_ref| < pub_gate_kappa` over that window), the published angle is
+    # clipped to the LINE-MATCHING angle there plus `pub_gate_corr` radians of
+    # correction authority.  It is a clip on the OUTPUT only: the plan, the
+    # rollout and every cost are untouched, and the gate releases entirely as
+    # soon as the corner is inside the window, so a real turn-in is never
+    # delayed by more than `pub_gate_d` metres of travel.
+    # `pub_gate_corr` 0.0 disables it and is byte-identical to the tune that
+    # raced.  Sensible band: 0.05-0.12 rad of correction, 1.0-3.0 m of window.
+    # `pub_gate_e` is the RELEASE: the gate is off whenever the car is further
+    # than this from the line, because a bounded correction is not enough to
+    # rejoin from a collision reset.  Measured (harness, `--teleport-every 4`,
+    # 12 laps x 3 seeds x 2 frames): without the release the gate takes 702
+    # collisions at 0.058 s against the ungated 43 -- the car is put down off
+    # line on the straight and the clip will not let it come back.
+    pub_gate_corr=0.0,
+    pub_gate_d=1.5,
+    pub_gate_kappa=0.30,
+    pub_gate_e=0.25,
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes
@@ -1229,6 +1275,14 @@ class MPC3:
         e = np.abs(self.e_pred[:N + 1])
         mod = np.clip(1.0 - c['k_e'] * np.maximum(0.0, e - c['e_free']),
                       c['v_mod_min'], 1.0)
+        sc = float(c.get('e_cut_accel_scale', 1.0))
+        if sc != 1.0:
+            # One-sided: weaken the cut only where the profile is accelerating.
+            ok = P.a_prof[idx] > 0.0
+            kg = float(c.get('e_cut_accel_kappa', 0.0))
+            if kg > 0.0:
+                ok &= np.abs(P.kappa[idx]) < kg
+            mod = np.where(ok, 1.0 - sc * (1.0 - mod), mod)
         v_lim *= mod
 
         # The grip ceiling.  It is built from the REFERENCE curvature plus a
@@ -1689,6 +1743,19 @@ class MPC3:
         pub = self._pub[0] if self._pub is not None else d
         cmd = pub[N] if k >= N else pub[k] + frac * (pub[k + 1] - pub[k])
         cmd = float(np.clip(cmd, -cap, cap))
+        # OPT-IN no-anticipation gate: on a straight, never publish more than
+        # the line-matching angle plus a bounded correction (see DEFAULTS).
+        gc = float(c.get('pub_gate_corr', 0.0) or 0.0)
+        if gc > 0.0:
+            P = self.path
+            look = max(1, int(round(float(c['pub_gate_d'])
+                                    / max(P.spacing, 1e-3))))
+            j = (int(i0) + np.arange(look + 1)) % P.n
+            k_ahead = float(np.abs(P.kappa[j]).max())
+            if (k_ahead < float(c['pub_gate_kappa'])
+                    and abs(float(e_lat)) <= float(c['pub_gate_e'])):
+                lim = abs(math.atan(vehicle.WHEELBASE * k_ahead)) + gc
+                cmd = float(np.clip(cmd, -lim, lim))
         cmd_raw = cmd
         self.last_cmd_raw = cmd_raw
         # Opt-in output smoothing; both are the identity at their 0.0 default.
