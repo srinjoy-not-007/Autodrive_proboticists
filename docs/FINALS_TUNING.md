@@ -565,6 +565,76 @@ it does not re-open the late turn-in; it needs the same two gates.
      -p straight_d:=3.0 -p straight_kappa:=0.10
    ```
 3. **`lon_v8b55a65`**, if a live slot remains after 1 and 2 (section 4).
+4. **An s-indexed parameter schedule (Sep 19, agent, branch `param-sched`) —
+   harness only, not driven.** Every knob in mpc3 is one global value per lap,
+   and this track is three different corners. `param_schedule:=<path>` loads a
+   JSON of arc-length windows (`data/racelines/finals_mesh_sched.json`) that
+   override a whitelisted subset of the parameters — `thr_brake_lead_s`,
+   `e_free`, `k_e`, `v_mod_min`, `barrier_margin`, the cost weights and a new
+   `v_scale` on the offline profile — at full strength inside `[s0, s1]` and
+   ramping linearly back to the global value over `blend_m` (1.0 m) on each
+   side. This is ForzaETH's sector tuner (`speed_scaling.yaml`, one scalar per
+   sector, linear ramp over ±10 waypoints) generalised from the speed to the
+   tracker's own knobs. Defaults are byte-identical (`--dump-rec` `cmp`-equal),
+   the file is rejected at load if two windows claim the same parameter, and a
+   localization jump (or `MPC3.hold_schedule()`, which the node calls on a
+   teleport) drops it back on the globals and ramps it in over 5 solves.
+
+   **What it buys, and why one global value could not.** The tuned schedule is
+   three windows, and the two that matter carry the SAME parameter with
+   OPPOSITE signs 3 m apart:
+
+   | window | s | override (global) | why |
+   |---|---|---|---|
+   | `hp19_entry` | 16.0-19.0 | `barrier_margin` 0.50 (0.40) | outward bias on the approach; the barrier is clipped out at the apex, so it acts 1.5-2.5 m early |
+   | `c37_entry` | 34.5-37.5 | `thr_brake_lead_s` 0.09 (0.05) | brake EARLIER into the corner that runs wide at the organisers' period |
+   | `hp43_entry` | 40.5-43.5 | `thr_brake_lead_s` 0.00 (0.05) | brake LATER into the s 43.6 hairpin, where the period-stretched lead costs 0.09 s |
+
+   Harness, `finals_mesh_hyb675b_race.csv`, 8 seeds x 12 laps = **96 laps per
+   cell**, corrected plant (`--plant-dead 0.045 --plant-brake-at-zero 4.6
+   --pose-noise 0.03 --pose-latency 0.044`), shipping args:
+
+   | frame | arm | laps/coll | lap median | s 18-21 | s 36-39 | s 42-44 | entry cut p50/p95 | min clearance |
+   |---|---|---|---|---|---|---|---|---|
+   | 0.098 | shipping | 96 / 0 | 12.910 | 1.600 | 1.310 | 1.120 | 0.053 / 0.184 | 0.075 |
+   | 0.098 | **schedule** | 96 / 0 | **12.710** | 1.600 | **1.280** | **1.030** | **0.044 / 0.174** | **0.125** |
+   | 0.058 | shipping | 96 / 0 | 12.460 | 1.610 | 1.380 | 0.970 | 0.144 / 0.301 | 0.025 |
+   | 0.058 | **schedule** | 96 / 0 | **12.305** | 1.625 | **1.340** | **0.880** | 0.135 / 0.304 | **0.075** |
+
+   -0.20 s/lap at the organisers' period with MORE margin everywhere — the
+   s 36-39 clearance the corner actually fails on goes 0.146 -> 0.206 at
+   0.098 s and 0.025 -> 0.079 at 0.058 s. `finals_mesh_sched_fast.json` adds
+   `v_mod_min` 0.70 on the s 19 exit and `v_scale` 1.08 over the s 43.6 apex
+   for **-0.265 s/lap** (12.645 / 12.235, still 96/0 at both periods) at
+   0.034 m of hairpin clearance; it raises speeds, so it owes Gates C and D in
+   its own right. Teleport recovery is unchanged (6/17 cascades against the
+   baseline's 7/18).
+
+   **Measured and closed inside this feature** (do not re-open): the same
+   `thr_brake_lead_s` 0.0 on the **s 19** entry makes the cut worse (0.051 ->
+   0.093) and on **s 37** costs 0.14 m of clearance; pinning `thr_lead_s`
+   (0.13-0.17) on the hairpin approach — the per-segment version of the
+   throttle-lead pin that was rejected live — gains 0.13 s/lap and pushes the
+   entry cut p95 0.184 -> 0.245, so it is rejected for the same reason again;
+   `e_free` 0.21-0.24 or `k_e` 1.4 on the hairpin exit costs 0.08-0.10 m of
+   clearance (the cliff is a cliff per-sector too); `v_scale` on the s 19
+   apex or approach is slower AND tighter; `barrier_margin` 0.44-0.46 on
+   s 36-39 costs 0.13 s there and buys nothing.
+
+   **The live run this is waiting on** (the schedule path is the one INSIDE the
+   container, and `data/racelines/finals_mesh_sched.json` must be added to the
+   Dockerfile's `COPY data/racelines/...` list before any image ships with it):
+
+   ```bash
+   SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+     ./scripts/run_exp.sh finsched hyb675b_race \
+     -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+     -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+     -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+     -p pub_gate_corr:=0.05 -p weave_notch_k:=0.227 -p weave_notch_q:=0.7 \
+     -p straight_d:=3.0 -p straight_kappa:=0.10 \
+     -p param_schedule:=/home/data/racelines/finals_mesh_sched.json
+   ```
 
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
 

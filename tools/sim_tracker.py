@@ -457,9 +457,12 @@ class MPC3Sim:
                        'steer_tau', 'steer_tau_k', 'steer_tau_ref',
                        'model_cmd_tau', 'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'lead_t0', 'lead_tk',
-                       'nd_mode', 'nd_delay_s', 'dead_tick_c')
+                       'nd_mode', 'nd_delay_s', 'dead_tick_c',
+                       # s-indexed parameter schedule (OPT-IN, '' = off)
+                       'param_schedule', 'sched_blend_m', 'sched_hold_n',
+                       'sched_jump_m', 'v_scale')
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
-        for k in ('horizon', 'iters', 'outer'):
+        for k in ('horizon', 'iters', 'outer', 'sched_hold_n'):
             if k in skw:
                 skw[k] = int(round(skw[k]))
         self.P.update(kw)

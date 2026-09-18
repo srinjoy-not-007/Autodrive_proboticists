@@ -1,0 +1,30 @@
+{
+  "line": "finals_mesh_hyb675b_race.csv",
+  "map": "finals_mesh",
+  "total_s": 44.71081127190853,
+  "blend_m": 1.0,
+  "note": "s-indexed mpc3 parameter schedule for the SRL 2026 IROS track. Tuned on tools/sim_tracker.py (8 seeds x 12 laps = 96 laps per cell, --plant-realistic --plant-dead 0.045 --plant-brake-at-zero 4.6 --pose-noise 0.03 --pose-latency 0.044), at the organisers' 0.098 s period, gated on ZERO collisions at 0.098 AND 0.058 and on min footprint clearance at least the baseline's. Windows are metres of arc on the line above; each override is at full strength inside [s0, s1] and ramps linearly back to the global value over blend_m metres on each side (ForzaETH's sector tuner uses the same +-10-waypoint linear ramp on its speed scaler). The whole content of this file is: ONE global brake lead cannot serve three corners. Nothing here raises a speed; every window is either an outward bias or a redistribution of brake lead.",
+  "windows": [
+    {
+      "name": "hp19_entry",
+      "note": "The s 19 hairpin's entry cut is the oldest failure mode on this track. The barrier is clipped out at the apex (99 % of solves sit on the ay_limit cap there), so a wider margin acts 1.5-2.5 m EARLIER, as an outward bias on the approach - and costs nothing on the straight before it, which is why it can be 0.50 here and stay 0.40 everywhere else. Harness: entry cut p50 0.053 -> 0.044, p95 0.184 -> 0.174 at 0.098 s.",
+      "s0": 16.0,
+      "s1": 19.0,
+      "barrier_margin": 0.50
+    },
+    {
+      "name": "c37_entry",
+      "note": "s 36-39 is the corner that runs wide at the organisers' period (10 live collisions on the ay-6.75 line, all at s 38.6). A LONGER brake-only lead here, where the global value is 0.05: harness min clearance at 0.058 s 0.000-0.025 -> 0.079 m and the corner is 0.04 s FASTER, because the car stops arriving hot and having to scrub. This window is what makes the hp43_entry window below safe: without it the same schedule took 3 collisions in 96 laps at 0.058 s, all at s 37.5-37.9.",
+      "s0": 34.5,
+      "s1": 37.5,
+      "thr_brake_lead_s": 0.09
+    },
+    {
+      "name": "hp43_entry",
+      "note": "The opposite sign, 6 m later. thr_brake_lead_s is a brake-only lead that rate_adaptive stretches with the sensor period (0.126 s at 0.058, 0.212 at 0.098), so into the s 43.6 hairpin the car brakes ~0.3 m early at the organisers' rate. Removing it HERE recovers that: s 42-44 passage 1.120 -> 1.030 s at 0.098 with MORE clearance (0.100 -> 0.125 m). Only here - the same override on the s 19 entry made the cut worse (0.051 -> 0.093) and on s 37 it cost 0.14 m of clearance.",
+      "s0": 40.5,
+      "s1": 43.5,
+      "thr_brake_lead_s": 0.0
+    }
+  ]
+}
