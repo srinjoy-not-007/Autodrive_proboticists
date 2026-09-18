@@ -1,6 +1,8 @@
 # Finals tuning — SRL 2026 IROS Track (`2026-iros-compete`)
 
-Submission due **Sep 19 AoE**. Every checkpoint has a gate; a knob that does not
+Submission due **Sep 19 AoE = Sep 20, 17:30 IST** (about 48 h from the Sep 18
+evening baseline). Gates are therefore the full ones: 100 Xvfb laps + 32
+real-display laps per promoted change, ay rungs climbed one at a time. Every checkpoint has a gate; a knob that does not
 pass its gate is reverted, not kept "because it is faster". Numbers marked
 *model* are offline estimates from `tools/reprofile.py` or the relative lap
 model — they are not driven results.
