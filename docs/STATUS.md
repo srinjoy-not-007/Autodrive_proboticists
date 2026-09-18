@@ -15,8 +15,11 @@ best lap 10.937 s, driven ay p99 6.62, entry cut +0.22 p50). **It failed Gate C:
 collisions in 24 Xvfb laps (0.098 s), all running wide at s 38.6**
 (`race_20260918_173633.csv`), so it does not ship. A hybrid profile with the
 frozen speeds at s 24-28 and s 35-41 (`finals_mesh_hyb675_race.csv`, ideal
-10.82 s) is in the 100-lap Xvfb gate; if it fails, the frozen config ships
-unchanged. Note the frozen profile's own wall margin at s 39 is 0.25 m at
+10.82 s) **passed the 100-lap Xvfb gate: 100 / 0 / 117.72 s** (frozen: 119.51 s on
+32 Xvfb laps; `race_20260918_174633.csv`); its display run is in flight, with
+two single-knob arms on the frozen line behind it (`servo_k_p 0.5 +
+servo_head_max 0.3` for the corner exits; `pub_gate_corr 0.05` for the straight
+weave — both opt-in, committed, defaults off, see FINALS_TUNING section 5). Note the frozen profile's own wall margin at s 39 is 0.25 m at
 0.098 s (32 clean laps); its 100-lap Xvfb gate is still owed. ay 6.75 + lead 0.12 was neutral (114.10 s).
 
 ```
