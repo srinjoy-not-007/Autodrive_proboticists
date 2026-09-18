@@ -109,6 +109,20 @@ that needs something we have not yet found.
       10 m on the straights (Porto 2.4) -- the user's "rapid rights and
       lefts on a straight road"; smoother candidates being generated.
 
+      **Steering-side knobs ruled out (harness, 144-lap cells):**
+      apply_lead_steps, nd_delay_s, steer_tau 0.02, barrier 0.30/0.34/0.44
+      all leave the cut at +0.45 and collide at 0.058; apply_ahead_s 0 is
+      catastrophic; removing the barrier entirely helps a little (12 -> 2
+      collisions). The car is NOT arriving hot in the truth signal (under
+      plan by 0.25-0.5 m/s into the entry); the command leads the geometry
+      by 4x two metres before the corner. The line has 0.44-0.56 m of body
+      clearance there -- the cut consumes all of it. `thr_brake_lead_s` is
+      monotone and decisive: 0.05 -> 13 collisions at 0.058, 0.08 -> 0,
+      0.12 -> 0 with the cut +0.30 (cost ~+0.5-0.8 s/lap at 0.058).
+      **Live brake run (display, brake_mode zero): throttle exactly 0 on
+      29% of samples through the entry, most-inside +0.19 p50 / +0.25
+      worst (was +0.35..+0.49 at impact), 15 laps clean so far.**
+
 - [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
