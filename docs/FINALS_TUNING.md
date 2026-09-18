@@ -165,7 +165,26 @@ that needs something we have not yet found.
       vmax 8 -> 11 with the two 9 m/s caps raised (-1..-3), thr_brake_lead_s
       0.08 if the cut returns (+5..+8 but avoids a DQ). TUM mintime: no.
 
-- [ ] **1. Unblock speeds above 9 m/s** — prerequisite for checkpoint 2.
+- [x] **1. Unblock speeds above 9 m/s** -- DROPPED (Sep 18): the plant tops
+      out at 7.9 m/s on the vmax-8 profile and 8.7 m/s when the plan asks
+      11.2; the straights are too short for the ~4.5 m/s2 (decaying) drive
+      ceiling, and the fraction of samples where the encoder would exceed
+      9.0 is <= 0.1% in every harness cell. SPEED_MAX and max_step_mps never
+      bind; raising them buys nothing and adds a real hazard (above 9 the
+      estimator freezes then clamps, so the brake trigger fires late at the
+      fastest point). No code change.
+
+- [x] **2. Longitudinal envelope** -- MEASURED (Sep 18): the whole reprofile
+      grid (vmax 8-12 x brake 4-7 x ax 6.5/7.1) spans 0.48 s of ideal lap; the
+      honest ideal with a tapered ax (5.3 - 0.273 v) is 11.5 s, not 11.0.
+      Harness at 0.058 (144-lap cells): frozen profile 0 collisions; brake
+      5.5 -0.14 s/lap but 2 collisions at s 37.5 (a new corner, kappa ~1.0);
+      brake 7.0 unphysical; ax 7.1 or vmax >= 9: 1-6 collisions per 36-108
+      laps. brake_a_min 2.5 is a no-op (the brake_dv branch fires first).
+      Any extra speed anywhere finds a wall somewhere. One rung worth a live
+      slot: `lon_v8b55a65` (~-1.4 s/race at 0.058, -2.5 at 0.094, vs ~+1.4 s
+      expected penalty). Lines committed under finals_mesh_lon_*.
+ — prerequisite for checkpoint 2.
       Two caps sit at 9.0 today: `SPEED_MAX` in `vehicle.py` (the encoder
       estimator rejects faster readings as glitches — and a reject-only
       estimator is exactly what latched the brake into reverse on Aug 30) and
