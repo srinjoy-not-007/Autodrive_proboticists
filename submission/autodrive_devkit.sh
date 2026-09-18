@@ -154,6 +154,17 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # ICRA 2025 fast2_m50 32/0 140.4 s. Keep at 0.04: 0.06+ is a plant
     # mismatch that collides in the harness.
     CTRL_ARGS+=(-p steer_tau:=0.04)
+    # ----------------------------------------------------------------------
+    # AUDIT NOTE (Sep 19): the next TWO `barrier_margin` statements -- the
+    # 0.34 default and the `case *cr_dk0.8.csv` line -- are DEAD on every
+    # slug. The FINALS line further down appends `barrier_margin:=0.40`
+    # unconditionally, and ROS takes the LAST `-p name:=value`, so the
+    # effective value is 0.40 everywhere (verified by
+    # tests/test_entrypoint_args.py::TestTheEffectiveArgsAreTheFrozenFinalsSet).
+    # They are kept because the Sept 12 provenance below reads in order and
+    # deleting them is a behaviour-neutral edit to a Gate-D'd script; do not
+    # read either of them as the value that ships.
+    # ----------------------------------------------------------------------
     CTRL_ARGS+=(-p barrier_margin:=0.34)  # enabled Sept 12: display 32/0 x2 (69.44, 69.36 s), Porto 100/0 Xvfb 71.50 s, CDC-TF/ICRA25/ICRA26 32/0 each
     # PREPARED (Sept 12 evening, not enabled): barrier 0.40 on Porto and on
     # safe lines. Display 32/0 70.13 s with the hairpin most-inside worst
@@ -302,8 +313,14 @@ LOC_ARGS+=(-p max_step_mps:=9.0 -p publish_on_reloc:=false)
 # the IMU branch is unusable (1/9, and one frame early) -- keep it at 0.
 # Reseeding at checkpoints helped on 0/9 and costs 0.06 m, so hold-only; the
 # image also carries no `checkpoints_csv`, which reseeding would need.
-# LOC_ARGS+=(-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0.0
-#            -p teleport_hold_n:=7 -p teleport_reseed:=false)
+# It is ONE line on purpose: a commented `LOC_ARGS+=(` split over two lines is
+# an unbalanced array literal, so uncommenting only the first half is a bash
+# syntax error and the container never starts. Every commented `*_ARGS+=` line
+# in this file must stay individually balanced --
+# tests/test_entrypoint_args.py::TestACommentedArgLineCanBeUncommentedAlone.
+# TELEPORT_BLOCK_BEGIN
+# LOC_ARGS+=(-p teleport_scan_jump:=0.35 -p teleport_imu_g:=0.0 -p teleport_hold_n:=7 -p teleport_reseed:=false)
+# TELEPORT_BLOCK_END
 # Extra `-p name:=value` parameters for the finals, without editing this file.
 # Word-split ON PURPOSE (the only unquoted expansions here) so
 # PIT_CREW_CONTROLLER_ARGS="-p rate_adaptive:=true -p ilc_enable:=true" works;

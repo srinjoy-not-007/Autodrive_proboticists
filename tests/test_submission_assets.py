@@ -292,3 +292,119 @@ class TestTheFinalsSlugIsRaceable:
             'produces it. Maps ship by glob; racelines are listed one by one. '
             'Add them with the FINALS_SLUG build arg (see dockerfile_args) or '
             'at the ADD THE FINALS LINES HERE marker.' % missing)
+
+
+# ------------------------------------------------- audit additions (Sep 19)
+
+def resolve_in_image(published):
+    """The build-context file that ends up at `published` inside the image.
+
+    `SHIPPED` maps exact published paths, which covers the file COPYs. The
+    package COPY is a DIRECTORY (`COPY src /home/autodrive_devkit/src/pit_crew`),
+    so anything under it resolves by suffix -- that is how the reactive
+    fallback's parameter file gets into the image, and nothing checked it.
+    """
+    if published in SHIPPED:
+        return SHIPPED[published]
+    for dest, src in SHIPPED.items():
+        if os.path.isdir(src) and published.startswith(dest.rstrip('/') + '/'):
+            return os.path.join(src, published[len(dest.rstrip('/')) + 1:])
+    return None
+
+
+class TestTheReactiveFallbackIsInTheImage:
+    """The supervisor drops to Follow-the-Gap after `MAX_RESTARTS` failures,
+    and `start_ftg` passes `--params-file "$FTG_PARAMS"`. The entrypoint only
+    checks that the file EXISTS when `PIT_CREW_MODE=reactive` was asked for --
+    never on the fallback path, which is reached mid-race. A missing file there
+    is a node that exits on launch, four more restarts and then exit 1: the
+    race stops with laps still to run.
+
+    Measured with `tools/ftg_sim.py` on the finals map (Sep 19): the shipped
+    `ftg_mapping.yaml` profile completes 12 laps in the correct direction with
+    1 collision at ~57 s/lap; `ftg.yaml` (the faster `v_max` 1.5 profile) takes
+    7. The default is the right one -- which is only worth anything if the file
+    is actually there.
+    """
+
+    def ftg_default(self):
+        src = entry_src()
+        m = re.search(r'^FTG_PARAMS="\$\{PIT_CREW_FTG_PARAMS:-([^}]+)\}"$',
+                      src, re.M)
+        assert m, 'the entrypoint no longer has a single FTG_PARAMS default'
+        return m.group(1)
+
+    def test_the_default_parameter_file_is_produced_by_a_copy(self):
+        path = self.ftg_default()
+        src = resolve_in_image(path)
+        assert src is not None, \
+            '%s is the fallback default but no Dockerfile COPY produces it' % path
+        assert os.path.isfile(src), src
+
+    def test_it_is_a_follow_the_gap_parameter_file(self):
+        """A params file whose top-level key is not the node's name is accepted
+        silently and applies NOTHING -- the fallback would then run at the
+        4.0 m/s `v_max` default on a 1.34 m corridor."""
+        data = yaml.safe_load(open(resolve_in_image(self.ftg_default())))
+        assert 'follow_the_gap' in data, sorted(data)
+        params = data['follow_the_gap']['ros__parameters']
+        assert params['v_max'] <= 1.0, params['v_max']
+        for key in ('stuck_clearance', 'stuck_seconds', 'escape_seconds'):
+            assert key in params, key
+
+    def test_every_key_in_it_is_declared_by_the_node(self):
+        """rclpy ignores an undeclared key in a params file, so a typo is
+        silent: the knob simply never applies."""
+        node = open(os.path.join(REPO, 'src', 'pit_crew',
+                                 'follow_the_gap.py')).read()
+        data = yaml.safe_load(open(resolve_in_image(self.ftg_default())))
+        missing = [k for k in data['follow_the_gap']['ros__parameters']
+                   if "'%s'" % k not in node]
+        assert not missing, missing
+
+
+class TestTheBaseImageDefaultsToTheFinalsTag:
+    """`--build-arg TAG` picks the devkit image the submission is built FROM.
+    Every documented command passes it, so the default only ever applies when
+    someone forgets -- and the rules require the finals api image."""
+
+    def test_the_arg_default(self):
+        assert dockerfile_args().get('TAG') == '2026-iros-compete'
+
+    def test_the_finals_slug_default(self):
+        assert dockerfile_args().get('FINALS_SLUG') == 'finals_mesh'
+
+
+class TestEveryShippedMapIsAWholeMap:
+    """Maps ship by glob (`*_mesh.pgm` / `*_mesh.yaml`), so the image contents
+    depend on what happens to be in `data/maps/` at build time. A `.pgm`
+    without its `.yaml` (or the reverse) is a `PIT_CREW_MAP` that crashes
+    preflight on a YAML that is not there."""
+
+    def maps(self):
+        return {p for p in SHIPPED if p.startswith('/home/data/maps/')}
+
+    def test_pgm_and_yaml_always_come_in_pairs(self):
+        pgms = {p[:-4] for p in self.maps() if p.endswith('.pgm')}
+        yamls = {p[:-5] for p in self.maps() if p.endswith('.yaml')}
+        assert pgms == yamls, sorted(pgms ^ yamls)
+
+    def test_the_finals_map_is_among_them(self):
+        assert '/home/data/maps/finals_mesh.pgm' in self.maps()
+
+    def test_every_map_either_races_or_fails_by_name(self):
+        """A map with no `<slug>_centerline.csv` in the image is unreachable by
+        accident: the entrypoint exits 2 naming the missing file rather than
+        racing another circuit's geometry. Assert that is still true of every
+        map the glob sweeps up -- scratch maps from the drill included."""
+        complete = set(reachable_slugs())
+        for path in sorted(self.maps()):
+            if not path.endswith('.pgm'):
+                continue
+            slug = os.path.basename(path)[:-4]
+            if slug in complete:
+                continue
+            _mp, line, center = derive(slug, 'mpc3')
+            assert center not in SHIPPED and line not in SHIPPED, \
+                ('%s has a partial asset set in the image: it would start and '
+                 'race the wrong geometry instead of failing by name' % slug)
