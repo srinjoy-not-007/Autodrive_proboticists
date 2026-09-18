@@ -178,6 +178,27 @@ class MPC3Tracker(Node):
             # Release: no gate while the car is further than this off line
             # (a collision reset needs full authority to rejoin).
             ('pub_gate_e', 0.25),
+            # --- straight-only weave conditioning (OPT-IN; see mpc3_core) ----
+            # The 18 m straight carries a 2.9 Hz dead-time limit cycle of the
+            # lateral loop.  `weave_notch_f` puts a second-order notch on the
+            # published angle (unity gain and zero phase at DC, so it costs
+            # nothing where there IS something to track); `straight_hf_gain` scales
+            # only the FAST part of the angle (split at `straight_hf_tau`)
+            # through the same gate, leaving DC untouched;
+            # `straight_lead_scale` shortens the publish lead through it.  The gate is a RAMP: 1 on an empty
+            # straight, 0 once a corner is inside `straight_d` m or the car is
+            # `straight_e` off line (the collision-reset release).
+            ('weave_notch_f', 0.0),
+            ('weave_notch_k', 0.0),
+            ('weave_notch_q', 1.0),
+            ('straight_w_lat_scale', 1.0),
+            ('straight_w_yaw_scale', 1.0),
+            ('straight_hf_gain', 1.0),
+            ('straight_hf_tau', 0.50),
+            ('straight_lead_scale', 1.0),
+            ('straight_d', 1.5),
+            ('straight_kappa', 0.30),
+            ('straight_e', 0.25),
             # --- the rack inside the rollout (OPT-IN; see mpc3_core) ---------
             # `steer_tau` is handed to BOTH the solver's rollout and the
             # `Actuator` that does the delay compensation, so there is one rack
@@ -461,6 +482,15 @@ class MPC3Tracker(Node):
             pub_gate_corr=v['pub_gate_corr'], pub_gate_d=v['pub_gate_d'],
             pub_gate_kappa=v['pub_gate_kappa'],
             pub_gate_e=v['pub_gate_e'],
+            weave_notch_f=v['weave_notch_f'], weave_notch_k=v['weave_notch_k'],
+            weave_notch_q=v['weave_notch_q'],
+            straight_w_lat_scale=v['straight_w_lat_scale'],
+            straight_w_yaw_scale=v['straight_w_yaw_scale'],
+            straight_hf_gain=v['straight_hf_gain'],
+            straight_hf_tau=v['straight_hf_tau'],
+            straight_lead_scale=v['straight_lead_scale'],
+            straight_d=v['straight_d'], straight_kappa=v['straight_kappa'],
+            straight_e=v['straight_e'],
             steer_tau=v['steer_tau'], model_cmd_tau=v['model_cmd_tau'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],

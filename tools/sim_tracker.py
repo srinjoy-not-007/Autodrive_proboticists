@@ -449,6 +449,11 @@ class MPC3Sim:
                        'w_dcmd', 'cmd_tau', 'cmd_notch', 'e_dead',
                        'pub_gate_corr', 'pub_gate_d', 'pub_gate_kappa',
                        'pub_gate_e',
+                       'weave_notch_f', 'weave_notch_k', 'weave_notch_q', 'straight_w_lat_scale',
+                       'straight_w_yaw_scale', 'straight_hf_gain',
+                       'straight_hf_tau',
+                       'straight_lead_scale', 'straight_d', 'straight_kappa',
+                       'straight_e',
                        'steer_tau', 'model_cmd_tau', 'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'lead_t0', 'lead_tk',
                        'nd_mode', 'nd_delay_s', 'dead_tick_c')

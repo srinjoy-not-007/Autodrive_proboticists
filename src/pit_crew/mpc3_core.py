@@ -378,6 +378,97 @@ DEFAULTS = dict(
     pub_gate_d=1.5,
     pub_gate_kappa=0.30,
     pub_gate_e=0.25,
+    # --- straight-only weave conditioning (OPT-IN, all identity when off) --
+    # WHY: on this track's 18 m straight (s 2-16, |kappa| <= 0.006) the lateral
+    # loop self-oscillates at 2.9 Hz -- period 0.35 s, which is twice the
+    # modelled 0.18 s pose-to-rack dead time, i.e. the classic dead-time
+    # crossover cycle.  It is rate-invariant (same period at 0.058 and 0.094 s
+    # sensor periods) and it survives a PERFECT sensor in `tools/sim_tracker.py`,
+    # so it is the loop, not noise.  Every weight knob either leaves it
+    # (`e_dead`, `w_lat`, `w_yaw`, `w_rate`, `w_jerk`, `w_dcmd` 400,
+    # `apply_lead_steps`) or kills it by lowering the loop gain everywhere and
+    # costs a second a lap (`cmd_tau` 0.30).
+    #
+    # The observation these knobs are built on: the cycle only needs to be
+    # removed WHERE THERE IS NOTHING TO TRACK.  On a straight the reference is
+    # a constant, so any filter that is flat at DC costs exactly nothing there,
+    # and the gate makes sure the filter is already out of the loop by the time
+    # a corner arrives.
+    #
+    # `weave_notch_f`   centre frequency, Hz, of a second-order NOTCH on the
+    #                   published angle (0.0 = off).  Continuous-time
+    #                   (s^2 + w0^2) / (s^2 + (w0/Q) s + w0^2), bilinear-
+    #                   transformed with the MEASURED sensor period every
+    #                   frame, so it is the same filter in seconds at any
+    #                   sensor rate.  Unlike a low pass it has unity gain and
+    #                   ZERO phase shift at DC and returns to unity well below
+    #                   the turn-in band (~0.5 Hz), so it takes the limit cycle
+    #                   out without adding the lag that made `cmd_tau` 0.30
+    #                   cost 1.25 s/lap.
+    # `weave_notch_q`   its Q.  1.0 is a ~2-4 Hz stop band at f0 = 2.9.
+    # `straight_hf_gain`  a first-order SHELF on the published angle through
+    #                   the same gate (1.0 = off): the angle is split by a
+    #                   `straight_hf_tau` low pass into a slow part and a fast
+    #                   part, and only the FAST part is scaled by this gain.
+    #                   DC is untouched (gain 1, no lag), so the straight's
+    #                   slow corrections keep their full authority while the
+    #                   loop gain above ~1/(2 pi tau) Hz -- where the cycle
+    #                   lives and where nothing on a straight needs tracking --
+    #                   is cut.  0.0 is a pure low pass, which is what makes it
+    #                   a superset of the pure-lag arm that was tried first:
+    #                   measured, a pure low pass (tau 0.30) halves the motion
+    #                   at 0.094 s and makes it WORSE at 0.058 s (straight std
+    #                   0.0318 -> 0.0465), because a full lag at the fast
+    #                   period drops the phase margin at the crossover the
+    #                   cycle already sits on.  A shelf does not, because it
+    #                   stops attenuating instead of accumulating phase.
+    # `straight_lead_scale`  scales the publish lead BEYOND `nd` by this factor
+    #                   through the gate (1.0 = off).  Less lead is less phase
+    #                   advance on a reference that is not going anywhere.
+    #
+    # THE GATE (shared by all three, and ramped, not switched): `g` is 1 where
+    # `max |kappa_ref|` over the next `straight_d` metres is 0 and falls
+    # linearly to 0 as it reaches `straight_kappa`, times the same ramp on
+    # |e_lat| against `straight_e`.  The |e| ramp is the collision-reset
+    # release that `pub_gate_e` exists for: a bounded-authority car that is put
+    # down off line must get its full loop back to rejoin.  Every filter is run
+    # on every frame regardless of `g` and only its OUTPUT is blended,
+    # `g * filtered + (1 - g) * raw`, so the state is always warm and the
+    # release is bumpless, and the state is DROPPED whenever the gate is shut,
+    # so no transient survives into a recovery.
+    # `straight_w_lat_scale` / `straight_w_yaw_scale`  scale the LATERAL and
+    #                   HEADING weights (both their running and terminal
+    #                   parts) through the gate, 1.0 = off.  This is the only
+    #                   member of the family that acts INSIDE the loop rather
+    #                   than on its output, which is why it is the one that
+    #                   works: lowering `w_lat` on a straight lowers the
+    #                   crossover frequency itself, and the solver re-optimises
+    #                   consistently instead of being fought by a filter that
+    #                   `w_dcmd` then charges it for.  The corridor barrier is
+    #                   NOT scaled, so the wall is defended with full authority
+    #                   even where the line is not tracked hard.
+    # `weave_notch_k`   OPT-IN alternative to a FIXED `weave_notch_f`
+    #                   (0.0 = off, and `weave_notch_f` is then what is used):
+    #                   the centre frequency in Hz*s, divided by the loop's
+    #                   measured dead time `period + dead_tick_c`.  The cycle
+    #                   is a dead-time crossover, so its frequency moves with
+    #                   the sensor period -- measured here, the best fixed
+    #                   notch is 2.2 Hz at a 0.058 s period and 1.8 Hz at
+    #                   0.094 s, a ratio of 1.22 against the 1.35 the dead-time
+    #                   law predicts -- and one constant in Hz cannot serve
+    #                   both.  `weave_notch_k` 0.227 is 2.2 Hz at 0.058 s and
+    #                   1.63 Hz at 0.094 s.
+    weave_notch_f=0.0,
+    weave_notch_k=0.0,
+    weave_notch_q=1.0,
+    straight_w_lat_scale=1.0,
+    straight_w_yaw_scale=1.0,
+    straight_hf_gain=1.0,
+    straight_hf_tau=0.50,
+    straight_lead_scale=1.0,
+    straight_d=1.5,
+    straight_kappa=0.30,
+    straight_e=0.25,
     # solver ----------------------------------------------------------------
     iters=6,
     outer=2,                  # speed-plan / steering-plan fixed point passes
@@ -1214,9 +1305,16 @@ class MPC3:
         # free steps continue from.
         self.last_cmd_raw = None
         self._apply = (0, 0.0)        # publish knot + fraction, set in solve()
+        self._wscale = (1.0, 1.0)     # straight-gated (lat, yaw) weight scales
         # (command plan, its Jacobian) from the last rollout; None unless
         # `steer_tau` / `model_cmd_tau` put a lag in the chain.
         self._pub = None
+        # Straight-gate weave conditioning state (OPT-IN; see DEFAULTS).
+        # `_wv` is the notch biquad's (x1, x2, y1, y2), `_wv_lp` the
+        # `straight_hf_gain` shelf's low pass, `last_gate` the ramp value.
+        self._wv = None
+        self._wv_lp = None
+        self.last_gate = 0.0
 
 
     # ..................................................................
@@ -1550,14 +1648,17 @@ class MPC3:
         nf = N - nd
         r = []
         J = [] if jac is not None else None
-        sw_yaw = math.sqrt(c['w_yaw'])
+        # Straight-gated weight schedule (OPT-IN, (1.0, 1.0) = off).  The
+        # barrier is deliberately NOT in this list.
+        wl_s, wy_s = self._wscale
+        sw_yaw = math.sqrt(c['w_yaw'] * wy_s)
         sw_steer = math.sqrt(c['w_steer'])
         sw_rate = math.sqrt(c['w_rate'])
         sw_jerk = math.sqrt(c['w_jerk'])
         sw_bar = math.sqrt(c['w_barrier'])
-        sw_lat = math.sqrt(c['w_lat'])
-        sw_latT = math.sqrt(c['w_lat'] + c['w_lat_T'])
-        sw_yawT = math.sqrt(c['w_yaw'] + c['w_yaw_T'])
+        sw_lat = math.sqrt(c['w_lat'] * wl_s)
+        sw_latT = math.sqrt((c['w_lat'] + c['w_lat_T']) * wl_s)
+        sw_yawT = math.sqrt((c['w_yaw'] + c['w_yaw_T']) * wy_s)
         zero = np.zeros(nf)
         e_dead = float(c['e_dead'])
         for k in range(N):
@@ -1627,6 +1728,83 @@ class MPC3:
         return (r, np.asarray(J)) if jac is not None else (r, None)
 
     # ..................................................................
+    def _straight_gate(self, i0, e_lat):
+        """Ramp in [0, 1]: 1 on an empty straight, 0 anywhere near a corner.
+
+        Both ramps are linear and the product is taken, so the gate is already
+        0 before the corner is close enough to steer for, and it is 0 whenever
+        the car is far enough off line that a conditioned command would not
+        bring it back (the collision-reset release).
+        """
+        c = self.cfg
+        P = self.path
+        d = float(c['straight_d'])
+        kg = float(c['straight_kappa'])
+        eg = float(c['straight_e'])
+        look = max(1, int(round(d / max(P.spacing, 1e-3))))
+        j = (int(i0) + np.arange(look + 1)) % P.n
+        k_ahead = float(np.abs(P.kappa[j]).max())
+        g = 1.0 - k_ahead / kg if kg > 0.0 else 0.0
+        if eg > 0.0:
+            g = min(g, 1.0 - abs(float(e_lat)) / eg)
+        return float(min(1.0, max(0.0, g)))
+
+    def _weave_filter(self, cmd, g):
+        """Notch and/or low pass the published angle, blended by the gate.
+
+        While the gate is open the filters run on every frame and only their
+        OUTPUT is blended, so the ramp is smooth; when it shuts the state is
+        dropped, so nothing stale survives a release.  The notch is redesigned from the measured period each frame
+        (RBJ biquad, which is the bilinear transform with the centre frequency
+        pre-warped), which is what makes it the same filter in SECONDS at any
+        sensor rate.
+        """
+        c = self.cfg
+        T = max(float(self.period), 1e-3)
+        if g <= 0.0:
+            # Gate shut: drop the state instead of running the filters on a
+            # signal whose output is discarded.  A stored transient is exactly
+            # what must not survive a release -- measured with `--teleport-every
+            # 4`, carrying it across made the car wedge on a straight it had
+            # been put down on (s 4.8, repeatedly).  Re-entry re-initialises
+            # the biquad in steady state, which is bumpless by construction.
+            self._wv = None
+            self._wv_lp = None
+            return float(cmd)
+        y = cmd
+        f0 = float(c.get('weave_notch_f', 0.0) or 0.0)
+        kf = float(c.get('weave_notch_k', 0.0) or 0.0)
+        if kf > 0.0:
+            f0 = kf / max(T + float(c['dead_tick_c']), 1e-3)
+        if f0 > 0.0:
+            q = max(float(c.get('weave_notch_q', 1.0) or 1.0), 1e-3)
+            w0 = 2.0 * math.pi * f0 * T
+            # Above Nyquist there is no notch to place; leave the signal alone.
+            if w0 >= math.pi:
+                self._wv = None
+            else:
+                al = math.sin(w0) / (2.0 * q)
+                cw = math.cos(w0)
+                a0 = 1.0 + al
+                b0, b1, b2 = 1.0 / a0, -2.0 * cw / a0, 1.0 / a0
+                a1, a2 = -2.0 * cw / a0, (1.0 - al) / a0
+                if self._wv is None:
+                    self._wv = [y, y, y, y]
+                x1, x2, y1, y2 = self._wv
+                yn = b0 * y + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                self._wv = [y, x1, yn, y1]
+                y = yn
+        kh = float(c.get('straight_hf_gain', 1.0) or 1.0)
+        if kh != 1.0:
+            tau = max(float(c.get('straight_hf_tau', 0.50) or 0.50), 1e-3)
+            if self._wv_lp is None:
+                self._wv_lp = y
+            al = 1.0 - math.exp(-T / tau)
+            self._wv_lp = self._wv_lp + al * (y - self._wv_lp)
+            y = self._wv_lp + kh * (y - self._wv_lp)
+        return float(cmd + g * (y - cmd))
+
+    # ..................................................................
     def solve(self, e_lat, e_yaw, delta0, i0, v0, cap=None, committed=None):
         """One control cycle.  Call once per new pose.
 
@@ -1663,6 +1841,22 @@ class MPC3:
         u = np.clip(np.roll(self.u, -1)[:nf], -rate, rate)
         if nf > 1:
             u[-1] = u[-2]
+
+        # The straight gate (OPT-IN, see DEFAULTS).  Computed before the lead
+        # because `straight_lead_scale` moves the publish index through it.
+        gate = 0.0
+        wls = float(c.get('straight_w_lat_scale', 1.0) or 1.0)
+        wys = float(c.get('straight_w_yaw_scale', 1.0) or 1.0)
+        if (float(c.get('weave_notch_f', 0.0) or 0.0) > 0.0
+                or float(c.get('weave_notch_k', 0.0) or 0.0) > 0.0
+                or float(c.get('straight_hf_gain', 1.0) or 1.0) != 1.0
+                or float(c.get('straight_lead_scale', 1.0) or 1.0) != 1.0
+                or wls != 1.0 or wys != 1.0):
+            gate = self._straight_gate(i0, e_lat)
+        self.last_gate = gate
+        # Interpolated by the ramp, so the full weights are back before the
+        # corner is: 1.0 at the gate's edge, the scale on an empty straight.
+        self._wscale = (1.0 + gate * (wls - 1.0), 1.0 + gate * (wys - 1.0))
 
         # Where the published angle is read out of the plan.  Computed here,
         # before the solve, because `w_dcmd` costs exactly that angle.
@@ -1702,6 +1896,12 @@ class MPC3:
         else:
             _f = nd + max(float(c['apply_floor_steps']),
                           float(c['apply_ahead_s']) / self.dt)
+        ls = float(c.get('straight_lead_scale', 1.0) or 1.0)
+        if gate > 0.0 and ls != 1.0:
+            # Scale the lead BEYOND `nd` only: `nd` is the machine's dead time
+            # and is not negotiable, the readout lead on top of it is.
+            _f = nd + (1.0 + gate * (ls - 1.0)) * (_f - nd)
+            _f = max(_f, float(nd))
         _k = min(int(_f), N)
         self._apply = (_k, _f - _k)
 
@@ -1803,6 +2003,13 @@ class MPC3:
                 a = 1.0 - math.exp(-max(float(self.period), 1e-3) / tau)
                 cmd = self.last_cmd + a * (cmd - self.last_cmd)
             cmd = float(np.clip(cmd, -cap, cap))
+        # OPT-IN straight-gated conditioning of the published angle.  Runs
+        # after `cmd_notch`/`cmd_tau` so it composes with them, and is the
+        # identity (and untouched state) while both knobs are 0.0.
+        if (float(c.get('weave_notch_f', 0.0) or 0.0) > 0.0
+                or float(c.get('weave_notch_k', 0.0) or 0.0) > 0.0
+                or float(c.get('straight_hf_gain', 1.0) or 1.0) != 1.0):
+            cmd = float(np.clip(self._weave_filter(cmd, gate), -cap, cap))
         self.last_cmd = cmd
 
         vp = self.v_ceiling if self.v_ceiling is not None else self.v_plan
