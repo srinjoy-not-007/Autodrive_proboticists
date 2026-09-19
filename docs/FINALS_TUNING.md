@@ -877,6 +877,104 @@ VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 
 #   ... exitm_m14t6h2_x100 exitm_m14t6_h2_race <same -p flags>
 ```
 
+**The LAST hairpin: a later apex, not more exit margin (Sep 19, agent, branch
+`exit-margin-2`). Offline + harness only, nothing driven.** The one corner the
+shipping geometry still has to take at the safe 1.57 m/s apex is the last
+hairpin (apex s 43.6): at full ay 9.0 (`_h2`) it collided 9/32 Xvfb and 1/32
+display, every hit at s 44.1-44.3 running 0.22-0.37 m WIDE of the line.
+
+Three families were built on top of `m10t6`'s spec (`19.8:24:right:0.10,
+25.8:30:right:0.10,36:42:right:0.08`, taper 0.6; the baseline regenerates
+byte-identical bar one `-0.0000`):
+
+* `e14/e18/e22` — the third window moved to `43.9:3:right:M` at M = 0.14/0.18/0.22;
+* `n10/n16` — the m10t6 spec **plus** `41.5:43.3:left:M` on the hairpin ENTRY;
+* the products `eXXnYY`.
+
+**The one-sided EXIT margin alone makes the apex tighter, not safer.** Pushed
+right on its own, the optimiser pays for the exit by closing the apex radius:
+e14 0.546 m, e18 0.527, e22 0.488 — all under the 0.561 m steering lock, the
+opposite of what the corner needs. The LEFT margin on the entry alone
+(`n10`, `n16`) does nothing for the exit (right wall 0.64 vs 0.62). **Only the
+two together work**, and they work better than either sum suggests:
+
+| geometry | ideal ay 6.0 | hp3 apex \|k\| (R) | s17-22 \|k\| (R) | R wall s44.1/44.3/0.5/1.5 | s0-5 \|k\| |
+|---|---|---|---|---|---|
+| `exitm_m10t6` (shipping) | 11.157 | 1.740 (0.575) | 1.902 (0.53) | 0.92 / 0.78 / 0.64 / 0.62 | 0.199 |
+| `exitm2_e14` | 11.094 | 1.831 (0.546) | 1.633 (0.61) | 0.96 / 0.82 / 0.70 / 0.66 | 0.087 |
+| `exitm2_n10` | 11.187 | 1.905 (0.525) | 1.815 (0.55) | 1.04 / 0.84 / 0.68 / 0.64 | 0.078 |
+| `exitm2_e14n10` | 11.087 | 1.620 (0.617) | 1.541 (0.65) | 1.06 / 0.86 / 0.70 / 0.68 | 0.064 |
+| **`exitm2_e18n10`** | **11.076** | **1.569 (0.637)** | 1.622 (0.62) | **1.08 / 0.86 / 0.74 / 0.72** | 0.067 |
+| `exitm2_e22n10` | 11.091 | 1.617 (0.618) | 1.732 (0.58) | 0.96 / 0.84 / **0.76 / 0.76** | 0.072 |
+
+`e18n10` is the fastest ay-6.0 geometry of the whole exit-margin family, opens
+the last hairpin from R 0.575 to **0.637 m** (clear of the 0.561 lock, so
+`apex_deviation` 0.000 and effective clearance 0.400 against h3's 0.365),
+carries **+0.10 m** more right-wall margin exactly through the impact band, and
+straightens the exit onto the start line (|k| over s 0-5: 0.067 vs 0.199). It
+also incidentally relaxes the s 19 hairpin (1.902 -> 1.622). `pick_config
+finals_mesh --line <X> --no-write` on every `n10` product: min half-width
+0.520, body clearance 0.400, checkpoint margin **0.652 m** (h3 0.651), gate
+separation **0.792 m** at 19->20 (h3 0.776), occupancy 1, barrier 0.40.
+
+Speed rungs on each geometry (`tools/reprofile.py --ay 9.0 --ax 6.5
+--brake 4.6 --vmax 8.0`, then `scripts/partial_blend.py <ay90> <safe_ref>
+<out> "17.5:21.5:0,36.0:40.0:0,42.0:44.7:A,0.0:2.0:A"`; the `safe_ref` is the
+`hyb675b` speeds mapped onto the new geometry by FRACTIONAL s, which
+reproduces the shipped `_safe_ref` to 5e-05 m/s and `_h3`/`_h2` to 0.037 m/s):
+
+| line | ideal | apex v | v@44.4 | v@1.5 |
+|---|---|---|---|---|
+| `exitm_m10t6_h3` (shipping) | 10.481 | 1.58 | 2.50 | 4.93 |
+| `exitm_m10t6_h2` (collided live) | 10.267 | 2.05 | 2.82 | 5.19 |
+| `exitm2_e18n10_a0` | 10.495 | 1.57 | 2.37 | 4.93 |
+| `exitm2_e18n10_a05` | 10.358 | 1.98 | 2.55 | 5.13 |
+| `exitm2_e18n10_a075` | 10.300 | 2.19 | 2.64 | 5.23 |
+| `exitm2_e18n10_a10` | 10.248 | 2.40 | 2.73 | 5.33 |
+| `exitm2_e22n10_a10` | 10.244 | 2.35 | 2.82 | 5.34 |
+
+**The harness has NO signal at this corner and must not be read as one.**
+3 seeds x 12 laps at 0.058 and 0.098 (`--plant-realistic --pose-noise 0.03
+--pose-latency 0.044 --plant-brake-at-zero 4.6 --plant-dead 0.045`, shipping
+`-r` args + `pub_gate_corr 0.05`, no notch): **every collision in all 24 cells
+is at s 37.2-37.9**, none at the hairpin — including 2/36 on the shipping `h3`
+line that is 100/0 live at both periods, and 0/72 on `h2`, which is the line
+that actually crashed live. What the harness does give is the CAR's minimum
+clearance at s 42-44.8 (worst of three seeds, 0.058 / 0.098):
+
+| line | coll (all at s 37) | car clr s42-44.8 | car clr s0-3 | med lap 0.058 / 0.098 |
+|---|---|---|---|---|
+| `m10t6_h3` (live clean) | 2 / 0 | 0.050 / 0.125 | 0.150 / 0.125 | 12.310 / 12.750 |
+| `m10t6_h2` (live 9 coll) | 0 / 0 | **0.035 / 0.050** | 0.100 / 0.050 | 12.010 / 12.690 |
+| `e14_a10` | 0 / 0 | **0.025 / 0.056** | 0.150 / 0.100 | 12.180 / 12.550 |
+| `n10_a10` | 2 / 0 | 0.090 / 0.100 | 0.225 / 0.250 | 12.110 / 12.500 |
+| `e14n10_a10` | 2 / 0 | 0.075 / 0.075 | 0.150 / 0.125 | 12.280 / 12.560 |
+| `e18n10_a05` | 2 / 0 | 0.100 / 0.103 | 0.175 / 0.175 | 12.320 / 12.730 |
+| `e18n10_a075` | 4 / 0 | 0.075 / 0.125 | 0.175 / 0.175 | 12.280 / 12.630 |
+| **`e18n10_a10`** | 1 / 0 | **0.100 / 0.100** | 0.150 / 0.125 | 12.260 / 12.650 |
+| `e22n10_a10` | 0 / 0 | 0.075 / 0.100 | 0.150 / 0.150 | 12.220 / 12.620 |
+
+Read only the clearance column: at the FULL ay-9.0 apex speed the `e18n10`
+geometry keeps 0.100 m of body clearance through the hairpin where `h2` kept
+0.035, and `e14_a10` (exit margin without the later apex) keeps 0.025 — the
+same place `h2` failed live. That is the offline case for the pairing and the
+case against the exit margin on its own.
+
+Ladder to drive, `LOC_ARGS` on every arm, Gate C then Gate D, abort on the
+first collision at either period:
+
+```bash
+LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false' \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+  ./scripts/run_exp.sh exm2_e18n10a075_x100 exitm2_e18n10_a075_race \
+  -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+  -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+  -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+  -p pub_gate_corr:=0.05
+# rungs, in order: _a075 (ideal 10.300) -> _a10 (10.248) -> e22n10_a10 (10.244);
+# safety-only fallback _a0 (10.495, h3 speeds on the better geometry).
+```
+
 **Win-stack lines (Sep 19, Opus agent, branch `win-stack-lines`).** Ideal
 <= 9.3 s IS reachable on this corridor (min-half-width 0.42-0.46 geometries at
 ay 9.0: 8.90-9.27 s) but only by breaking the checkpoint/gate rules, cutting
