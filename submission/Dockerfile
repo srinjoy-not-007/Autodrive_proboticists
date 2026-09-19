@@ -106,7 +106,8 @@ ARG FINALS_SLUG=finals_mesh
 # Sep 19: the promoted finals line (hybrid ay 6.75 profile with the s 38 corner
 # shifted inward, see the entrypoint) and its predecessor.
 COPY data/racelines/finals_mesh_hyb675_race.csv \
-     data/racelines/finals_mesh_hyb675b_race.csv /home/data/racelines/
+     data/racelines/finals_mesh_hyb675b_race.csv \
+     data/racelines/finals_mesh_exitm_m10t6_h3_race.csv /home/data/racelines/
 COPY data/racelines/${FINALS_SLUG}_centerline.csv \
      data/racelines/${FINALS_SLUG}_race.csv \
      data/racelines/${FINALS_SLUG}_safe.csv \

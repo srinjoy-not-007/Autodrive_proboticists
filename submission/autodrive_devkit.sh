@@ -48,7 +48,14 @@ elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == finals_mesh ]]; then
     # margin 0.195 m).  This line: 100 Xvfb laps / 0 / 118.07 s with 0.566 m
     # margin there, display 32 / 0 / 111.59 s (frozen `finals_mesh_race.csv`:
     # 119.51 / 114.04 s).
-    LINE=/home/data/racelines/finals_mesh_hyb675b_race.csv
+    # Sep 19 07:30 IST: superseded by the OPTIMISER-BUILT exit-margin geometry
+    # (`optimize_raceline.py --side-margin`, +0.10 m of outside-wall margin on
+    # the three corner exits where every faster profile ran wide) carrying the
+    # ay 9.0 profile with the safe speeds kept at s 17.5-21.5, s 36-40 and the
+    # last hairpin (s 42-44.7 + 0-2).  100 Xvfb laps / 0 / 114.16 s and 100
+    # display laps / 0 / 109.21 s, against hyb675b's 117.11 / 111.38, with a
+    # larger minimum wall distance (0.35 m Xvfb) than hyb675b had.
+    LINE=/home/data/racelines/finals_mesh_exitm_m10t6_h3_race.csv
 elif [[ "$CONTROLLER" == mpc3 ]]; then
     LINE="/home/data/racelines/${SLUG}_race.csv"
 else
