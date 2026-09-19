@@ -50,7 +50,26 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**11:30 IST update — shipping = exit-margin h3 line + curvature-gated exit
+**13:15 IST, Sep 19 — PLATEAU. Image v5 is the entry unless something new
+appears.** v5 = `finals_mesh_exitm_m10t6_h3_race.csv` + `pub_gate_corr 0.05` +
+gated servo (`servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4`) + the
+audit fixes: **100 / 0 / 108.37 s display, 100 / 0 / 114.19 s Xvfb; as-shipped
+image tests 114.82 / 115.08 (Xvfb) and 108.47 s (display), 12 / 0 each.** Built
+locally as `bongracers/roboracer:iros2026-finals` (fallbacks `-v4`, `-v3`); the
+DockerHub push is the user's (needs their login). Everything is on GitHub main.
+Closed live since 11:30: servo gain/headroom ladder (gain 1.0 = 0.5; headroom
+0.6 +0.05 s/lap display, −0.08 Xvfb), exit speed-cut relaxation (1 event / 64
+laps for 0.03 s/lap), s 36-40 corner release (10/27 and 4/32 collisions on
+Xvfb), `servo_decel_look_m` (a wash across periods). The three slow zones are
+physically capped: last hairpin by the steering lock at both periods, s 36-40
+and the first hairpin by the organisers' sensor period. The line is at its
+ideal everywhere else on the display. No evidence-backed lever remains for
+105 s. GNOME idle/lock are still OFF for display runs — restore with
+`gsettings set org.gnome.desktop.session idle-delay 300; gsettings set
+org.gnome.desktop.screensaver lock-enabled true; gsettings set
+org.gnome.desktop.screensaver idle-activation-enabled true`.
+
+**11:30 IST update (superseded above) — shipping = exit-margin h3 line + curvature-gated exit
 servo** (`servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4`): **100 / 0 /
 108.37 s display, 100 / 0 / 114.19 s Xvfb**. Image v5 built from it (tests in
 flight); v4 (h3 line alone, 109.55 / 114.35-115.14) and v3 (hyb675b) are tagged

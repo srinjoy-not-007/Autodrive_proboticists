@@ -1,5 +1,19 @@
 # Finals runbook — the day the finals image drops
 
+**SEP 19 13:15 IST — CURRENT STATE, READ FIRST.** The entry is **image v5**:
+line `finals_mesh_exitm_m10t6_h3_race.csv` (entrypoint default for
+`finals_mesh`), `pub_gate_corr 0.05`, `servo_k_p 0.5 servo_head_max 0.3
+servo_head_kappa 0.4`, brake and barrier as before. Gates C and D were both run
+at **100 laps**: Xvfb 100 / 0 / 114.19 s, display 100 / 0 / 108.37 s; image
+tests 114.82 / 115.08 / 108.47 s. Wherever this file says `finals_mesh_race.csv`
+or 114.04 s it describes the Sep 18 config, superseded. To submit: `docker
+login`, then `docker push bongracers/roboracer:iros2026-finals` (local tags
+`-v4` and `-v3` are the fallbacks), or rebuild from main with the command in
+`docs/FINALS_TUNING.md` section 6 and re-run `scripts/test_submission_image.sh`
+three ways. HOST RULES learned Sep 19: offline tools pin BLAS themselves; never
+start a scored run with host load above 6; leave the mouse alone for the first
+30 s of a display run (the Connection click uses the real pointer).
+
 **Rewritten September 12, 2026; retopped September 18.** Ordered, copy-pasteable
 procedure for the finals track, which released on **September 16** as
 `2026-iros-compete` (the SRL 2026 IROS Track). The submission is due
