@@ -137,6 +137,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_schedbo_x32` (Xvfb) | hyb675b + `finals_mesh_sched_bo.json` | 119.327 + 50 s | 15 / **10** | — | **REJECTED**: the harness showed 192/0 and −0.49 s/lap. Fifth harness prediction to fail live (`race_20260919_010311`) |
 | `fin_exm10h3_x32` / `_disp` | **`finals_mesh_exitm_m10t6_h3_race.csv`**: exit-margin geometry, ay 9.0, safe speeds at s 17.5-21.5, 36-40, 42-44.7+0-2 (ideal 10.48) | Xvfb **114.990 s**; display **109.360 s**, both + 0 | 32 / 0 each (the display log's lap-32 event is the end-of-run stop: cmd and steering exactly 0 through the hairpin) | wall min anywhere: 0.35 m Xvfb, 0.25 m display | **BEST CLEAN CANDIDATE AT BOTH PERIODS** (shipping 117.11 / 111.38). In the 100-lap Xvfb gate (`race_20260919_010749`, `_011513`) |
 | `fin_exm10h3_x100` / `_disp100` | exit-margin h3 line, BOTH 100-lap gates | Xvfb **114.158 s**; display **109.210 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 07:30 IST)**: entrypoint `LINE` for finals_mesh, image v4 built (v3 kept as `:iros2026-finals-v3`). Shipping was 117.11 / 111.38 (`race_20260919_012258`, `_014335`) |
+| image v4 (Sep 19 08:00 IST) | built image with the exit-margin h3 line | Xvfb default **115.143**, Xvfb cmd **114.353**, display **109.548 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v3: 117.59 / 117.04 / 111.87, kept as `:iros2026-finals-v3`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
