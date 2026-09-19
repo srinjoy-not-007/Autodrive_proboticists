@@ -1222,6 +1222,19 @@ Harness correction: `servo_head_kappa` and `servo_decel_look_m` were never
 ported to the harness's MPC3Sim until Sep 19 23:00 — every earlier HARNESS cell
 that set them measured the ungated servo (all LIVE results stand).
 
+**Closed by agents, Sep 20 00:30 IST.** (a) Unused-width corners: three of four
+(s 22.2, s 40.9, s 27.6) cannot be given speed — longitudinal REACHABILITY between
+the capped zones, not wall width, binds them; only s 30-33 has room (−0.02 s/lap,
+below the surrogate's resolution). (b) Pose offset: the +0.08 m along-track lead
+is the rear-axle/IPS mismatch (map needs no rebuild; an output shift equals the
+lever-arm fix to 0.006 m), but removing it COSTS 0.15-0.20 s/lap — it is a free
+corner-entry lead; it only pays paired with a re-optimised hairpin margin. Opt-in
+`pose_along_offset_m` / `lidar_offset_override` merged, not driven. (c) Image v6's
+first as-shipped test: 1 collision at the s 26.7 exit (1 per ~200 laps on this
+family) — insurance variant `h3v86c` (s 24-28 at half raise, ideal 10.50) built.
+(d) Closed-loop PI throttle (`thr_pi_kp 3 ki 5 prefilter 0.15 slip 0.15`, opt-in,
+merged): surrogate −0.21 / −0.13 s/lap, live gates pending.
+
 **In flight at 22:30 IST:** v6 gates (v86 + period-gated PP); Opus agents on
 the unused-width corner speeds (`unused-width`), a MonacoF1-style closed-loop
 throttle (`cl-throttle`), and RL Phase 2 on a pessimistic plant (`rl-track`).
