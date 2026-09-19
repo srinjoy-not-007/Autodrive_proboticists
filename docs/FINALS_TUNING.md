@@ -1037,6 +1037,95 @@ publish; zero `sigma_hit`/`beam_temp`. The log's `speed` column is the LOGGER's
 left-wheel filter, not localization's estimator — the "enc_tau lags p2 −1.1 m/s"
 note was about the logger. Always pass `LOC_ARGS` on live arms (done tonight).
 
+**Pose reference (Sep 19, Opus agent, branch `pose-offset`). Offline only,
+nothing driven. The along-track fix is real and CHEAP; the lever-arm variant is
+CLOSED; the fix is a MARGIN lever that COSTS pace.** Two opt-in knobs in
+`localization.py`, both 0 by default and the shipped pose stream byte-identical
+(the audit's replay against `a7dad98` still matches sample for sample):
+`pose_along_offset_m` shifts the PUBLISHED pose back along its heading (0.08 =
+the rear axle) and `lidar_offset_override` sets the lever arm the FILTER casts
+from, which the map YAML otherwise wins outright.
+
+Measured by `tests/pose_offset_replay.py` — a closed replay of the real node
+against `finals_mesh` with the truth as the REAR AXLE and the scans cast from
+`truth + 0.2733`, 6 laps of each of the two clean 100-lap logs
+(`race_20260919_044701` 0.058 s, `race_20260919_050630` 0.093 s):
+
+| segment | along p50, base D/X | shift 0.08 | lever 0.2733 | lat p50 base | lat p50 shift / lever |
+|---|---|---|---|---|---|
+| straight s 2-15 | −0.472 / −0.446 | −0.552 / −0.526 | −0.469 / −0.525 | +0.000 / −0.001 | +0.000 / +0.001 |
+| hairpin s 18-21 | +0.144 / +0.133 | +0.064 / +0.053 | +0.067 / +0.052 | −0.017 / −0.017 | −0.017 / −0.016 |
+| apex s 24-25 | +0.099 / +0.101 | +0.019 / +0.021 | +0.019 / +0.023 | −0.016 / −0.018 | −0.017 / −0.018 |
+| corner s 36-40 | +0.165 / +0.168 | +0.085 / +0.088 | +0.086 / +0.091 | −0.006 / −0.006 | −0.005 / −0.004 |
+| **apex s 43.2-44.2** | +0.114 / +0.099 | +0.034 / +0.019 | +0.036 / +0.018 | **−0.149 / −0.086** | **−0.150 / −0.085** |
+
+* both knobs remove **exactly 0.080 m** of along-track lead in every observable
+  segment, at both periods, and agree to within 0.006 m — so the cheaper one
+  wins: the output shift needs no map rebuild, no `PIT_CREW_LIDAR_OFFSET`
+  change and no preflight change (preflight checks the map's stamp against
+  `LIDAR_OFFSET` and knows nothing about the override, which is itself a
+  reason not to use the override live);
+* **neither touches the corner-outward lateral bias.** A control that casts
+  from 0.1933 — i.e. perfect geometry — still shows −0.028 / −0.032 m at the
+  s 43 apex, so that bias is the likelihood field and the map discretisation,
+  not the lever arm. `lidar_offset_override` is therefore CLOSED as a fix for
+  it; it stays as the only way to change the lever arm without a map;
+* the straight is unobservable in `s` and its along-track error is a random
+  walk in both variants — do not read the straight row as a bias;
+* **the MAP is not the problem.** `finals_mesh` is `source: mesh`:
+  `tools/map_from_mesh.py` rasterises the Unity track mesh and uses
+  `LIDAR_FROM_POSE` for **nothing but the YAML stamp**. The grid is true
+  geometry and does not depend on the offset, so a "consistent rebuild" would
+  be a one-line stamp change with a byte-identical PGM, raced with
+  `LIDAR_OFFSET=0.2733`. No `finals_mesh_ra` was built and none is needed.
+
+What it would buy and cost, on the fitted surrogate
+(`finals_mesh_exitm_m10t6_h3v86_race`, shipping flags, 96 laps per arm, **0
+collisions in every arm**), modelled as `--pose-lon-bias` 0.100 → 0.020. Every
+cell is the pair of values from two disjoint seed triples (seeds 0-2 and 3-5),
+which is also the error bar:
+
+| frame | quantity | as shipped (0.100) | corrected (0.020) |
+|---|---|---|---|
+| 0.058 | lap median | 10.880, 10.880 | **11.080, 11.060** |
+| 0.058 | cut, hairpin s 19 | +0.243, +0.245 | +0.170, +0.175 |
+| 0.058 | cut, s 24 (tightest) | +0.232, +0.219 | +0.203, +0.204 |
+| 0.058 | cut, s 38 | +0.210, +0.214 | +0.204, +0.201 |
+| 0.058 | cut, hairpin s 43 | +0.269, +0.272 | +0.201, +0.196 |
+| 0.097 | lap median | 11.420, 11.420 | **11.580, 11.570** |
+| 0.097 | cut, hairpin s 19 | +0.161, +0.141 | +0.049, +0.054 |
+| 0.097 | cut, s 24 (tightest) | +0.193, +0.195 | +0.176, +0.173 |
+| 0.097 | cut, s 38 | +0.122, +0.122 | +0.125, +0.116 |
+| 0.097 | cut, hairpin s 43 | +0.191, +0.181 | +0.126, +0.124 |
+
+i.e. the correction removes **0.07-0.11 m of the cut at the two hairpins** and
+moves turn-in ~0.1 m later there, but costs **+0.15-0.20 s/lap** (1.5-2.0 s of
+race). The +0.10 m lead is currently acting as a free, speed-dependent
+corner-entry lead and apex-cutter. It does **not** help at s 24.4, the tightest
+point of the lap (−0.02 m), so it does not buy the margin that would let the
+line be trimmed THERE; at the two hairpins it does, and the honest use of it is
+paired with a line or profile that spends the recovered 0.07-0.11 m, not on its
+own. Surrogate rule applies: the clean sheets are worth nothing, the pace is
+real.
+
+Live arms, each owing Gate C then Gate D (shipping `LOC_ARGS` plus one knob):
+
+```bash
+# A -- the recommended variant: published pose becomes the rear axle
+LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false -p pose_along_offset_m:=0.08' \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+  ./scripts/run_exp.sh pose_shift08_x100 exitm_m10t6_h3v86_race \
+  -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+  -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+  -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+  -p pub_gate_corr:=0.05
+# B -- the filter's own lever arm (same LIDAR_OFFSET: preflight sees the map,
+#      not the override). Offline says it is A plus nothing; drive it only to
+#      confirm that live.
+LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false -p lidar_offset_override:=0.2733' \
+  ... same line and CTRL flags ...
+```
+
 **Where the gated h3 line still loses time (Sep 19 08:45, 100-lap logs at each
 period, 2 m segments).** It is AT its ideal almost everywhere at both periods.
 The one period-dependent loss is the FIRST hairpin: s 18-20 ideal 0.90 / display
