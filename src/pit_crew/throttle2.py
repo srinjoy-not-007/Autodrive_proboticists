@@ -340,7 +340,10 @@ class ServoThrottle:
         self.last_target = target
 
         u = max(0.0, min(self.u_max, target / self.g))
-        if self.boost_kp > 0.0 and v_meas is not None and a_t > 0.0:
+        # (`v_target` is already the braking-horizon CEILING, so being under
+        # it by more than `boost_dead` means accelerating is right; mpc3 passes
+        # a_target 0.0, so it must not be a condition here.)
+        if self.boost_kp > 0.0 and v_meas is not None:
             short = (v_t - v_pred) - self.boost_dead
             if short > 0.0:
                 b = self.boost_kp * short
