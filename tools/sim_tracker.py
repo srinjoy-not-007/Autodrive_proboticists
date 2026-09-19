@@ -640,6 +640,7 @@ class MPC3Sim:
                       servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
                       servo_head_max=0.5, servo_head_kappa=0.0,
                       servo_decel_look_m=0.0,
+                      servo_period_max=0.0,
                       servo_u_max=0.60, servo_v_floor=1.0,
                       servo_gain=24.6,
                       # --- OPT-IN real brake (see throttle2) ---------------
@@ -1011,6 +1012,9 @@ class MPC3Sim:
             jj = (int(i0) + np.arange(nlook + 1)) % self.path.n
             if float(np.min(self.path.a_prof[jj])) < -0.5:
                 head_scale = 0.0
+        spm = float(self.P.get('servo_period_max', 0.0) or 0.0)
+        if spm > 0.0:   # mirrors mpc3.MPC3Tracker.control
+            head_scale *= min(1.0, max(0.0, (spm - float(self.rate_ctl.est.period)) / 0.004))
         if self.residual is not None:
             obs = residual_policy_mod.observation(
                 self.path, i0, e_lat, e_yaw,

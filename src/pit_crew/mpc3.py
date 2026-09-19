@@ -362,6 +362,12 @@ class MPC3Tracker(Node):
             # car arrives hot at the slow sensor period (finals s 18-20: 1.11 ->
             # 1.24 s on Xvfb with the servo on).
             ('servo_decel_look_m', 0.0),
+            # OPT-IN (0 = always on): fade the servo out when the measured
+            # sensor period is past this value (linear ramp over 4 ms above it).
+            # The servo pays on the display (0.058 s) and nothing at 0.098 s
+            # (FINALS_TUNING: 'why the servo gains nothing at 0.098'); at the
+            # slow end of the lottery it pushes the car wide on corner exits.
+            ('servo_period_max', 0.0),
             # --- OPT-IN bounded residual policy ('' = off, byte-identical) ---
             # Path to a numpy .npz holding a small MLP (see
             # pit_crew/residual_policy.py).  It runs AFTER the solve and BEFORE
@@ -539,6 +545,7 @@ class MPC3Tracker(Node):
         ])
         v = {n.name: n.value for n in p}
         self.servo_decel_look_m = float(v['servo_decel_look_m'])
+        self.servo_period_max = float(v['servo_period_max'])
         self.P = v
 
         # OPT-IN residual policy.  `load` returns None for an empty parameter
@@ -1283,6 +1290,9 @@ class MPC3Tracker(Node):
             jj = (int(i0) + np.arange(nlook + 1)) % self.path.n
             if float(np.min(self.path.a_prof[jj])) < -0.5:
                 head_scale = 0.0
+        if self.servo_period_max > 0.0:
+            head_scale *= min(1.0, max(0.0, (self.servo_period_max
+                                              - float(self.rate_ctl.est.period)) / 0.004))
         v_cmd = self.gap_v_cmd(info['v_cmd'], now)
         # OPT-IN residual (None = off).  After the solve, before the publish
         # guard.  It may add at most +-0.03 rad and scale the speed setpoint
