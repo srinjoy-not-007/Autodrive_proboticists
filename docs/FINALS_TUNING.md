@@ -742,6 +742,74 @@ live Xvfb run has it 0.05 s FASTER, so on the f42k geometry the surrogate and
 the live run disagree by ~0.19 s/lap — use these numbers for the DIFFERENCES
 between releases on the same geometry, not for the geometry itself.
 
+### 4c.3 The sysid staircase: breakaway is a YAW-RATE limit — and it did not fix the surrogate
+
+`data/logs/sysid_20260919_131340.csv`, 61 cells in the `-explore` world, each
+held to steady state with the IMU's own yaw rate rather than a differentiated
+IPS path. `tools/sysid_breakaway.py` reproduces everything below.
+
+**The physics finding, which is solid and worth keeping whatever happens to
+the surrogate.** The car does not let go at a lateral-acceleration ceiling. It
+lets go at a constant **asked yaw rate**, `v · tan(δ) / L`:
+
+* over the 51 usable cells the attached ones reach at most **2.627 rad/s** and
+  the ones that let go by yaw rate start at **2.793** — a clean separation
+  with nothing in between;
+* a second, independent ay ceiling near **10.5 m/s²** binds only above 5 m/s,
+  where the yaw rate is small;
+* together, `r_ask > 2.70 or ay_ask > 10.5` classifies **50 of 51 cells**
+  (16/16 broken caught, 0 missed, 1 marginal);
+* past breakaway the car holds **`2.30 · √v` m/s²** whatever the steering
+  (±0.146 over all 16 broken cells) — 3.1 m/s² at 2 m/s rising to 5.2 at 5.6.
+
+This also explains why the peak ay looked speed-dependent (4.60 at 2 m/s,
+10.28 at 5): at low speed a given curvature needs a big steering angle, so the
+yaw-rate ceiling bites long before the grip ceiling does.
+
+**Why it is `--plant-breakaway`, opt-in, and NOT in `--plant-fit`.** The
+staircase HOLDS each cell for about a second. On track the excursions past the
+threshold last **0.19-0.29 s (p50)**, and over those the live car does not let
+go at all. Measured on the display log:
+
+| asked yaw rate | samples | delivery ratio |
+|---|---|---|
+| > 2.40 rad/s | 9.4 % | 0.954 |
+| > 2.71 (the staircase's own threshold) | 6.3 % | **0.952** |
+| > 3.00 | 3.2 % | 0.949 |
+| > 3.50 | 0.13 % | **0.151** |
+
+So 2.71 is the steady-state threshold and ~3.5 is the threshold for a
+track-duration excursion; the difference is an onset time the staircase cannot
+see. Reconciled that way (`R_CRIT` 3.50, `BREAK_TAU_ON` 0.12 s, band 0.15) the
+law is the best-behaved setting in a 32-cell sweep of (threshold × onset ×
+band) — and it still makes the surrogate **worse at both of its jobs**:
+
+| | shipping pace vs live, 0.058 / 0.097 | verdict table |
+|---|---|---|
+| without the law (shipping plant) | **+0.065 / −0.063 s/lap**, 0 coll / 120 | 8 / 15, 0 false collide |
+| with it, best setting | +0.375 / +0.102 s/lap, 0 coll / 120 | **8 / 15, the same six false cleans** |
+| with it, at the staircase's own 2.71 | 73 collisions in 120 display laps | — |
+
+**The six false-clean arms did not move.** `_h7`, `_h8`, `h3c` + servo at
+0.097, the ungated servo at 0.058, the weave notch and the BO schedule are all
+still clean in 200 surrogate laps. And the s 36-40 wide excursion the law was
+supposed to produce reached −0.086 m against the live −0.345.
+
+Where the lost time goes is diagnostic: the law fires at s 0-4 and s 14-16,
+which the live histogram says are *not* the high-demand zones (live's are
+s 18-20). The surrogate asks slightly more yaw rate than the live car at the
+last hairpin exit, and a hard threshold turns that small pre-existing
+difference into lap time. **Adding true physics to a model made its aggregate
+fit worse, because the threshold amplifies every residual error rather than
+correcting it.** That is worth remembering before the next "more realism will
+fix it" change.
+
+So: the constants are measured and committed, the tool reproduces them, the
+law is one flag away — and the default plant is unchanged, because on the two
+things that can be checked against live results it is better without it.
+`--plant-breakaway 1 --plant-r-crit 2.71` reproduces the staircase's own
+number for anyone who wants to see it.
+
 ### How to use it, and what it is worth
 
 It is a **one-sided screen**: a surrogate collision is evidence, a surrogate

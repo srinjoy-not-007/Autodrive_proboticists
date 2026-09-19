@@ -181,6 +181,56 @@ GRIP_AY0 = 7.5              # m/s2 of asked ay above which ax starts to cost
 GRIP_CLIFF = 9.6            # m/s2 of ASKED ay where breakaway starts
 GRIP_CLIFF_W = 0.8          # m/s2 over which it completes
 GRIP_POST = 0.70            # delivery ratio past it
+#
+# SUPERSEDED by the sysid staircase (`--plant-breakaway`, below), which
+# measured the thing directly instead of inferring it from 40 transient
+# samples.  `grip_cliff` is kept only so the older cells reproduce.
+
+# --- BREAKAWAY, from the sysid staircase (data/logs/sysid_20260919_131340.csv)
+# 61 cells, 8 speeds x up to 10 steering steps, held to steady state, with the
+# IMU's own yaw rate rather than a differentiated IPS path.  The racing logs
+# could not identify this: the controller never asks for what it has never
+# been given.
+#
+# What the staircase says, and it is not an `ay` cliff at all: the car lets go
+# at a **constant ASKED YAW RATE**, `v * tan(delta) / L`.  Over all 51 usable
+# cells the attached ones reach at most **2.627 rad/s** and the ones that let
+# go by yaw rate start at **2.793** -- a clean separation with nothing in
+# between.  A second, independent ceiling is a genuine lateral-acceleration
+# limit at ~10.5 m/s2, which only binds above 5 m/s where the yaw rate is
+# small.  Together, `r_ask > 2.71 or ay_ask > BREAK_AY_MAX` classifies **50 of 51
+# cells correctly (16/16 broken caught, 0 missed, 1 marginal)**.
+#
+# This is why the surrogate could not reproduce the rare wide excursions.  The
+# shipping line's MEDIAN lap at s 38 runs 0.324 rad at 2.18 m/s -> 2.26 rad/s,
+# attached; the laps that ran 0.32 m wide were at 0.43 rad and 2.35 m/s ->
+# **3.35 rad/s**, past the threshold.  The mechanism is a yaw-rate limit the
+# old plant had no term for.
+#
+# THE ONE RECONCILIATION THIS NEEDS, and it is not optional.  The staircase
+# HOLDS each cell to steady state (~1 s).  On track the excursions above the
+# steady-state threshold last 0.19-0.29 s (p50, both shipping logs), and over
+# those the live car does NOT let go: measured on the display log, samples
+# with an asked yaw rate above 2.71 still deliver a ratio of **0.952**, above
+# 3.00 still **0.949**, and only above 3.50 does it collapse to **0.151**.
+# So 2.71 is the steady-state threshold and ~3.5 is the threshold for a
+# track-duration excursion; the difference is the onset time the staircase
+# cannot see.  `R_CRIT` is therefore the LIVE-RECONCILED value, paired with
+# `BREAK_TAU_ON`; `--plant-r-crit 2.71` reproduces the staircase's own number.
+R_CRIT = 3.50               # rad/s of ASKED yaw rate; breakaway
+# NB: deliberately NOT called AY_MAX -- that name is the historical plant's
+# 6.5 m/s2 grip ceiling and shadowing it silently rewrites every pre-Sep-19
+# number in docs/STATUS.md.
+BREAK_AY_MAX = 10.5         # m/s2 of asked ay; the second ceiling
+# Past breakaway the car holds `C_POST * sqrt(v)` m/s2 whatever the steering
+# (equivalently a yaw rate of `C_POST / sqrt(v)`): measured 2.302 +- 0.146
+# across all 16 broken cells, 3.1 m/s2 at 2 m/s rising to 5.2 at 5.6.
+C_POST = 2.30
+BREAK_BAND = 0.15           # fraction of overshoot over which it completes
+# NOT identifiable from steady-state holds -- the staircase settles before it
+# measures.  Calibrated against the live record instead: see `--plant-break-on`.
+BREAK_TAU_ON = 0.12         # s, slip builds
+BREAK_TAU_OFF = 0.30        # s, and washes out more slowly
 # STEERING.  publish -> rack effective lag measured at 0.056 + 0.50 * period
 # (tools/steer_residual_id.py, reproducible to 0.001 s).  In this harness the
 # command is latched at a frame boundary, which already costs 0.5 * period on
@@ -268,7 +318,10 @@ class Plant:
                  grip_lo=GRIP_LO, grip_hi=GRIP_HI, lat_tau=0.0,
                  grip_c=0.0, grip_ay0=GRIP_AY0,
                  grip_cliff=0.0, grip_cliff_w=GRIP_CLIFF_W,
-                 grip_post=GRIP_POST):
+                 grip_post=GRIP_POST,
+                 breakaway=0.0, r_crit=R_CRIT, ay_max_break=BREAK_AY_MAX,
+                 c_post=C_POST, break_band=BREAK_BAND,
+                 break_tau_on=BREAK_TAU_ON, break_tau_off=BREAK_TAU_OFF):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
         self.servo_k = float(servo_k)
@@ -310,6 +363,16 @@ class Plant:
         self.grip_cliff = float(grip_cliff)
         self.grip_cliff_w = float(grip_cliff_w)
         self.grip_post = float(grip_post)
+        # --- sysid breakaway (0 = off, the historical plant) ---------------
+        self.breakaway = float(breakaway)
+        self.r_crit = float(r_crit)
+        self.ay_max_break = float(ay_max_break)
+        self.c_post = float(c_post)
+        self.break_band = float(break_band)
+        self.break_tau_on = float(break_tau_on)
+        self.break_tau_off = float(break_tau_off)
+        self.slip = 0.0                  # 0 = attached, 1 = fully broken
+        self.slip_m = 0.0                # metres driven while broken
         self.accel = 0.0                 # last longitudinal acceleration, m/s2
 
     def accept_frame(self, t, steer_cmd, throttle):
@@ -376,6 +439,30 @@ class Plant:
                         / max(self.grip_cliff_w, 1e-6))
                 r = r * (1.0 - f) + self.grip_post * f
             k_ss = k_ask * r
+            if self.breakaway > 0.0:
+                # The sysid law.  Demand is whichever ceiling is closer: the
+                # asked YAW RATE (which binds everywhere the car actually
+                # races) or the asked lateral acceleration (which binds only
+                # above ~5 m/s).  `slip` is a state, not a function of the
+                # instant: a tyre that has let go does not re-attach the
+                # moment the demand drops, and how long it stays gone is what
+                # turns a threshold crossing into 0.3 m of lateral error.
+                r_ask = abs(self.v) * abs(k_ask)
+                demand = max(r_ask / max(self.r_crit, 1e-6),
+                             ay_ask / max(self.ay_max_break, 1e-6))
+                tgt = max(0.0, min(1.0, (demand - 1.0)
+                                   / max(self.break_band, 1e-6)))
+                tau = (self.break_tau_on if tgt > self.slip
+                       else self.break_tau_off)
+                self.slip += (1.0 - math.exp(-DT / max(tau, 1e-6))) * (
+                    tgt - self.slip)
+                if self.slip > 1e-4:
+                    ay_post = self.c_post * math.sqrt(max(abs(self.v), 1e-3))
+                    k_post = math.copysign(
+                        ay_post / max(self.v * self.v, 1e-3), k_ask)
+                    if abs(k_post) < abs(k_ss):
+                        k_ss = (1.0 - self.slip) * k_ss + self.slip * k_post
+                    self.slip_m += self.slip * abs(self.v) * DT
         else:
             ay = self.v * self.v * abs(k_ask) * GRIP_RATIO
             knee = AY_KNEE * self.ay_max
@@ -1955,6 +2042,23 @@ def main():
                          '0 = off.  --plant-fit sets the measured 8.8.')
     ap.add_argument('--plant-grip-cliff-w', type=float, default=GRIP_CLIFF_W)
     ap.add_argument('--plant-grip-post', type=float, default=GRIP_POST)
+    ap.add_argument('--plant-breakaway', type=float, default=0.0,
+                    help='1 = the sysid breakaway law (asked yaw rate > '
+                         'R_CRIT or asked ay > AY_MAX, then C_POST*sqrt(v)); '
+                         '0 = off.  --plant-fit turns it on.')
+    ap.add_argument('--plant-r-crit', type=float, default=R_CRIT,
+                    help='asked yaw rate (rad/s) at breakaway; the staircase '
+                         'brackets it to 2.627-2.793')
+    ap.add_argument('--plant-ay-max-break', type=float, default=BREAK_AY_MAX)
+    ap.add_argument('--plant-c-post', type=float, default=C_POST,
+                    help='post-breakaway ay = this * sqrt(v); measured 2.30')
+    ap.add_argument('--plant-break-band', type=float, default=BREAK_BAND)
+    ap.add_argument('--plant-break-on', type=float, default=BREAK_TAU_ON,
+                    help='s, how fast the slip builds past the threshold '
+                         '(NOT in the steady-state staircase; calibrated on '
+                         'the live record)')
+    ap.add_argument('--plant-break-off', type=float, default=BREAK_TAU_OFF,
+                    help='s, how fast it washes out again')
     ap.add_argument('--plant-lat-tau', type=float, default=0.0,
                     help='lateral first-order pole, s (identified 0.043)')
     ap.add_argument('--plot', default='')
@@ -1995,6 +2099,14 @@ def main():
             args.plant_lat_law = 'fit'
         if args.plant_lat_tau <= 0.0:
             args.plant_lat_tau = LAT_TAU
+        # The sysid breakaway law is NOT in the preset.  It is better physics
+        # than the `grip_cliff` it would replace -- it is measured directly
+        # and classifies 50 of 51 staircase cells -- and turning it on makes
+        # the surrogate WORSE at both of the jobs the surrogate exists for:
+        # the shipping config's pace goes from +0.065 / -0.063 s/lap against
+        # live to +0.375 / +0.102, and the verdict table does not move (8/15,
+        # the same six false cleans).  See docs/FINALS_TUNING.md 4c.3.
+        # `--plant-breakaway 1` turns it on.
         if args.plant_grip_cliff <= 0.0:
             args.plant_grip_cliff = GRIP_CLIFF
         if args.plant_dead is None:
@@ -2047,7 +2159,7 @@ def main():
     if (args.plant_actuator != 'slew' or args.plant_steer_rate is not None
             or args.plant_dead is not None or args.plant_lat_law != 'knee'
             or args.plant_lat_tau > 0.0 or args.plant_grip_c > 0.0
-            or args.plant_grip_cliff > 0.0):
+            or args.plant_grip_cliff > 0.0 or args.plant_breakaway > 0.0):
         act_cfg = dict(actuator=args.plant_actuator,
                        steer_rate=args.plant_steer_rate,
                        tau=args.plant_tau, dead=args.plant_dead,
@@ -2058,6 +2170,13 @@ def main():
                        grip_cliff=args.plant_grip_cliff,
                        grip_cliff_w=args.plant_grip_cliff_w,
                        grip_post=args.plant_grip_post,
+                       breakaway=args.plant_breakaway,
+                       r_crit=args.plant_r_crit,
+                       ay_max_break=args.plant_ay_max_break,
+                       c_post=args.plant_c_post,
+                       break_band=args.plant_break_band,
+                       break_tau_on=args.plant_break_on,
+                       break_tau_off=args.plant_break_off,
                        lat_tau=args.plant_lat_tau)
 
     drop_cfg = (dict(every=args.drop_every, n=args.drop_n,
