@@ -118,6 +118,10 @@ def sample_domain(rng, frame=None):
         rack=float(rng.uniform(0.7, 1.3)),
         grip_pess=float(rng.uniform(0.10, 0.15)),
         grip_b=float(ST.GRIP_B * rng.uniform(0.9, 1.15)),
+        # The breakaway point is the least certain constant in the plant: the
+        # racing logs fit 8.8 and the skidpad says 9.9.  Randomise across both.
+        grip_cliff=float(rng.uniform(8.8, 9.9)),
+        grip_post=float(rng.uniform(0.48, 0.72)),
         seed=int(rng.integers(0, 2 ** 31 - 1)),
     )
 
@@ -157,6 +161,9 @@ def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
                    dead=ST.FIT_DEAD * dom['rack'], tick_frac=1.0,
                    lat_law='fit', grip_a=ST.GRIP_A, grip_b=dom['grip_b'],
                    grip_c=dom['grip_pess'] / 2.0, grip_ay0=7.0,
+                   grip_cliff=dom.get('grip_cliff', ST.GRIP_CLIFF),
+                   grip_cliff_w=ST.GRIP_CLIFF_W,
+                   grip_post=dom.get('grip_post', ST.GRIP_POST),
                    lat_tau=ST.LAT_TAU)
     out = ST.run(
         tr, path, laps=laps, dist=track.dist, meta=track.meta,
