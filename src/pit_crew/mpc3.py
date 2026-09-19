@@ -371,6 +371,22 @@ class MPC3Tracker(Node):
             ('brake_a_min', 1.5),
             ('brake_dv', 0.3),
             ('brake_a_full', 4.6),
+            # --- OPT-IN closed-loop PI throttle (all 0 = off, byte-identical).
+            # A proportional+integral correction on (setpoint - encoder speed),
+            # added as extra SPEED SETPOINT on top of the feedforward, to CLOSE
+            # the ~0.5 m/s under-plan deficit accelerating out of slow corners.
+            # Structure follows MonacoF1's public stack (PI on speed error,
+            # integrator clamped to a traction-slip bound, on a 0.0408/(m/s)
+            # feedforward), translated into ServoThrottle's servo-inverting
+            # frame.  The prefilter keeps a step out of the loop, the slip clamp
+            # bounds the integral, and the positive correction is faded by
+            # `servo_head_kappa` (shared with the over-command) so exits do not
+            # run wide.  Output stays in [0, u_max] (never reverse) and the
+            # exact-0.0 brake is applied downstream -- see throttle2.
+            ('thr_pi_kp', 0.0),
+            ('thr_pi_ki', 0.0),
+            ('thr_pi_prefilter_tau', 0.0),
+            ('thr_pi_slip_clamp', 0.0),
             ('v_meas_min', 0.2),          # below this the encoder says nothing
             ('v_start', 0.5),             # plan speed before the encoder ever
                                           # reports -- see start_speed()
@@ -613,7 +629,10 @@ class MPC3Tracker(Node):
             lead_max=0.0, ay_limit=v['ay_budget'], v_floor=v['servo_v_floor'],
             u_max=v['servo_u_max'], servo_gain=v['servo_gain'],
             brake_mode=str(v['brake_mode']), brake_a_min=v['brake_a_min'],
-            brake_dv=v['brake_dv'], brake_a_full=v['brake_a_full'])
+            brake_dv=v['brake_dv'], brake_a_full=v['brake_a_full'],
+            pi_kp=v['thr_pi_kp'], pi_ki=v['thr_pi_ki'],
+            pi_prefilter_tau=v['thr_pi_prefilter_tau'],
+            pi_slip_clamp=v['thr_pi_slip_clamp'])
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         # Measures the pose period always; only ACTS on it when rate_adaptive.
         self.rate_ctl = RateControl(
