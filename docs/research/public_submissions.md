@@ -77,11 +77,18 @@ them three collisions and thirteen places.
 ## 2. Public images and repos found
 
 Ranked scan output: `data/research/hub_scan_20260919.json` (raw) and
-`docs/research/public_submissions_hub_table.md` (auto-generated table).
-Of 147 DockerHub repos that matched a competition signal, **53 carry a
-competition-grammar tag, 17 carry an `iros` tag, and 19 were pushed inside one of
-the two submission windows** (Sep 5-13 qualification, Sep 15-20 finals). Eighteen
-images were pulled and extracted for this note; all were deleted afterwards.
+`docs/research/public_submissions_hub_table.md` (auto-generated table). The sweep
+saw **1684 DockerHub repos**, tag-listed **258** of them and ranked **141** above
+the score floor. Of the 147 in the first pass that matched a competition signal,
+**53 carry a competition-grammar tag, 17 carry an `iros` tag, and 19 were pushed
+inside one of the two submission windows** (Sep 5-13 qualification, Sep 15-20
+finals). Eighteen images were pulled and extracted for this note; all were
+deleted afterwards.
+
+*Scoring caveat: the heuristic is deliberately generous, so `mitbmw/autodrive-backend`
+and `norlabulaval/dockerized-norlab-control-deep-rl-f1tenth` rank high on name
+and push date while being unrelated. Read the table as a shortlist to eyeball,
+not a verdict.*
 
 ### Extracted and read (finals-window pushes first)
 
