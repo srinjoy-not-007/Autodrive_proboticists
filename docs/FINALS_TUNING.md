@@ -148,6 +148,8 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_h3_servok_disp100` / `_x100` | h3 + servo + **`servo_head_kappa 0.4`** | display **108.373 s**; Xvfb **114.192 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 11:30 IST)**: both 100-lap gates passed; +0.8 s on the display, level on Xvfb (h3: 109.21 / 114.16). Image v5 built, v4 kept as `:iros2026-finals-v4` (`race_20260919_044701`, `_050630`) |
 | image v5 (Sep 19 12:00 IST) | built image: exit-margin h3 line + pub_gate + curvature-gated servo + audit fixes | Xvfb default **114.816**, Xvfb cmd **115.075**, display **108.466 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v4 `:iros2026-finals-v4` 115.14 / 114.35 / 109.55; v3 `-v3` 117.59 / 117.04 / 111.87) |
 | gated-servo ladder, display 32 laps each (`servo_head_kappa 0.4`) | `k_p 1.0 / head 0.3`; `k_p 1.0 / head 0.6`; `k_p 1.0 / head 1.0`; `k_p 0.5 / head 0.3 + e_cut_accel_scale 0 kappa 0.3` | 107.659 (median 10.814); 107.973 (10.768); 107.791 (10.759); 108.171 (10.817) | 32 / 0; 32 / 0; 32 / 0; 32 / **2** | the e_cut hits: one event, lap 30 at s 26.0 + rebound, clean sensor timing | gain 1.0 = gain 0.5 (the cap binds, not the gain); headroom plateaus at ~10.76 by 0.6 (shipping 0.3: 10.817). **Carry `k_p 1.0 head 0.6`** (-0.05 s/lap) to Xvfb. The exit speed-cut relaxation hits the s 26 exit again and gains nothing; one re-run queued at the user's request (`race_20260919_054126`, `_055820`, `_060530`, `_055051`) |
+| `fin_sv_hd06_x32` (Xvfb) / `fin_sv_ecut2_disp` | gated servo `k_p 1.0 head 0.6`; exit-cut arm re-run on display | 115.903 + 0 (median 11.548) ; 108.005 + 0 (median 10.789) | 32 / 0 each | — | head 0.6 gains 0.05 s/lap on the display and LOSES 0.08 at 0.098 (shipping 0.3: 11.473) — shipping value stays. The exit-cut arm over 64 display laps: one collision event for 0.03 s/lap — not carried (`race_20260919_061256`, `_062036`) |
+| `fin_h7_x32` / `fin_h8_x32` (Xvfb) | s 36-40 corner released to full / half ay 9 on the exit-margin geometry (ideal 10.26 / 10.36), shipping servo | 115.248 + 30 ; 113.557 + 0 scored | 27 / **10** ; 32 / **4** | — | **REJECTED**: that corner needs its safe speed at the organisers' period even with 0.6 m of exit wall (`race_20260919_062806`, `_063445`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -1038,6 +1040,14 @@ The one period-dependent loss is the FIRST hairpin: s 18-20 ideal 0.90 / display
 readout lead is 4.0 sensor periods on the display and 2.8 on Xvfb. The Sep 19
 lead-law test equalised them DOWN to 2.8 (slower at both); `lead_tk 4.0`
 equalises UP and leaves the display unchanged by construction — in flight.
+
+**Why the servo gains nothing at 0.098 s (Sep 19 13:00, 100-lap logs).** With
+the servo on, the first hairpin s 18-20 goes 1.11 -> **1.24 s** on Xvfb (ideal
+0.90): the approach s 16-18 is 0.04 s quicker and the corner 0.13 s slower. The
+servo pushes the car up to plan speed right INTO the braking zone; at the slow
+period it arrives hot, runs wide, and the speed cut slows the apex. Opt-in fix:
+`servo_decel_look_m` — no over-command when the profile brakes (a_prof < −0.5)
+within the next N metres. In flight at 1.5 and 3.0 m.
 
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
