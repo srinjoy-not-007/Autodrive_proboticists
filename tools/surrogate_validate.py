@@ -114,7 +114,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--laps', type=int, default=100)
     ap.add_argument('--seeds', type=int, default=3)
-    ap.add_argument('--workers', type=int, default=12)
+    # HOST RULE (Sep 19): more than ~6 single-threaded workers on this box
+    # drags the simulator's Xvfb sensor period from 0.092-0.098 s out to
+    # 0.101-0.104, which pushes a scored live run outside the organisers'
+    # band.  Six on cores 22-27 is the ceiling while a live run can happen.
+    ap.add_argument('--workers', type=int, default=6)
     ap.add_argument('--only', default='')
     ap.add_argument('--plant', action='append', default=[],
                     help='extra sim_tracker plant flag, passed to every cell')

@@ -50,6 +50,7 @@ from pit_crew import vehicle
 from pit_crew.mpc3_core import (ILC, MPC3, RATE_NOMINAL, RATE_TERMS, Actuator,
                                 GapRider, PoseFilter, RateControl, RefPath,
                                 corridor_clearance, gap_feedforward, wrap)
+from pit_crew.residual_policy import observation as residual_observation
 from pit_crew.throttle2 import ServoThrottle
 
 
@@ -353,6 +354,15 @@ class MPC3Tracker(Node):
             # car arrives hot at the slow sensor period (finals s 18-20: 1.11 ->
             # 1.24 s on Xvfb with the servo on).
             ('servo_decel_look_m', 0.0),
+            # --- OPT-IN bounded residual policy ('' = off, byte-identical) ---
+            # Path to a numpy .npz holding a small MLP (see
+            # pit_crew/residual_policy.py).  It runs AFTER the solve and BEFORE
+            # the publish guard, and can only add +-0.03 rad of steering and
+            # scale the speed setpoint by 0.95-1.05 -- and not above 1.0 in a
+            # corner or a declared slow zone.  Trained offline against the
+            # log-fitted surrogate (tools/rl_train.py); it is not in any
+            # shipping config and needs the usual two live gates.
+            ('residual_policy', ''),
             ('servo_u_max', 0.60),
             ('servo_v_floor', 1.0),
             # OPT-IN real brake; 'none' is the shipping law byte for byte.
@@ -506,6 +516,20 @@ class MPC3Tracker(Node):
         v = {n.name: n.value for n in p}
         self.servo_decel_look_m = float(v['servo_decel_look_m'])
         self.P = v
+
+        # OPT-IN residual policy.  `load` returns None for an empty parameter
+        # and RAISES for a path that does not exist: a policy that was asked
+        # for and silently did not run would be the worst outcome of the two.
+        from pit_crew import residual_policy as _rp
+        self.residual = _rp.load(v['residual_policy'])
+        if self.residual is not None:
+            self.get_logger().info(
+                f"residual policy {v['residual_policy']}: "
+                f'{self.residual.n_obs} inputs, '
+                f'steer +-{self.residual.steer_max:.3f} rad, '
+                f'v x[{self.residual.v_lo:.2f},{self.residual.v_hi:.2f}], '
+                f'no speed-up in {len(self.residual.zones)} zones or above '
+                f'|kappa| {self.residual.kappa_gate:.2f}')
 
         self.path = RefPath(v['raceline_csv'], kappa_span_m=v['kappa_span_m'],
                             speed_scale=float(v['speed_scale']))
@@ -1229,7 +1253,25 @@ class MPC3Tracker(Node):
             jj = (int(i0) + np.arange(nlook + 1)) % self.path.n
             if float(np.min(self.path.a_prof[jj])) < -0.5:
                 head_scale = 0.0
-        th = float(self.thr.command(self.gap_v_cmd(info['v_cmd'], now),
+        v_cmd = self.gap_v_cmd(info['v_cmd'], now)
+        # OPT-IN residual (None = off).  After the solve, before the publish
+        # guard.  It may add at most +-0.03 rad and scale the speed setpoint
+        # by 0.95-1.05 (never above 1.0 in a corner or a slow zone); the guard
+        # in `publish` still has the last word, and the cap that the tyres can
+        # pay for at this speed is re-applied so the residual cannot buy
+        # steering the grip budget has already refused.
+        if self.residual is not None:
+            obs = residual_observation(
+                self.path, i0, e_lat, e_yaw,
+                v_meas if v_meas is not None else v0,
+                float(self.rate_ctl.est.period),
+                self.residual.preview_kappa_m, self.residual.preview_wall_m)
+            d_steer, v_scale = self.residual.act(
+                obs, s=float(self.path.s[i0]),
+                kappa=float(self.path.kappa[i0]))
+            cmd = float(np.clip(cmd + d_steer, -cap, cap))
+            v_cmd = float(v_cmd) * v_scale
+        th = float(self.thr.command(v_cmd,
                                     v_meas, 0.0, now=now,
                                     kappa=float(self.path.kappa[i0]),
                                     head_scale=head_scale))

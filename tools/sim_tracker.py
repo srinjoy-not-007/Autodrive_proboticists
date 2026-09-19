@@ -71,6 +71,7 @@ from pit_crew.mpc2_core import (Actuator, CurvatureBias, MPC2,   # noqa: E402
 from pit_crew.mpc3_core import (ILC, MPC3, GapRider, RateControl,  # noqa: E402
                                 RATE_NOMINAL, RATE_TERMS,
                                 corridor_clearance, gap_feedforward)
+from pit_crew import residual_policy as residual_policy_mod      # noqa: E402
 from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
 
 DT = 0.001                  # physics step, s
@@ -546,6 +547,8 @@ class MPC3Sim:
                       gap_decel=3.0, gap_v_min=1.0,
                       gap_reacq_blend=0.0, gap_reacq_gate_m=0.0,
                       gap_reacq_n=2, gap_reacq_gap_s=0.0,
+                      # --- OPT-IN bounded residual policy ('' = off) -------
+                      residual_policy='',
                       # --- OPT-IN: publish timing (see `publish_time`) ------
                       # The node records its own command at `now()`, i.e.
                       # AFTER the solve, so the actuator model's idea of when
@@ -599,6 +602,9 @@ class MPC3Sim:
             brake_a_min=float(self.P['brake_a_min']),
             brake_dv=float(self.P['brake_dv']),
             brake_a_full=float(self.P['brake_a_full']))
+        # OPT-IN residual policy, the same object the node loads.  Mirrors
+        # mpc3.MPC3Tracker: '' = off and the commands are byte-identical.
+        self.residual = residual_policy_mod.load(self.P['residual_policy'])
         self.v_plan0 = 0.0
         self._enc_seen = False
         self._pose_prev = None           # (stamp, x, y) of the last pose
@@ -868,7 +874,19 @@ class MPC3Sim:
                              corridor_clearance(self.path, i0, e_lat))
         self.v_plan0 = float(self.path.v_prof[i0])
         self.v_cmd = float(info['v_cmd'])
-        th = float(self.thr.command(self.gap_v_cmd(self.v_cmd, t), v_meas,
+        v_cmd = self.gap_v_cmd(self.v_cmd, t)
+        if self.residual is not None:
+            obs = residual_policy_mod.observation(
+                self.path, i0, e_lat, e_yaw,
+                v_meas if v_meas is not None else v0,
+                float(self.rate_ctl.est.period),
+                self.residual.preview_kappa_m, self.residual.preview_wall_m)
+            d_steer, v_scale = self.residual.act(
+                obs, s=float(self.path.s[i0]),
+                kappa=float(self.path.kappa[i0]))
+            cmd = float(np.clip(cmd + d_steer, -cap, cap))
+            v_cmd = float(v_cmd) * v_scale
+        th = float(self.thr.command(v_cmd, v_meas,
                                     0.0, now=t,
                                     kappa=float(self.path.kappa[i0])))
         t_rec = t + float(self.P['pub_lag'])
