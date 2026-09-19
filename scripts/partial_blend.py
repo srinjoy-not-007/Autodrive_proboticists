@@ -6,7 +6,8 @@ import sys
 import numpy as np
 sys.path.insert(0, 'tools')
 from optimize_raceline import limit_long_accel                   # noqa: E402
-AX, BRAKE = 6.5, 4.6
+import os
+AX, BRAKE = 6.5, float(os.environ.get('PB_BRAKE', 4.6))   # PB_BRAKE: brake limit for the reachability pass
 cand, ref, out = sys.argv[1:4]
 c = np.loadtxt(cand, delimiter=','); r = np.loadtxt(ref, delimiter=',')
 s = c[:, 0]; v = c[:, 5].copy(); L = s[-1] + (s[1] - s[0])
