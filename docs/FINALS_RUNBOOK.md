@@ -1,6 +1,6 @@
 # Finals runbook — the day the finals image drops
 
-**SEP 20 05:15 IST — CURRENT STATE, READ FIRST.** The entry is **image v9**
+**SEP 20 01:35 IST — CURRENT STATE, READ FIRST.** The entry is **image v9**
 (`bongracers/roboracer:iros2026-finals`): line `finals_mesh_apex_f42k_race.csv`
 (entrypoint default for `finals_mesh`), `barrier_margin 0.34`, `pub_gate_corr
 0.05`, `servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4 servo_period_max
