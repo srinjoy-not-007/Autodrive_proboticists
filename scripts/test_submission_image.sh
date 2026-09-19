@@ -92,6 +92,7 @@ echo "entry mode: $ENTRY_MODE"
 docker run --name autodrive_roboracer_api --rm -d "${RUN_ARGS[@]}" \
     --network=host --ipc=host \
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw --env DISPLAY --privileged --gpus all \
+    ${API_DOCKER_ARGS:-} \
     "$IMAGE" "${RUN_CMD[@]}" >/dev/null
 sleep 12
 docker exec pit_helper /bin/bash -c "$R && ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1; true"

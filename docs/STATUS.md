@@ -50,7 +50,19 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**13:15 IST, Sep 19 — PLATEAU. Image v5 is the entry unless something new
+**22:30 IST, Sep 19 — where it stands.** Banked image v5 (108.37 / 114.19 s,
+100/0 each). Best clean runs since: **107.23 s display** (v86 line = straight cap
+8.0 -> 8.6, + period-gated straight-PP swivel fix), 114.25 s Xvfb; v6 = that pair,
+in its 100-lap gates now. Closed since 13:15: the apexing line family (a wash
+across periods), gentler planned brake, straight-PP at the slow period (gated
+off there instead), the servo headroom/gain ladder. Open: unused-width corner
+speeds, closed-loop throttle, LiDAR-offset pose correction, sysid staircase for
+the surrogate, RL residual (all agents, all Opus, all on their own branches).
+METHOD RULES added today: Xvfb A/B in-band (`RATE_MIN_DT=0.094 RATE_MAX_DT=0.100`),
+host load < 14 with agents pinned to cores 16-31, mouse untouched during the
+Connection click of display runs.
+
+**13:15 IST, Sep 19 (superseded above) — PLATEAU. Image v5 is the entry unless something new
 appears.** v5 = `finals_mesh_exitm_m10t6_h3_race.csv` + `pub_gate_corr 0.05` +
 gated servo (`servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4`) + the
 audit fixes: **100 / 0 / 108.37 s display, 100 / 0 / 114.19 s Xvfb; as-shipped
