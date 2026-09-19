@@ -433,7 +433,7 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         'steer_tau': '0.04', 'barrier_margin': '0.34',
         'thr_brake_lead_s': '0.05', 'brake_mode': 'zero',
         'brake_a_min': '1.5', 'brake_dv': '0.3', 'brake_a_full': '4.6',
-        'pub_gate_corr': '0.05',
+        'pub_gate_corr': '0.05', 'servo_period_max': '0.100',
         'max_step_mps': '9.0', 'publish_on_reloc': 'false',
     }
 

@@ -258,6 +258,14 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # Gated, on the exit-margin h3 line: 100 display laps / 0 / 108.37 s and
     # 100 Xvfb laps / 0 / 114.19 s (without: 109.21 / 114.16).
     CTRL_ARGS+=(-p servo_k_p:=0.5 -p servo_head_max:=0.3 -p servo_head_kappa:=0.4)
+    # Sep 19 evening (v8): the servo is also period-gated.  At the SLOW end of
+    # the sensor-period lottery (p50 >= 0.103 s, drawn only under host load)
+    # the finals line runs 0.25-0.33 m wide on the s 25-27 exit and touches the
+    # outside wall: 6 collisions in 64 laps with the servo, 1 in 64 without it
+    # (it gains nothing at 0.098 s anyway).  Fade it out past a measured
+    # period of 0.100 s (4 ms ramp); byte-identical below, i.e. at every
+    # period the 100-lap gates were run at (0.058, 0.095-0.098).
+    CTRL_ARGS+=(-p servo_period_max:=0.100)
     # Sep 19 (v6): the straight-line weave is the MPC's own limit cycle at the
     # FAST sensor period (rack std on the straight 0.015 rad at 0.058 s, only
     # 0.006-0.010 at 0.098 s).  On straights blend in a pure-pursuit steer with
