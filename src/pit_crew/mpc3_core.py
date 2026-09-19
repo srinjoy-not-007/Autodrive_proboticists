@@ -538,6 +538,7 @@ DEFAULTS = dict(
     straight_pp_ld_min=1.5,   # m
     straight_pp_ld_max=5.0,   # m
     straight_pp_td=0.20,      # s; dead time the lateral error is projected over
+    straight_pp_tk=0.0,       # x measured period, added to straight_pp_td
     straight_d=1.5,
     straight_kappa=0.30,
     straight_e=0.25,
@@ -2382,7 +2383,12 @@ class MPC3:
                 vv = max(float(v0), 0.5)
                 Ld = min(max(spk * vv, float(c['straight_pp_ld_min'])),
                          float(c['straight_pp_ld_max']))
-                e_p = float(e_lat) + vv * float(c['straight_pp_td']) * math.sin(float(e_yaw))
+                # dead time projected over = td + tk * (measured sensor period): the
+                # pose->rack delay is one period + a constant, so a fixed td that is
+                # right at 0.058 s under-projects at 0.098 s (2 collisions / 32 laps).
+                Td = (float(c['straight_pp_td'])
+                      + float(c.get('straight_pp_tk', 0.0) or 0.0) * max(float(self.period), 1e-3))
+                e_p = float(e_lat) + vv * Td * math.sin(float(e_yaw))
                 alpha = -float(e_yaw) - math.atan2(e_p, Ld)
                 jm = (int(i0) + int(round(0.5 * Ld / max(P.spacing, 1e-3)))) % P.n
                 pp = (math.atan(2.0 * vehicle.WHEELBASE * math.sin(alpha) / Ld)

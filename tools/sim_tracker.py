@@ -453,7 +453,7 @@ class MPC3Sim:
                        'straight_w_yaw_scale', 'straight_hf_gain',
                        'straight_hf_tau',
                        'straight_lead_scale', 'straight_pp_k', 'straight_pp_ld_min',
-                       'straight_pp_ld_max', 'straight_pp_td', 'straight_d', 'straight_kappa',
+                       'straight_pp_ld_max', 'straight_pp_td', 'straight_pp_tk', 'straight_d', 'straight_kappa',
                        'straight_e',
                        'steer_tau', 'steer_tau_k', 'steer_tau_ref',
                        'model_cmd_tau', 'lead_mode', 'lead_m0',
