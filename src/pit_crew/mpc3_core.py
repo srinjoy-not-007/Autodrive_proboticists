@@ -540,6 +540,11 @@ DEFAULTS = dict(
     straight_pp_td=0.20,      # s; dead time the lateral error is projected over
     straight_pp_tk=0.0,       # x measured period, added to straight_pp_td
     straight_pp_period_max=0.0,   # s; 0 = always on. Blend fades out over the last 0.010 s below this period
+    # period-gated extra corridor margin (OPT-IN; 0 = byte-identical). The slow end of the
+    # sensor-period lottery (>= 0.101 s) runs the exits wider: add `barrier_margin_slow`
+    # metres, ramped in linearly from `barrier_slow_period` to +0.004 s above it.
+    barrier_margin_slow=0.0,      # m added to barrier_margin at slow periods
+    barrier_slow_period=0.100,    # s; the ramp starts here
     straight_d=1.5,
     straight_kappa=0.30,
     straight_e=0.25,
@@ -1844,6 +1849,10 @@ class MPC3:
         """One-sided corridor hinges, left and right, at each horizon step."""
         P = self.path
         hw = 0.5 * vehicle.CAR_WIDTH + self.cfg['barrier_margin']
+        bms = float(self.cfg.get('barrier_margin_slow', 0.0) or 0.0)
+        if bms > 0.0:
+            g = min(1.0, max(0.0, (float(self.period) - float(self.cfg.get('barrier_slow_period', 0.100))) / 0.004))
+            hw += bms * g
         if not P.has_corridor:
             return (np.full(self.N, -np.inf), np.full(self.N, np.inf))
         hi = P.w_left[idx[1:]] - hw
