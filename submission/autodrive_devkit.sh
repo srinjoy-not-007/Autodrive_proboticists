@@ -266,6 +266,15 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # period of 0.100 s (4 ms ramp); byte-identical below, i.e. at every
     # period the 100-lap gates were run at (0.058, 0.095-0.098).
     CTRL_ARGS+=(-p servo_period_max:=0.100)
+    # Sep 20 04:30 IST (v9): model the shipped `cmd_tau` 0.10 output filter
+    # INSIDE the solver's rollout (`model_cmd_tau 1.0`) so the plan pre-steers
+    # for its own lag -- the tracker was turning in ~0.5 m late at both
+    # hairpins.  100 Xvfb laps / 0 / 111.19 s at 0.095 s (v8: 113.48 s).  On the
+    # real display (0.058 s) the same pre-steer cuts the second hairpin's
+    # entry (10 collisions in 41 laps at s 42.8), so it is gated on the
+    # measured period: full above 0.080 s, off (byte-identical to v8) below
+    # 0.076 s.
+    CTRL_ARGS+=(-p model_cmd_tau:=1.0 -p model_cmd_tau_period_min:=0.080)
     # Sep 19 (v6): the straight-line weave is the MPC's own limit cycle at the
     # FAST sensor period (rack std on the straight 0.015 rad at 0.058 s, only
     # 0.006-0.010 at 0.098 s).  On straights blend in a pure-pursuit steer with

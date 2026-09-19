@@ -257,6 +257,7 @@ class MPC3Tracker(Node):
             ('steer_tau_k', 0.0),
             ('steer_tau_ref', 0.058),
             ('model_cmd_tau', 0.0),
+            ('model_cmd_tau_period_min', 0.0),
             # --- publish lead: seconds ('temporal') or metres ('spatial') ----
             # 'spatial' reads the published angle a DISTANCE ahead
             # (`max(lead_min_m, lead_m0 + lead_k * v)`), which is
@@ -656,7 +657,7 @@ class MPC3Tracker(Node):
             sched_jump_m=v['sched_jump_m'], v_scale=v['v_scale'],
             steer_tau=v['steer_tau'], steer_tau_k=v['steer_tau_k'],
             steer_tau_ref=v['steer_tau_ref'],
-            model_cmd_tau=v['model_cmd_tau'],
+            model_cmd_tau=v['model_cmd_tau'], model_cmd_tau_period_min=v['model_cmd_tau_period_min'],
             lead_mode=v['lead_mode'], lead_m0=v['lead_m0'],
             lead_k=v['lead_k'], lead_min_m=v['lead_min_m'],
             lead_t0=v['lead_t0'], lead_tk=v['lead_tk'],

@@ -372,6 +372,13 @@ DEFAULTS = dict(
     steer_tau_k=0.0,
     steer_tau_ref=0.058,
     model_cmd_tau=0.0,
+    # OPT-IN period gate for `model_cmd_tau` (0 = ungated).  Live, Sep 20:
+    # modelling the 0.10 s command filter inside the rollout is −0.19 s/lap and
+    # 100/0 at 0.095 s, but at 0.058 s the pre-steer turns in too early and
+    # the car cuts the second hairpin's entry (10 collisions in 41 display
+    # laps at s 42.8, +0.38 m inside).  Below this measured period the modelled
+    # tau fades to 0 over 4 ms; at and above it the full `cmd_tau` is modelled.
+    model_cmd_tau_period_min=0.0,
     # --- where the published angle is read out of the plan (OPT-IN) --------
     # `lead_mode` 'temporal' is the shipping behaviour: the publish index is
     # `nd + max(apply_floor_steps, apply_ahead_s/step_dt)`, i.e. a lead in
@@ -1892,6 +1899,9 @@ class MPC3:
         # one and the original branch below runs untouched.
         tau_a = self.steer_tau_eff
         tau_c = float(c['cmd_tau']) if float(c['model_cmd_tau']) else 0.0
+        mpm = float(c.get('model_cmd_tau_period_min', 0.0) or 0.0)
+        if tau_c > 0.0 and mpm > 0.0:
+            tau_c *= min(1.0, max(0.0, (float(self.period) - (mpm - 0.004)) / 0.004))
         lag_on = tau_a > 0.0 or tau_c > 0.0
         dc = fl = Sdc_out = None
         Ea = math.exp(-self.dt / tau_a) if tau_a > 0.0 else 0.0
