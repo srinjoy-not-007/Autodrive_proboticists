@@ -347,6 +347,12 @@ class MPC3Tracker(Node):
             ('servo_k_p', 0.0),
             ('servo_head_max', 0.5),
             ('servo_head_kappa', 0.0),   # 1/m; 0 = off. Fades servo_head_max out while turning
+            # m; 0 = off.  No servo over-command when the offline profile BRAKES
+            # (a_prof < -0.5) anywhere in the next this-many metres: the servo is
+            # for corner EXITS; pushed up to plan speed INTO a braking zone the
+            # car arrives hot at the slow sensor period (finals s 18-20: 1.11 ->
+            # 1.24 s on Xvfb with the servo on).
+            ('servo_decel_look_m', 0.0),
             ('servo_u_max', 0.60),
             ('servo_v_floor', 1.0),
             # OPT-IN real brake; 'none' is the shipping law byte for byte.
@@ -498,6 +504,7 @@ class MPC3Tracker(Node):
             ('watchdog_hz', 20.0),
         ])
         v = {n.name: n.value for n in p}
+        self.servo_decel_look_m = float(v['servo_decel_look_m'])
         self.P = v
 
         self.path = RefPath(v['raceline_csv'], kappa_span_m=v['kappa_span_m'],
@@ -1215,9 +1222,17 @@ class MPC3Tracker(Node):
 
         # Throttle: the speed the PLAN wants when this command is in force, fed
         # to the servo-inverting law.  Never negative.
+        head_scale = 1.0
+        look_m = self.servo_decel_look_m
+        if look_m > 0.0:
+            nlook = max(1, int(round(look_m / max(self.path.spacing, 1e-3))))
+            jj = (int(i0) + np.arange(nlook + 1)) % self.path.n
+            if float(np.min(self.path.a_prof[jj])) < -0.5:
+                head_scale = 0.0
         th = float(self.thr.command(self.gap_v_cmd(info['v_cmd'], now),
                                     v_meas, 0.0, now=now,
-                                    kappa=float(self.path.kappa[i0])))
+                                    kappa=float(self.path.kappa[i0]),
+                                    head_scale=head_scale))
         self.publish(cmd, th)
         self.pub_cte.publish(Float32(data=float(e_lat)))
 

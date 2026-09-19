@@ -167,7 +167,7 @@ class ServoThrottle:
 
     # -- the law -----------------------------------------------------------
     def command(self, v_target, v_meas=None, a_target=0.0, now=None,
-                kappa=None):
+                kappa=None, head_scale=1.0):
         """Throttle in [0, u_max].  Never negative -- see the module docstring.
 
         Three terms, in the order they matter:
@@ -231,7 +231,7 @@ class ServoThrottle:
         # going below it would brake past the corner-entry speed and cost the
         # exit, and (with the `v_floor` below) is the one route to a reverse
         # setpoint, which is what `brake_gain` used to do by accident.
-        head = self.head_max
+        head = self.head_max * max(0.0, min(1.0, float(head_scale)))
         # OPT-IN (`head_kappa` 0 = off, byte-identical).  The over-command
         # exists to close the straight-line exit deficit; applied while the car
         # is still TURNING it chases the profile's exit acceleration mid-corner
