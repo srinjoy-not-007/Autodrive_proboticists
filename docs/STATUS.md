@@ -50,7 +50,17 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**07:30 IST update — NEW SHIPPING LINE.** `finals_mesh_exitm_m10t6_h3_race.csv`:
+**11:30 IST update — shipping = exit-margin h3 line + curvature-gated exit
+servo** (`servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4`): **100 / 0 /
+108.37 s display, 100 / 0 / 114.19 s Xvfb**. Image v5 built from it (tests in
+flight); v4 (h3 line alone, 109.55 / 114.35-115.14) and v3 (hyb675b) are tagged
+as fallbacks. Closed since 07:30: the last hairpin is capped by the STEERING
+LOCK at both periods (every hit at full lock; later-apex geometry did not
+help); the steering lead is at its optimum in both directions; running wide on
+exits tracks exit ACCELERATION, not apex speed (a slower apex made the ungated
+servo worse).
+
+**07:30 IST update (superseded above) — NEW SHIPPING LINE.** `finals_mesh_exitm_m10t6_h3_race.csv`:
 the min-curvature optimiser re-run with a ONE-SIDED corridor (`--side-margin`,
 +0.10 m of outside-wall margin on the three corner exits where every faster
 profile ran wide), ay 9.0 profile, safe speeds kept at s 17.5-21.5, 36-40 and
