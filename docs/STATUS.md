@@ -50,7 +50,19 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**06:00 IST update — where it stands.** Banked image v3 = hyb675b + `pub_gate_corr
+**07:30 IST update — NEW SHIPPING LINE.** `finals_mesh_exitm_m10t6_h3_race.csv`:
+the min-curvature optimiser re-run with a ONE-SIDED corridor (`--side-margin`,
++0.10 m of outside-wall margin on the three corner exits where every faster
+profile ran wide), ay 9.0 profile, safe speeds kept at s 17.5-21.5, 36-40 and
+the last hairpin. **100 / 0 / 114.16 s Xvfb and 100 / 0 / 109.21 s display**
+(hyb675b: 117.11 / 111.38), minimum wall distance 0.35 m (Xvfb). Image v4 built
+from it, tests in flight; image v3 (hyb675b) is tagged `:iros2026-finals-v3` as
+the fallback. What worked tonight was always geometry + speed together and
+never a controller knob; five harness-predicted gains failed live. Faster rungs
+on the same geometry are built (`_h4` first hairpin at ay 9, `_h5`/`_h6`
+half-steps; the last hairpin at full ay 9 collides at its exit at both periods).
+
+**06:00 IST update (superseded above) — where it stood.** Banked image v3 = hyb675b + `pub_gate_corr
 0.05` + the audit fixes: **117.59 / 117.04 s Xvfb, 111.87 s display, 12 / 0
 each**. Rejected live since 03:20 (all clean-host, both periods unless noted):
 the weave notch (caused 5 and 8 straight-line collisions per 100 Xvfb laps), the
