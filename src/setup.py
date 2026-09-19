@@ -36,6 +36,7 @@ setup(
             'mpc3 = pit_crew.mpc3:main',
             'skidpad = pit_crew.skidpad:main',
             'sysid_run = pit_crew.sysid_run:main',
+            'brake_probe = pit_crew.brake_probe:main',
             'turnin_probe = pit_crew.turnin_probe:main',
         ],
     },
