@@ -75,7 +75,22 @@ band.
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**22:30 IST, Sep 19 — where it stands.** Banked image v5 (108.37 / 114.19 s,
+**03:15 IST, Sep 20 — IMAGE v7 built: the apexing line.** Entry =
+`finals_mesh_apex_f42k_race.csv` (min-curvature floor 0.42 with small
+live-evidence side margins; ay 9.0 / vmax 8.6; three slow zones at safe speeds)
+at `barrier_margin 0.34`, + pub_gate + gated servo + period-gated straight-PP +
+the audit fixes. **100 Xvfb laps / 0 / 113.48 s (median 11.34) and 100 display
+laps / 0 / 107.82 s (median 10.81).** Image tests in flight. Fallbacks: v6
+(`-v6`: h3v86 line, 0.05 s/lap faster on the display, 0.13 slower at 0.098,
+1 collision at s 26.7 in its first 12-lap test), v5 (`-v5`: 0 collisions in
+every test, 108.4 / 114.2). Closed tonight: RL residual (a measured no-op —
+the controller is within the surrogate's accuracy of the fastest lap on this
+line), PI throttle (runaway past the 9 m/s encoder guard), pose-offset (a margin
+lever that costs pace), unused-width corners (reachability-capped), apex zone
+releases (hit the s 24 exit). Still owed: the sysid staircase + brake probe in
+the `-explore` image; the MonacoF1 benchmark (DDS interop on this host).
+
+**22:30 IST, Sep 19 (superseded above) — where it stood.** Banked image v5 (108.37 / 114.19 s,
 100/0 each). Best clean runs since: **107.23 s display** (v86 line = straight cap
 8.0 -> 8.6, + period-gated straight-PP swivel fix), 114.25 s Xvfb; v6 = that pair,
 in its 100-lap gates now. Closed since 13:15: the apexing line family (a wash
