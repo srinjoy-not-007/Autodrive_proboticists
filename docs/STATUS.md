@@ -50,7 +50,21 @@ line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**03:20 IST update — candidate ahead of the image:** ay 9.0 profile on the
+**06:00 IST update — where it stands.** Banked image v3 = hyb675b + `pub_gate_corr
+0.05` + the audit fixes: **117.59 / 117.04 s Xvfb, 111.87 s display, 12 / 0
+each**. Rejected live since 03:20 (all clean-host, both periods unless noted):
+the weave notch (caused 5 and 8 straight-line collisions per 100 Xvfb laps), the
+ay 9.0 rungs h2 / h4 (collide at the last hairpin exit / the s 24-27 corner at
+0.098 s; h2's display 109.34 s stands as the best clean display run), the
+s-indexed schedule (neutral), `ay_limit 16` (slower), the lead-law fixes
+(slower), hand-shifted exits (10 collisions). **Four harness-predicted gains in
+a row failed to transfer; the harness no longer earns live slots for lap-time
+claims.** Open: the optimiser-built exit-margin line (agent, `exit-margin`), the
+BO schedule (agent, `sched-bo`), localization sharpening (`beam_temp 4.0`).
+HOST RULE: every offline tool now pins BLAS itself; scored chains wait for
+load < 6.
+
+**03:20 IST update (superseded above) — candidate ahead of the image:** ay 9.0 profile on the
 hyb675b geometry with the s 19 hairpin and the s 36-40 corner blended back to
 the safe speeds (`finals_mesh_win_b_ay90h2_race.csv`) + `pub_gate_corr 0.05` +
 the weave notch: **display 32 / 0 / 109.34 s, Xvfb 32 / 0 / 116.35 s** (image
