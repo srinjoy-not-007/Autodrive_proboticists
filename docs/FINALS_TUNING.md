@@ -151,6 +151,9 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_sv_hd06_x32` (Xvfb) / `fin_sv_ecut2_disp` | gated servo `k_p 1.0 head 0.6`; exit-cut arm re-run on display | 115.903 + 0 (median 11.548) ; 108.005 + 0 (median 10.789) | 32 / 0 each | — | head 0.6 gains 0.05 s/lap on the display and LOSES 0.08 at 0.098 (shipping 0.3: 11.473) — shipping value stays. The exit-cut arm over 64 display laps: one collision event for 0.03 s/lap — not carried (`race_20260919_061256`, `_062036`) |
 | `fin_h7_x32` / `fin_h8_x32` (Xvfb) | s 36-40 corner released to full / half ay 9 on the exit-margin geometry (ideal 10.26 / 10.36), shipping servo | 115.248 + 30 ; 113.557 + 0 scored | 27 / **10** ; 32 / **4** | — | **REJECTED**: that corner needs its safe speed at the organisers' period even with 0.6 m of exit wall (`race_20260919_062806`, `_063445`) |
 | `fin_dl15_x32` / `fin_dl30_x32` (Xvfb) / `fin_dl15_disp` | shipping config + `servo_decel_look_m` 1.5 / 3.0 (Xvfb), 1.5 (display) | 114.502 (median 11.447); 114.396 (11.434); display 108.586 (10.859), all + 0 | 32 / 0 each | first hairpin s 18-20 on Xvfb: 1.24 -> 1.14 / 1.10 s | the gate repairs the first hairpin at 0.098 (+0.03-0.04 s/lap there) and costs the same on the display (shipping servo 10.817) — **a wash across the two periods; stays opt-in, v5 unchanged** (`race_20260919_064442`, `_065330`, `_070125`) |
+| `fin_v86_x32` / `fin_v86_disp` | shipping config with the straight's speed cap raised **8.0 -> 8.6** (`finals_mesh_exitm_m10t6_h3v86_race.csv`) — the user's observation that the straight had room | Xvfb **114.252** (median 11.371, dt 0.092); display **107.400** (median 10.735), both + 0 | 32 / 0 each | — | **clean gain at both periods** (-0.08..-0.10 s/lap). On the straight the car sat at 7.95 of an 8.00 cap at 0.33 of 0.60 throttle; 8.6 is the most the 9.0 m/s encoder guard allows (wheel speed p99 8.96). Owes its 100-lap gates (`race_20260919_075350`, `_080136`) |
+| `fin_pp_disp` / `fin_pp_x32` | v86 + **`straight_pp_k 0.5`** (straight-mode pure-pursuit blend; `straight_d 3.0 straight_kappa 0.10`) | display **107.228 + 0**; Xvfb 117.678 + 10 (dt **0.101**) | 32 / 0 ; 32 / **2** | display straight: rack std 0.0148 -> **0.0068 rad (-54 %)**, cmd std 0.0358 -> 0.0111 (-69 %). Xvfb hits: both on the straight, a heading error after the s 4 kink grows to cte +0.33 over 0.4 s, the `straight_e` release hands back to the MPC, `e_free` brakes at 7 m/s, overshoot into the far wall | **the first swivel fix that works on the display at no cost; too gentle at 0.10 s.** A slew limit was tried first and REMOVED (2-15 harness collisions in 6 laps: a rate limit adds lag). Firmer `k 0.3` + period-scaled dead time (`straight_pp_tk`) in flight (`race_20260919_083141`, `_083850`) |
+| `fin_b40_x32` (Xvfb, dt **0.102**) | v86 line re-planned at brake 4.0 (ideal +0.07) | 115.700 + 0 scored | 32 / **1** | — | slower (median 11.582) and a collision, BUT run at a 10 % longer period than its baseline (0.092): **confounded, to be re-run in-band** (`race_20260919_084719`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -1083,6 +1086,17 @@ EKF rather than a fast open inner loop (explains why `control_mode timer` lost);
 hardware); (6) residual RL inside the sim (3-6 %, ~33 h of wall clock, post-finals).
 Drifting: inapplicable to this tyre. To download: arXiv 2509.18506 "Spatial
 Envelope MPC"; Velenis & Tsiotras ISIE 2005.
+
+**Braking audit (Sep 19 20:30 IST, 100-lap logs).** Driven minus planned speed
+through each braking zone: into the FIRST hairpin (s 12-18.8, plan 8.0 -> 1.85
+at the brake's 4.6 m/s2 limit) the car is +0.26 / +0.30 m/s over plan mid-zone
+at both periods and **still +0.25 m/s hot at the END on Xvfb** (on plan on the
+display) — that is the first hairpin's 0.2 s/lap loss at 0.098. Into s 37
+(s 31.5-37.2) the display is on plan while Xvfb is 0.2-0.3 m/s UNDER (braking
+starts a metre early: 33.7 vs 34.7). Last hairpin: on plan / slightly under.
+**METHOD RULE from now on: Xvfb A/B runs use `RATE_MIN_DT=0.094
+RATE_MAX_DT=0.100`** — the per-start period lottery (0.088-0.106) confounded two
+verdicts today.
 
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
