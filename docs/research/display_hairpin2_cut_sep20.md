@@ -159,7 +159,9 @@ model in band and a fraction of it on the display.
    `data/racelines/`). This keeps the whole lag model at both periods — the
    10.55 s laps — and buys the margin back where it is spent. The corridor
    allows it: 0.44 + 0.135 of body = 0.575 against 0.675 m of inside wall at
-   s 42.5. Harness: same −0.038 m of cut as arm 1, in band unchanged.
+   s 42.5. Harness: same −0.038 m of cut as arm 1, and the in-band cost of the
+   window is **+0.02 s/lap** (102 laps at 0.096 s: 11.580 with it, 11.560
+   without, 0 collisions both) — i.e. it keeps the organisers'-period gain.
 3. **`-p model_cmd_tau:=0.60 -p model_cmd_tau_period_min:=0.0 -p
    param_schedule:=...hp2.json`** — both together, for when arm 1 or 2 alone is
    still inside v8's own p90. Gives up the most pace of the three.
