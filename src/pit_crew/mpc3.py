@@ -258,9 +258,6 @@ class MPC3Tracker(Node):
             ('steer_tau_ref', 0.058),
             ('model_cmd_tau', 0.0),
             ('model_cmd_tau_period_min', 0.0),
-            # Gate shape; defaults reproduce the committed v9 gate exactly.
-            ('model_cmd_tau_fade', 0.004),
-            ('model_cmd_tau_floor', 0.0),
             # --- publish lead: seconds ('temporal') or metres ('spatial') ----
             # 'spatial' reads the published angle a DISTANCE ahead
             # (`max(lead_min_m, lead_m0 + lead_k * v)`), which is

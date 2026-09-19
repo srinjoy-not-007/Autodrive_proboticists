@@ -379,20 +379,6 @@ DEFAULTS = dict(
     # laps at s 42.8, +0.38 m inside).  Below this measured period the modelled
     # tau fades to 0 over 4 ms; at and above it the full `cmd_tau` is modelled.
     model_cmd_tau_period_min=0.0,
-    # Shape of that gate; both inert at their defaults, which reproduce the
-    # committed v9 gate exactly.  `model_cmd_tau_fade` is the width of the
-    # fade below `model_cmd_tau_period_min`; `model_cmd_tau_floor` is the
-    # FRACTION of the modelled filter that survives below it.  Why a floor
-    # (measured Sep 20, `docs/research/display_hairpin2_cut_sep20.md`): the
-    # lead this term adds is a constant in SECONDS -- `cmd_tau` of command
-    # ramp -- while every other lead here is a constant in FRAMES
-    # (`apply_ahead_s` is rate-scaled, and floors at one step at 0.058 s).  So
-    # the same 0.10 s is 1.7 frames of extra anticipation on the display
-    # against 1.05 in the organisers' band, which is what put 8 deg of extra
-    # yaw into the second hairpin's entry and cut it (10/41).  A floor near
-    # T/0.095 (0.6 at the display) restores the frame-matched share.
-    model_cmd_tau_fade=0.004,
-    model_cmd_tau_floor=0.0,
     # --- where the published angle is read out of the plan (OPT-IN) --------
     # `lead_mode` 'temporal' is the shipping behaviour: the publish index is
     # `nd + max(apply_floor_steps, apply_ahead_s/step_dt)`, i.e. a lead in
@@ -1912,19 +1898,10 @@ class MPC3:
         # actually steers the car.  With both taus 0 the three collapse into
         # one and the original branch below runs untouched.
         tau_a = self.steer_tau_eff
-        # `model_cmd_tau` is the FRACTION of `cmd_tau` the rollout models
-        # (1.0 = the whole filter, which is what every committed run drove).
-        mct = float(c['model_cmd_tau'])
-        tau_c = float(c['cmd_tau']) * mct if mct else 0.0
+        tau_c = float(c['cmd_tau']) if float(c['model_cmd_tau']) else 0.0
         mpm = float(c.get('model_cmd_tau_period_min', 0.0) or 0.0)
         if tau_c > 0.0 and mpm > 0.0:
-            # Below `mpm` the modelled filter fades to `model_cmd_tau_floor`
-            # of itself over `model_cmd_tau_fade` seconds.  The defaults
-            # (fade 0.004, floor 0.0) are the committed v9 gate exactly.
-            fw = max(float(c.get('model_cmd_tau_fade', 0.004) or 0.004), 1e-6)
-            flr = min(1.0, max(0.0, float(c.get('model_cmd_tau_floor', 0.0) or 0.0)))
-            g = min(1.0, max(0.0, (float(self.period) - (mpm - fw)) / fw))
-            tau_c *= flr + (1.0 - flr) * g
+            tau_c *= min(1.0, max(0.0, (float(self.period) - (mpm - 0.004)) / 0.004))
         lag_on = tau_a > 0.0 or tau_c > 0.0
         dc = fl = Sdc_out = None
         Ea = math.exp(-self.dt / tau_a) if tau_a > 0.0 else 0.0
