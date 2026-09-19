@@ -707,7 +707,9 @@ class MPC3Sim:
                        'straight_pp_ld_max', 'straight_pp_td', 'straight_pp_tk', 'straight_pp_period_max', 'barrier_margin_slow', 'barrier_slow_period', 'straight_d', 'straight_kappa',
                        'straight_e',
                        'steer_tau', 'steer_tau_k', 'steer_tau_ref',
-                       'model_cmd_tau', 'model_cmd_tau_period_min', 'lead_mode', 'lead_m0',
+                       'model_cmd_tau', 'model_cmd_tau_period_min',
+                       'model_cmd_tau_fade', 'model_cmd_tau_floor',
+                       'lead_mode', 'lead_m0',
                        'lead_k', 'lead_min_m', 'lead_t0', 'lead_tk',
                        'nd_mode', 'nd_delay_s', 'dead_tick_c',
                        # s-indexed parameter schedule (OPT-IN, '' = off)
