@@ -72,7 +72,9 @@ class ServoThrottle:
                  lead_max=0.25, ay_limit=6.0, v_floor=1.0, u_max=0.60,
                  hold=CMD_PERIOD, servo_gain=SERVO_GAIN, predict=True,
                  brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
-                 brake_a_full=4.6, head_kappa=0.0):
+                 brake_a_full=4.6, head_kappa=0.0,
+                 pi_kp=0.0, pi_ki=0.0, pi_prefilter_tau=0.0,
+                 pi_slip_clamp=0.0):
         self.K = float(K)                # servo proportional gain, 1/s
         self.drag = float(drag)          # rigidbody linear drag, 1/s
         self.tau = float(tau)            # actuator dead time, s
@@ -128,6 +130,41 @@ class ServoThrottle:
         self.brakes = 0                  # ticks published as exactly 0.0
         self._hist = []                  # (t, u) as issued, for dead-time
         self.last_target = 0.0           # last setpoint, m/s (diagnostics)
+        # --- OPT-IN closed-loop PI correction (all 0 = off, byte-identical) --
+        # The feedforward law tracks the plan but never SPENDS the servo's
+        # authority to CLOSE an error: measured, the car sits ~0.5 m/s under
+        # plan accelerating out of the slow corners, because the sim's inner
+        # speed loop pushes hard only while the setpoint is well above the
+        # current speed and the feedforward setpoint IS the target.  This adds
+        # a proportional+integral correction on (setpoint - measured speed) as
+        # EXTRA SPEED SETPOINT on top of the feedforward -- the same structure
+        # MonacoF1's public stack uses (PI on speed error, integrator clamped
+        # to a traction-slip bound, on top of a 0.0408/(m/s) feedforward),
+        # translated into this module's servo-inverting frame.  It differs from
+        # `k_p`/`head_max` (a one-shot bounded over-command) in that the
+        # integral term accumulates a standing correction that the feedforward
+        # cannot.  Four properties keep it out of the `throttle_kp` bang-bang
+        # trap (75 collisions, car reversing):
+        #   * a first-order PREFILTER on the setpoint the loop sees, so a step
+        #     in the plan does not slam the error term;
+        #   * ANTI-WINDUP: the integral term is clamped to `pi_slip_clamp*|v|`,
+        #     a traction-slip bound, so it can never demand a large standing
+        #     over-setpoint;
+        #   * the POSITIVE correction is faded by `head_kappa` exactly as the
+        #     over-command is, so it does not chase exit acceleration while the
+        #     car is still turning and run wide;
+        #   * the final target is clamped to a forward speed in
+        #     [v_floor, g*u_max] and the output to [0, u_max], so the loop can
+        #     NEVER command negative (reverse) throttle -- and it is applied
+        #     UPSTREAM of the exact-0.0 brake, so `brake_mode` still emits 0.0.
+        self.pi_kp = float(pi_kp)             # m/s of setpoint per m/s of error
+        self.pi_ki = float(pi_ki)             # 1/s
+        self.pi_prefilter_tau = float(pi_prefilter_tau)   # s, 0 = passthrough
+        self.pi_slip_clamp = float(pi_slip_clamp)         # anti-windup: |I| <= this*|v|
+        self._pi_on = (self.pi_kp != 0.0 or self.pi_ki != 0.0)
+        self._pi_int = 0.0               # integral term, m/s of setpoint
+        self._pi_sp = None               # prefiltered setpoint, m/s
+        self._pi_last = None             # `now` of the previous PI update, s
 
     # -- dead time ---------------------------------------------------------
     def _predict(self, v_meas, now):
@@ -242,6 +279,44 @@ class ServoThrottle:
         if self.head_kappa > 0.0 and kappa is not None:
             head *= max(0.0, 1.0 - abs(float(kappa)) / self.head_kappa)
         target = lead + max(0.0, min(head, self.k_p * err))
+
+        # --- OPT-IN closed-loop PI correction (see __init__) ------------------
+        # Adds P+I on the speed error as extra SETPOINT.  Off (both gains 0) it
+        # touches no state and the command is byte-identical to the feedforward
+        # law.  It reads the encoder, so it only runs when a measurement is in
+        # hand; with none it holds the integral and adds nothing.
+        if self._pi_on and v_meas is not None:
+            dt = self.hold if self._pi_last is None else (now - self._pi_last)
+            dt = max(1e-3, min(dt, 1.0))     # guard a paused/rewound clock
+            # First-order prefilter on the setpoint the loop tracks, so a step
+            # in the plan speed does not slam the error term into a spike.  The
+            # feedforward `lead` is left un-prefiltered -- it must track the
+            # plan; only the loop's own error is conditioned.
+            if self.pi_prefilter_tau > 0.0:
+                a = dt / (self.pi_prefilter_tau + dt)
+                self._pi_sp = (v_t if self._pi_sp is None
+                               else self._pi_sp + a * (v_t - self._pi_sp))
+                sp = self._pi_sp
+            else:
+                sp = v_t
+            e_pi = sp - v_pred
+            # Integral with anti-windup: clamp to a traction-slip fraction of
+            # the MEASURED speed (MonacoF1's `max_traction_slip*|v|`), so a
+            # persistent error can never wind up a large standing over-setpoint.
+            # At low speed the bound shrinks, so the integral unwinds quickly
+            # after a corner.
+            self._pi_int += self.pi_ki * e_pi * dt
+            ilim = self.pi_slip_clamp * abs(float(v_meas))
+            self._pi_int = max(-ilim, min(ilim, self._pi_int))
+            corr = self.pi_kp * e_pi + self._pi_int
+            # Fade only the POSITIVE (accelerating) correction with curvature,
+            # reusing `head_kappa`: no aggressive over-command while the car is
+            # still turning hard, so corner EXITS do not run wide.  A negative
+            # correction (over speed) only eases the throttle and is always safe.
+            if corr > 0.0 and self.head_kappa > 0.0 and kappa is not None:
+                corr *= max(0.0, 1.0 - abs(float(kappa)) / self.head_kappa)
+            target += corr
+            self._pi_last = now
 
         # Never a reverse setpoint, and never a crawl setpoint while moving:
         # below ~1 m/s a low setpoint reads as "stop".  Do not raise the floor
