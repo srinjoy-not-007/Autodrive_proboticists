@@ -74,7 +74,8 @@ class ServoThrottle:
                  brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
                  brake_a_full=4.6, head_kappa=0.0,
                  pi_kp=0.0, pi_ki=0.0, pi_prefilter_tau=0.0,
-                 pi_slip_clamp=0.0):
+                 pi_slip_clamp=0.0, boost_kp=0.0, boost_u_max=0.60,
+                 boost_dead=0.3):
         self.K = float(K)                # servo proportional gain, 1/s
         self.drag = float(drag)          # rigidbody linear drag, 1/s
         self.tau = float(tau)            # actuator dead time, s
@@ -162,6 +163,18 @@ class ServoThrottle:
         self.pi_prefilter_tau = float(pi_prefilter_tau)   # s, 0 = passthrough
         self.pi_slip_clamp = float(pi_slip_clamp)         # anti-windup: |I| <= this*|v|
         self._pi_on = (self.pi_kp != 0.0 or self.pi_ki != 0.0)
+        # OPT-IN throttle boost (boost_kp 0 = off, byte-identical).  The
+        # feedforward is v/24.6 and has never commanded more than 0.36 in any
+        # run; the open-floor probe (Sep 19) accelerates at only ~3.7 m/s2 at
+        # u 0.40 against the profile's 6.5, and the car sits 0.5-1.0 m/s under
+        # plan out of every slow corner (0.25 s/lap on the display).  Add a
+        # PROPORTIONAL throttle term on the shortfall, above `boost_dead` m/s,
+        # faded with |kappa| like the servo head, capped at `boost_u_max`.  No
+        # integral, and no measurement means no boost, so it cannot run away
+        # the way the PI arm did when the encoder guard went blind.
+        self.boost_kp = float(boost_kp)
+        self.boost_u_max = float(boost_u_max)
+        self.boost_dead = float(boost_dead)
         self._pi_int = 0.0               # integral term, m/s of setpoint
         self._pi_sp = None               # prefiltered setpoint, m/s
         self._pi_last = None             # `now` of the previous PI update, s
@@ -327,6 +340,13 @@ class ServoThrottle:
         self.last_target = target
 
         u = max(0.0, min(self.u_max, target / self.g))
+        if self.boost_kp > 0.0 and v_meas is not None and a_t > 0.0:
+            short = (v_t - v_pred) - self.boost_dead
+            if short > 0.0:
+                b = self.boost_kp * short
+                if self.head_kappa > 0.0 and kappa is not None:
+                    b *= max(0.0, 1.0 - abs(float(kappa)) / self.head_kappa)
+                u = min(max(self.boost_u_max, self.u_max), u + b)
 
         # --- the brake (opt-in) ---------------------------------------------
         if self.brake_mode != 'none' and v_meas is not None:

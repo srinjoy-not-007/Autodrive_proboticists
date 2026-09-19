@@ -414,6 +414,9 @@ class MPC3Tracker(Node):
             ('thr_pi_ki', 0.0),
             ('thr_pi_prefilter_tau', 0.0),
             ('thr_pi_slip_clamp', 0.0),
+            ('thr_boost_kp', 0.0),
+            ('thr_boost_u_max', 0.60),
+            ('thr_boost_dead', 0.3),
             ('v_meas_min', 0.2),          # below this the encoder says nothing
             ('v_start', 0.5),             # plan speed before the encoder ever
                                           # reports -- see start_speed()
@@ -676,7 +679,8 @@ class MPC3Tracker(Node):
             brake_dv=v['brake_dv'], brake_a_full=v['brake_a_full'],
             pi_kp=v['thr_pi_kp'], pi_ki=v['thr_pi_ki'],
             pi_prefilter_tau=v['thr_pi_prefilter_tau'],
-            pi_slip_clamp=v['thr_pi_slip_clamp'])
+            pi_slip_clamp=v['thr_pi_slip_clamp'],
+            boost_kp=v['thr_boost_kp'], boost_u_max=v['thr_boost_u_max'], boost_dead=v['thr_boost_dead'])
         self.speed_est = vehicle.SpeedEstimator(alpha=0.35)
         # Measures the pose period always; only ACTS on it when rate_adaptive.
         self.rate_ctl = RateControl(
