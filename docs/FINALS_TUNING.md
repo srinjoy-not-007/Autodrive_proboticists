@@ -1098,6 +1098,109 @@ modelled (value unpublished); another 2026 entrant logs 0.017-0.050 s command
 age, consistent with `steer_tau` 0.04. No public source for the WheelCollider
 curve, timestep, checkpoint or collision logic — our decompiled findings stand.
 
+**Corner-by-corner audit of the shipping line (Sep 19, agent, branch
+`corner-audit`). Offline + harness only, nothing driven.** The question was
+whether the racing line is under-optimised AT THE CORNERS. Method: march the
+normal in `finals_mesh.pgm` for the LINE's wall distance, and bin the two clean
+100-lap logs (`race_20260919_044701` display 0.058 s, `race_20260919_050630`
+Xvfb 0.096 s) by 0.5 m of `s` for the CAR CENTRE's nearest-wall distance, split
+by side of travel, plus the signed offset from the line. Full table committed as
+`data/racelines/finals_mesh_cornr_audit.csv`.
+
+**The single structural finding: `--min-halfwidth 0.53` against a corridor of
+half-width 0.57-0.70 m leaves the QP 0.04-0.17 m of lateral freedom, so the
+shipping line does not apex any corner — it runs mid-corridor everywhere.** The
+optimiser says so itself ("finished line holds 0.534 m at s 25.0"), and the
+audit confirms the line's nearest wall is 0.53-0.55 m at every apex. What apexes
+is the CAR: the harness measures it +0.161..+0.183 m inside the line in corners
+at 0.058 s and +0.072..+0.080 at 0.098 s.
+
+Live minimum wall distance (car centre; body clearance is this minus 0.135 m
+perpendicular, up to 0.25 m at an angle), display / Xvfb, with the class:
+
+| corner | phase | live min wall D / X | side | class |
+|---|---|---|---|---|
+| hairpin s 18.9 (L) | entry / apex / exit | 0.426 / 0.553 · 0.424 / 0.553 · 0.424 / 0.503 | L inside, R on exit | **UNUSED WIDTH** — never within 0.42 m of anything; speed-capped by the safe blend, not by width |
+| s 22.2 (R) | all | 0.559 / 0.530 | both | **UNUSED WIDTH** |
+| s 24.4 (L) | entry | 0.318 / 0.372 | LEFT (inside) | AT THE LIMIT |
+| s 24.4 (L) | **apex** | **0.225 / 0.280** | LEFT (inside) | **AT THE LIMIT / the tightest point of the lap**; the car sits +0.24..+0.25 m inside a line that is already on its 0.534 m floor |
+| s 24.4 (L) | exit | 0.266 / 0.348 | LEFT | AT THE LIMIT |
+| s 27.6 (R) | entry s 26.5-27.5 | **0.266 / 0.372** | RIGHT (outside of the s 24 corner) | **AT THE LIMIT on the display** — the wide exit of the s 24 corner, not its own corner. Corrects the "s 26-30 = 0.46-0.57 m" reading, which is the Xvfb number only |
+| s 27.6 (R) | apex / exit | 0.336 / 0.445 · 0.459 / 0.515 | R | UNUSED WIDTH |
+| s 30-34 kinks (R) | s 33.5-35.5 | 0.347 / 0.412 | RIGHT (inside) | borderline; left side never nearest (> 0.70 m) — **UNUSED WIDTH on the outside** |
+| s 30-33 | — | 0.575 / 0.625 | L | **UNUSED WIDTH** |
+| s 37.6 (L) | entry / apex | 0.412 / 0.470 | L | UNUSED WIDTH |
+| s 37.6 (L) | **exit s 38.5-39.5** | 0.530 / **0.283** | RIGHT | **AT THE LIMIT at the organisers' period only** — the known period-dependent corner, already capped |
+| s 40.9 (R) | all | 0.503 / 0.442 | both | **UNUSED WIDTH** (widest part of the lap: line 0.65/0.67, car 0.65 on the display) |
+| hairpin s 43.6 (L) | **entry s 42.5-43.0** | **0.251 / 0.355** | LEFT (inside) | **AT THE LIMIT** |
+| hairpin s 43.6 (L) | apex / exit | 0.369 / 0.467 · 0.400 / 0.450 | L / R | at the limit only in the steering-lock sense (closed) |
+| straight s 2-15 | entry / body | 0.475 / 0.375 | both | UNUSED WIDTH, but it is a straight — no lap time in it |
+
+Nothing is class (iii) OVER. Two corners are genuinely at the limit and neither
+is a corner the previous work had named: **s 24-27 is one early-apex/wide-exit
+failure** (inside 0.225 m at s 24.5, then outside 0.266 m at s 26.5-27), and the
+**last hairpin's ENTRY** (0.251 m at s 43.0), not its exit.
+
+**Independent optimum.** Re-solved with a plain symmetric margin, profiled
+identically (`reprofile --ay 9.0 --ax 6.5 --brake 4.6 --vmax 8.6`, then the
+three safe zones blended back with `partial_blend`), against the shipping line
+rebuilt the same way (`finals_mesh_exitm_m10t6_h3v86_race.csv`, ideal 10.425 s):
+
+| geometry | ideal | \|k\|max (R) | pick_config min half-width / barrier |
+|---|---|---|---|
+| `--min-halfwidth 0.45`, no side margin | 10.214 | 1.76 (0.57) | — |
+| `--min-halfwidth 0.50`, no side margin | **10.329** | **1.57 (0.64)** | 0.480 / 0.34 |
+| `--min-halfwidth 0.53`, no side margin (= `finals_mesh_race`) | 10.405 | 1.82 (0.55) | 0.520 / 0.40 |
+| **shipping** `exitm_m10t6_h3v86` | 10.425 | 1.90 (0.53) | 0.520 / 0.40 |
+
+**The whole geometry lever is 0.21 s of ideal lap between a 0.45 m and a 0.53 m
+floor, and the exit margins cost only 0.020 s.** TUM min-time was not re-run:
+the win-stack agent already measured the fully constrained TUM line slower AND
+tighter than shipping (10.80 s, 0.236 m), and the corridor has not changed.
+
+**Re-optimised family** (`tools/optimize_raceline.py --side-margin`, taper 0.6,
+same build chain; `finals_mesh_cornr_*`). Hard constraints: `pick_config` checkpoint
+margin >= 0.60, gate separation >= 0.60, occupancy 1, min half-width >= 0.50,
+and |kappa| at s 18.9 / s 43.6 no tighter than 1.90 / 1.74.
+
+| candidate | floor | change | ideal (Δ) | \|k\| hp1 / hp3 | verdict |
+|---|---|---|---|---|---|
+| shipping | 0.53 | — | 10.425 | 1.90 / 1.74 | baseline, harness **72 / 0** |
+| **`cornr_j`** | 0.50 | shipping right windows + `18.0:20.2:left:0.03,42.3:44.3:left:0.03` (hold the hairpin apexes off the lower floor) + **`23.2:25.6:left:0.10`** | 10.498 (+0.073) | **1.62 / 1.67** | **the only candidate that fixes s 24-27**: line-to-inside-wall at s 24-26 **0.534 -> 0.600 m**, both hairpin radii 0.53/0.57 -> **0.60 m** (clear of the 0.561 lock, `apex_deviation` 0.000). Harness **72 / 0** at both frames, corner cut +0.171 -> +0.131 m. **Fails `min half-width >= 0.50` by 0.02 m (0.480) and forces `barrier_margin` 0.34.** |
+| `cornr_g2` | 0.50 | as above without the s 24 window, + `13:17:right:0.05` | 10.398 (−0.027) | 1.90 / — | constraint-clean on kappa, same 0.480 / 0.34 problem; buys nothing at s 24 |
+| `cornr_h` | 0.53 | give-back only: windows shortened to `19.8:22.5`, `25.8:28.5`, `36:40.5` | 10.487 (+0.062) | 1.87 / 1.55 | **passes every hard constraint** (0.520 / 0.40, checkpoint 0.652, gate 0.773, effective clearance 0.375 vs 0.365) but moves the tight corners by 0.016 m — not worth a live slot |
+| `cornr_mhw50` | 0.50 | no side margins at all | 10.329 (−0.096) | 1.56 / 1.57 | **REJECTED**: gives the exit margins back — right wall at s 38-40 0.619 -> 0.530 m, the corner that DQ'd every ay-9 rung at 0.098 s |
+| `cornr_a` / `_b` / `_f` / `_m` / `_n` / `_q` | 0.53 | the s 24 left margin at the shipping floor | +0.16 to +0.33 | up to 2.05 | **REJECTED**: at floor 0.53 the same fix costs 3-5x as much and tightens a hairpin past 1.90 |
+| `cornr_c` / `_e` / `_p` | 0.50-0.52 | shipping windows at a lower floor | −0.09 / −0.07 / +0.21 | 2.00 / 2.07 / 1.80 | **REJECTED** on the hairpin-kappa constraint |
+| `cornr_k` | 0.50 | every margin raised (0.12 / 0.10) | +0.23 | **2.36 (R 0.42)** | **REJECTED** — reconfirms "margin does not buy curvature monotonically" |
+
+**Harness veto only** (`tools/sim_tracker.py --plant-realistic --pose-noise 0.03
+--pose-latency 0.044 --plant-brake-at-zero 4.6 --plant-dead 0.045`, shipping `-r`
+args + `pub_gate_corr 0.05 servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa
+0.4`, 3 seeds x 12 laps at 0.058 and 0.098). **Read the collision column only —
+five of five harness-predicted lap-time gains failed live on Sep 19.**
+
+| line | 0.058 laps/coll, med | 0.098 laps/coll, med | min footprint clearance 0.058 / 0.098 |
+|---|---|---|---|
+| shipping `h3v86` | 36 / **0**, 12.36 | 36 / **0**, 12.77 | 0.050-0.071 / 0.050-0.100 |
+| `cornr_j` | 36 / **0**, 12.35 | 36 / **0**, 12.78 | 0.025-0.100 / 0.075-0.100 |
+| `cornr_h` | 36 / **0**, 12.43 | 36 / **0**, 12.75 | 0.050-0.075 / **0.125** |
+| `cornr_mhw50` | 36 / **0**, 12.16 | 36 / **0**, 12.54 | **0.025-0.050** / 0.025-0.050 |
+
+**The floor value 0.50 is a different QP basin, not a smooth knob.** At 0.50 the
+solver finds a line whose hairpin radii are 0.60-0.64 m; at 0.51, 0.52 and 0.53
+it lands on the tight-apex basin (R 0.48-0.55) and is both slower and tighter.
+Do not interpolate between them.
+
+**Honest conclusion: under the stated hard constraints the shipping geometry is
+already at its constrained optimum.** Nothing here is both faster and legal. The
+one real improvement available is `cornr_j`, which is a SAFETY trade — it costs
+0.073 s of ideal lap and buys 0.066 m of inside clearance at the tightest point
+of the lap plus two hairpin radii clear of the steering lock — and it can only be
+had by accepting `min half-width` 0.480 and `barrier_margin` 0.34. That is a
+judgement call for the user, not a change to make unilaterally this close to
+Gate D.
+
 ---
 
 ## 6. Submitting
