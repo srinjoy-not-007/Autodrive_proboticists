@@ -16,9 +16,20 @@ docker rm -f autodrive_roboracer_api 2>/dev/null || true
 # image lacks them and a restart discards anything pip-installed by hand.
 # (These must also go into the submission Dockerfile — task #12.)
 install_deps() {
-    docker exec autodrive_roboracer_api /bin/bash -c \
-        "python3 -c 'import scipy' 2>/dev/null || pip3 install -q 'numpy<2' 'scipy==1.10.1' >/dev/null 2>&1; \
-         which xdotool >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq xdotool imagemagick) >/dev/null 2>&1; true"
+    # Sep 20: one silent pip failure (transient network) cost a whole run --
+    # localization died on import and mpc3 refused to start without a map.
+    # Retry three times and FAIL LOUDLY if scipy is still missing.
+    local i
+    for i in 1 2 3; do
+        docker exec autodrive_roboracer_api /bin/bash -c \
+            "python3 -c 'import scipy' 2>/dev/null || pip3 install -q 'numpy<2' 'scipy==1.10.1' >/dev/null 2>&1; \
+             which xdotool >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq xdotool imagemagick) >/dev/null 2>&1; true"
+        docker exec autodrive_roboracer_api python3 -c 'import scipy' 2>/dev/null && return 0
+        echo "WARN: scipy install attempt $i failed in the devkit container; retrying" >&2
+        sleep 5
+    done
+    echo "ERROR: scipy is not importable in the devkit container; localization cannot start" >&2
+    return 1
 }
 
 COMMON_ARGS=(
@@ -33,7 +44,7 @@ case "$MODE" in
     headless)
         docker run --name autodrive_roboracer_api --rm -d "${COMMON_ARGS[@]}" "$IMAGE" \
             -c "source /opt/ros/humble/setup.bash && source /home/autodrive_devkit/install/setup.bash && ros2 launch autodrive_roboracer bringup_headless.launch.py"
-        install_deps
+        install_deps || exit 1
         echo "Devkit bridge running headless (container: autodrive_roboracer_api)."
         ;;
     graphics)
