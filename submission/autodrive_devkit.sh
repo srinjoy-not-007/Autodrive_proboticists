@@ -231,6 +231,16 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # time-neutral: display 32/0/111.65 s, 100 Xvfb laps / 0 / 117.11 s on
     # hyb675b (111.59 / 118.07 without).
     CTRL_ARGS+=(-p pub_gate_corr:=0.05)
+    # Sep 19: exit-throttle servo with a curvature gate.  The car is 0.5 s/lap
+    # under its own plan accelerating out of the slow corners with the throttle
+    # servo unsaturated; `servo_k_p` over-commands the setpoint by up to
+    # `servo_head_max` m/s while under plan, and `servo_head_kappa` fades that
+    # headroom to zero as |kappa| under the car rises to 0.4 1/m, because
+    # applied mid-corner it runs the car wide on the exit (ungated: 1 collision
+    # in 100 display laps at s 26.7, 6 in 100 Xvfb laps on a slower-apex line).
+    # Gated, on the exit-margin h3 line: 100 display laps / 0 / 108.37 s and
+    # 100 Xvfb laps / 0 / 114.19 s (without: 109.21 / 114.16).
+    CTRL_ARGS+=(-p servo_k_p:=0.5 -p servo_head_max:=0.3 -p servo_head_kappa:=0.4)
     # PICK_BLOCK_BEGIN
     # PICK="${PIT_CREW_PICK:-/home/data/racelines/${SLUG}_pick.json}"
     # if [[ -f "$PICK" ]]; then
