@@ -1,26 +1,24 @@
 # Finals runbook — the day the finals image drops
 
-**SEP 19 23:40 IST — CURRENT STATE, READ FIRST.** The entry is **image v8**
-(`bongracers/roboracer:iros2026-finals`, built 20:44 IST): line
-`finals_mesh_apex_f42k_race.csv` (entrypoint default for `finals_mesh`),
-`barrier_margin 0.34`, `pub_gate_corr 0.05`, `servo_k_p 0.5 servo_head_max 0.3
-servo_head_kappa 0.4 servo_period_max 0.100`, `straight_pp_k 0.5 straight_d 3.0
-straight_kappa 0.10 straight_pp_period_max 0.075`, brake as before. Gates: Xvfb
-100 / 0 / 113.48 s (0.095 s), display 100 / 0 / 107.82 s (v7, byte-identical to
-v8 below a measured period of 0.100 s); image tests 113.20 / 113.23 / 108.33 s,
-12 / 0 each. Known residual: at the slow end of the period lottery (p50 >=
-0.103 s, drawn here only under host load) the s 25-27 exit takes ~1 collision
-per 64 laps; every attempt to buy that back (margin, slower apex, other
-controllers) was worse in band and is recorded in FINALS_TUNING section 3.
-Fallbacks: `-v7` (same without the servo gate), `-v5`. To submit: `docker
-login`, then `docker push bongracers/roboracer:iros2026-finals`, or rebuild
-from main with the command in `docs/FINALS_TUNING.md` section 6 and re-run
-`scripts/test_submission_image.sh` three ways. HOST RULES learned Sep 19:
-offline tools pin BLAS themselves; never start a scored run with host load
-above 6 unless the load is the experiment; leave the mouse alone for the first
-30 s of a display run (the Connection click uses the real pointer); a quiet
+**SEP 20 05:15 IST — CURRENT STATE, READ FIRST.** The entry is **image v9**
+(`bongracers/roboracer:iros2026-finals`): line `finals_mesh_apex_f42k_race.csv`
+(entrypoint default for `finals_mesh`), `barrier_margin 0.34`, `pub_gate_corr
+0.05`, `servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4 servo_period_max
+0.100`, `straight_pp_k 0.5 straight_d 3.0 straight_kappa 0.10
+straight_pp_period_max 0.075`, **`model_cmd_tau 1.0 model_cmd_tau_period_min
+0.080`**, brake as before. Gates: Xvfb 100 / 0 / **111.19 s** (0.095 s), display
+100 / 0 / 108.14 s (v8 config; v9 is byte-identical below 0.076 s and re-checked
+32 / 0 / 108.81 s), slow band 64 / 0 / 112.46 s (0.103 s). Image tests: see
+FINALS_TUNING section 3 (v9 row). Fallbacks: `-v8` (no lag model; 108.33 /
+113.20 s), `-v7`, `-v5`. To submit: `docker login`, then `docker push
+bongracers/roboracer:iros2026-finals`, or rebuild from main with the command in
+`docs/FINALS_TUNING.md` section 6 and re-run `scripts/test_submission_image.sh`
+three ways. HOST RULES learned Sep 19-20: offline tools pin BLAS themselves;
+never start a scored run with host load above 6 unless the load is the
+experiment; leave the mouse alone for the first 30 s of a display run; a quiet
 host draws 0.093 s on Xvfb, three nice-19 busy loops give 0.095-0.097, twelve
-give 0.102-0.105.
+give 0.102-0.105; a silent pip failure once started the stack without
+localization (`run_devkit.sh` now retries and aborts).
 
 **Rewritten September 12, 2026; retopped September 18.** Ordered, copy-pasteable
 procedure for the finals track, which released on **September 16** as

@@ -58,20 +58,22 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-**Sep 19 evening — the finals entry is image v8:** mpc3 on
+**Sep 20 morning — the finals entry is image v9:** mpc3 on
 `finals_mesh_apex_f42k_race.csv` (min-curvature line at a 0.42 m corridor floor
-with small one-sided wall margins where the driven car is tightest, carrying an
-ay 9.0 profile with three slow zones held at safe speeds), `barrier_margin`
-0.34, plus the publish gate, a curvature-gated exit-throttle servo that also
-fades out past a measured sensor period of 0.100 s, and a period-gated
-pure-pursuit blend on the straights. **100 laps / 0 collisions at both sensor
-periods: 107.82 s on a real display (0.058 s), 113.48 s on Xvfb (0.095 s, ~ the
-organisers' period)**; the built image raced 108.33 / 113.20 / 113.23 s, 12 / 0
-each. At the slow end of the period lottery (0.104 s, reachable here only under
-host load) it takes ~1 collision per 64 laps on one corner exit; the servo gate
-cut that from 6 per 64. `docs/FINALS_TUNING.md` has every driven arm. The
-paragraph and table below are the Sep 18 state (114.04 / 119.51 s), kept for the
-record.
+with small one-sided wall margins, ay 9.0 profile with three slow zones held at
+safe speeds), `barrier_margin` 0.34, the publish gate, a curvature-gated exit
+servo that fades out above a measured sensor period of 0.100 s, a period-gated
+pure-pursuit blend on the straights, and — new in v9 — the 0.10 s steering
+command filter modelled inside the solver's rollout above a measured period of
+0.080 s, so the plan pre-steers for its own lag (the tracker was turning in
+half a metre late at both hairpins). **100 laps / 0 collisions at both sensor
+periods: 108.14 s on a real display (0.058 s, where the new term is inert) and
+111.19 s on Xvfb (0.095 s, ~ the organisers' period; v8 was 113.48 s)**, plus 64
+laps / 0 at the slow end of the period lottery (0.103 s, 112.46 s). Every other
+lever driven on Sep 19-20 — more throttle (the wheels spin above ~0.5), later
+braking, open hairpins, joint speed+steer MPC, wider margins, slower apexes —
+was slower or collided; `docs/FINALS_TUNING.md` has every run. The paragraph
+and table below are the Sep 18 state (114.04 / 119.51 s), kept for the record.
 
 Shipping config (Sep 18, finals) = **mpc3** on `finals_mesh_race.csv`, the SRL
 2026 IROS finals track (`2026-iros-compete`), with `rate_adaptive` (timing terms
