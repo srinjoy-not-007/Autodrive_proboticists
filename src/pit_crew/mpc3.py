@@ -80,9 +80,18 @@ def derive_map_prefix(raceline_csv, maps_dir=None):
 
 class MPC3Tracker(Node):
 
+    # Subclass hooks (branch `overhaul-mpcc`).  All three are the identity
+    # here, so mpc3's node behaviour and its published commands are unchanged;
+    # they exist so an alternative control law can reuse this node's whole
+    # ROS plumbing -- callbacks, rate adaptivity, watchdog, teleport recovery,
+    # stuck escape, publish guard -- instead of forking it.
+    NODE_NAME = 'mpc3'
+    MPC_CLASS = MPC3
+    EXTRA_PARAMS = ()
+
     def __init__(self):
-        super().__init__('mpc3')
-        p = self.declare_parameters('', [
+        super().__init__(self.NODE_NAME)
+        p = self.declare_parameters('', list(self.EXTRA_PARAMS) + [
             ('raceline_csv', '/home/data/racelines/track_v2_safe.csv'),
             ('speed_scale', 1.0),
             ('map_prefix', ''),           # '' = derive from the raceline name
@@ -588,8 +597,9 @@ class MPC3Tracker(Node):
                 f"{prefix!r}); pass -p map_prefix:=<prefix> or "
                 f"-p require_barrier:=false to race without it")
 
-        self.mpc = MPC3(
+        self.mpc = self.MPC_CLASS(
             self.path,
+            **self.extra_solver_args(v),
             horizon=int(v['horizon']), step_dt=v['step_dt'],
             min_step_m=v['min_step_m'], iters=int(v['iters']),
             outer=int(v['outer']), w_lat=v['w_lat'], w_yaw=v['w_yaw'],
@@ -1315,6 +1325,8 @@ class MPC3Tracker(Node):
                                     v_meas, 0.0, now=now,
                                     kappa=float(self.path.kappa[i0]),
                                     head_scale=head_scale))
+        th = self.post_throttle(th, info, v_meas if v_meas is not None else v0)
+        cmd = self.post_steer(cmd, info, now, i0, e_lat, e_yaw, v0, cap)
         self.publish(cmd, th)
         self.pub_cte.publish(Float32(data=float(e_lat)))
 
@@ -1343,6 +1355,19 @@ class MPC3Tracker(Node):
                 f'{f", solve over period x{self._slow_solves}" if self._slow_solves else ""})')
 
     # ------------------------------------------------------------------
+    def extra_solver_args(self, v):
+        """Extra keyword arguments for `MPC_CLASS`; empty for mpc3."""
+        return {}
+
+    def post_throttle(self, th, info, v):
+        """Identity for mpc3; `mpcc` overrides it with the solved brake."""
+        return th
+
+    def post_steer(self, cmd, info, now, i0, e_lat, e_yaw, v0, cap):
+        """Identity for mpc3; `ffb` / `fastpub` override it."""
+        return cmd
+
+    # ------------------------------------------------------------------
     def publish(self, steer, throttle):
         # A non-finite command must never reach the actuator, and must never be
         # LATCHED into `self.steer` -- the watchdog republishes that value at
@@ -1367,6 +1392,10 @@ class MPC3Tracker(Node):
                 and self.pose is not None):
             t_rec = self.pickup_time(t_rec, self.pose[3])
         self.act.record(t_rec, self.steer)
+        # Remembered so a subclass republishing the steering between poses
+        # (`fastpub`) can re-send the throttle in force rather than inventing
+        # one.  Nothing on mpc3's own path reads it.
+        self.throttle_last = th
         self.pub_throttle.publish(Float32(data=th))
 
 

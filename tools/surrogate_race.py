@@ -104,11 +104,12 @@ def live_segments(log_path, line_path, bin_m=2.0):
 
 
 def run_one(args, seed, params):
-    rec = os.path.join(args.tmp, 'surrogate_%s_%d_%d_%d.csv'
-                       % (os.path.basename(args.line).replace('.csv', ''),
+    rec = os.path.join(args.tmp, 'surrogate_%s_%s_%d_%d_%d.csv'
+                       % (args.tracker,
+                          os.path.basename(args.line).replace('.csv', ''),
                           int(args.frame * 1000), seed, os.getpid()))
     cmd = [sys.executable, os.path.join(HERE, 'sim_tracker.py'),
-           '--tracker', 'mpc3', '--map', args.map, '--line', args.line,
+           '--tracker', args.tracker, '--map', args.map, '--line', args.line,
            '--laps', str(args.laps), '--frame', str(args.frame),
            '--seed', str(seed), '--plant-fit', '--dump-rec', rec]
     for p in params:
@@ -148,6 +149,9 @@ def main():
                     help="sensor period, s (organisers' box ~0.097, real "
                          'display 0.058, Xvfb 0.088-0.106)')
     ap.add_argument('--laps', type=int, default=32)
+    ap.add_argument('--tracker', default='mpc3',
+                    help='control law to race: mpc3 (shipping) or one of the '
+                         'overhaul candidates mpcc / ffb / fastpub')
     ap.add_argument('--seeds', type=int, default=1,
                     help='independent localization-noise seeds to race')
     ap.add_argument('-r', '--mpc3-param', action='append', default=[],

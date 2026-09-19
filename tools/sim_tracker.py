@@ -72,6 +72,9 @@ from pit_crew.mpc3_core import (ILC, MPC3, GapRider, RateControl,  # noqa: E402
                                 RATE_NOMINAL, RATE_TERMS,
                                 corridor_clearance, gap_feedforward)
 from pit_crew import residual_policy as residual_policy_mod      # noqa: E402
+from pit_crew.mpcc_core import MPCC, MPCC_DEFAULTS               # noqa: E402
+from pit_crew.ffb_core import FFB_DEFAULTS, FFBSteer, envelope_trip  # noqa: E402
+from pit_crew.planreplay import PlanReplay                       # noqa: E402
 from pit_crew.throttle2 import ServoThrottle                     # noqa: E402
 
 DT = 0.001                  # physics step, s
@@ -622,6 +625,8 @@ class MPC3Sim:
 
     name = 'mpc3'
     rate = None                      # solves once per sensor frame ('per_pose')
+    MPC_CLASS = MPC3
+    EXTRA_SOLVER_KEYS = ()
     # `control_mode` 'timer' sets `self.rate` to `control_hz` instead, and then
     # `run()` drives `update()` off the wall clock exactly as it already does
     # for `LegacyMPCSim` -- the plant has always stepped at 1 kHz, so the only
@@ -706,13 +711,13 @@ class MPC3Sim:
                        'nd_mode', 'nd_delay_s', 'dead_tick_c',
                        # s-indexed parameter schedule (OPT-IN, '' = off)
                        'param_schedule', 'sched_blend_m', 'sched_hold_n',
-                       'sched_jump_m', 'v_scale')
+                       'sched_jump_m', 'v_scale') + tuple(self.EXTRA_SOLVER_KEYS)
         skw = {k: kw.pop(k) for k in list(kw) if k in solver_keys}
         for k in ('horizon', 'iters', 'outer', 'sched_hold_n'):
             if k in skw:
                 skw[k] = int(round(skw[k]))
         self.P.update(kw)
-        self.mpc = MPC3(path, **skw)
+        self.mpc = self.MPC_CLASS(path, **skw)
         self.act = Actuator(dead_time=self.P['cmd_dead_time'],
                             steer_tau=self.mpc.cfg['steer_tau'])
         self.filt = PoseFilter(self.act, blend=self.P['pose_blend'],
@@ -947,6 +952,14 @@ class MPC3Sim:
         self._last = (self._last[0], 0.0)
         return self._last
 
+    def post_throttle(self, th, info, v):
+        """Identity for mpc3; `MPCCSim` overrides it with the solved brake."""
+        return th
+
+    def post_steer(self, cmd, info, t, i0, e_lat, e_yaw, v0, cap):
+        """Identity for mpc3; `FFBSim` / `FastPubSim` override it."""
+        return cmd
+
     # -- one control cycle ---------------------------------------------------
     def update(self, t):
         import time
@@ -989,6 +1002,9 @@ class MPC3Sim:
                             / max(v_cap * v_cap, 0.25)))
         cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
                                    committed=committed)
+        # Hook for trackers that replace or re-read the solved angle (ffb,
+        # fastpub); the default is the identity, so mpc3 is byte-identical.
+        cmd = self.post_steer(cmd, info, t, i0, e_lat, e_yaw, v0, cap)
         if self.ilc is not None:
             if (self.idx_prev is not None
                     and self.idx_prev > 0.8 * self.path.n
@@ -1030,6 +1046,9 @@ class MPC3Sim:
                                     0.0, now=t,
                                     kappa=float(self.path.kappa[i0]),
                                     head_scale=head_scale))
+        # Hook for trackers whose SOLVER decides the brake (mpcc); the default
+        # is the identity, so mpc3's command is byte-identical.
+        th = self.post_throttle(th, info, v_meas if v_meas is not None else v0)
         t_rec = t + float(self.P['pub_lag'])
         self.act.record(self.pickup_time(t_rec, ts)
                         if (self.control_mode == 'timer'
@@ -1037,6 +1056,125 @@ class MPC3Sim:
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self._last = (cmd, th)
         return cmd, th
+
+
+# ---------------------------------------------------------------------------
+# the three overhaul candidates (branch `overhaul-mpcc`, Sep 20)
+# ---------------------------------------------------------------------------
+
+class MPCCSim(MPC3Sim):
+    """Candidate A: joint speed-and-steering MPC (`pit_crew.mpcc_core.MPCC`).
+
+    Everything outside the solver is `MPC3Sim`'s, so an A/B against `mpc3` on
+    the same line, plant and seed isolates the control law.  The one structural
+    difference on the output side is deliberate and is the point of the
+    candidate: the SOLVER owns the brake.  `ServoThrottle`'s own `brake_mode`
+    trigger is switched off here, and the exact 0.0 is published when the
+    optimised longitudinal plan asks for more deceleration than
+    `mpcc_brake_a` at the instant the command is in force.
+    """
+
+    name = 'mpcc'
+    MPC_CLASS = MPCC
+    EXTRA_SOLVER_KEYS = tuple(MPCC_DEFAULTS)
+
+    def __init__(self, path, **kw):
+        super().__init__(path, **kw)
+        self._thr_brake_mode = str(self.thr.brake_mode)
+        self.thr.brake_mode = 'none'
+        self.brakes = 0
+
+    def post_throttle(self, th, info, v):
+        if info.get('brake'):
+            th = 0.0
+            self.brakes += 1
+        self.mpc.note_throttle(th, v)
+        return th
+
+
+class FFBSim(MPC3Sim):
+    """Candidate B: curvature-preview feedforward + low-gain feedback.
+
+    The MPC still runs, and still owns the speed plan, the throttle and the
+    corridor -- but the published ANGLE is the cheap law's unless holding it
+    would take the car out of the corridor inside the horizon, in which case
+    the MPC's command is published for that frame.  `ffb_k 0` recovers mpc3.
+    """
+
+    name = 'ffb'
+
+    def __init__(self, path, **kw):
+        super().__init__(path, **kw)
+        self.ffb = FFBSteer(path, **{k: self.P[k] for k in FFB_DEFAULTS
+                                     if k in self.P})
+        for k, v in FFB_DEFAULTS.items():
+            self.P.setdefault(k, v)
+        self.trips = 0
+        self.ffb_calls = 0
+
+    def post_steer(self, cmd, info, t, i0, e_lat, e_yaw, v0, cap):
+        period = float(self.rate_ctl.est.period)
+        cand, _d = self.ffb.command(e_lat, e_yaw, self.act.delta_at(t), i0,
+                                    v0, cap, period)
+        self.ffb_calls += 1
+        trip = abs(float(e_lat)) > float(self.P['ffb_env_e'])
+        if not trip:
+            trip = envelope_trip(self.path, i0, e_lat, e_yaw, cand, v0,
+                                 self.mpc.dt, int(self.P['ffb_env_steps']),
+                                 float(self.P['ffb_env_margin']),
+                                 yaw_gain=self.mpc.cfg['yaw_gain'])
+        if trip:
+            self.trips += 1
+            self.ffb.hold(cmd)
+            return cmd
+        # Keep the solver's own continuity terms referring to what was really
+        # published, or `w_dcmd` charges against a command nobody sent.
+        self.mpc.last_cmd = float(cand)
+        return float(cand)
+
+
+class FastPubSim(MPC3Sim):
+    """Candidate C: re-read the MPC's plan between poses (`PlanReplay`).
+
+    The solve stays on the pose -- that is the difference from
+    `control_mode:=timer`, which re-solved at 20 Hz from a stale pose.  Only
+    the readout walks forward at the wall clock, so the command the bridge
+    latches at the next telemetry tick is the plan's angle for THAT tick.
+    `replay_gain 0` recovers mpc3 exactly.
+    """
+
+    name = 'fastpub'
+
+    def __init__(self, path, **kw):
+        super().__init__(path, **kw)
+        self.P.setdefault('replay_gain', 1.0)
+        self.P.setdefault('replay_max_steps', 0.0)
+        self.P.setdefault('replay_rate_cap', 3.2)
+        self.replay = PlanReplay(gain=float(self.P['replay_gain']),
+                                 max_steps=float(self.P['replay_max_steps']),
+                                 cmd_tau=float(self.mpc.cfg['cmd_tau']),
+                                 rate_cap=float(self.P['replay_rate_cap']))
+
+    def post_steer(self, cmd, info, t, i0, e_lat, e_yaw, v0, cap):
+        pub = (self.mpc._pub[0] if self.mpc._pub is not None
+               else info.get('delta'))
+        if pub is not None:
+            k, frac = self.mpc._apply
+            self.replay.set_plan(pub, t, self.mpc.dt, k + frac, cap, cmd)
+        return cmd
+
+    def watchdog(self, t):
+        out = super().watchdog(t)
+        if out is not None:
+            return out
+        if self.meas is None:
+            return None
+        a = self.replay.angle(t)
+        if a is None:
+            return None
+        self.act.record(t + float(self.P['pub_lag']), a)
+        self._last = (a, self._last[1])
+        return self._last
 
 
 # ---------------------------------------------------------------------------
@@ -1886,7 +2024,8 @@ def main():
     ap.add_argument('--map', default='data/maps/track_v2')
     ap.add_argument('--laps', type=int, default=6)
     ap.add_argument('--tracker', default='both',
-                    choices=('both', 'all', 'mpc', 'mpc2', 'mpc3'))
+                    choices=('both', 'all', 'mpc', 'mpc2', 'mpc3',
+                             'mpcc', 'ffb', 'fastpub'))
     ap.add_argument('--speed-scale', type=float, default=1.0)
     ap.add_argument('--hairpin', default='10,14')
     ap.add_argument('--no-barrier', action='store_true')
@@ -2198,6 +2337,9 @@ def main():
             path.load_corridor(dist, meta)
         tr = (MPC2Sim(path, **kw) if which == 'mpc2' else
               MPC3Sim(path, **kw3) if which == 'mpc3' else
+              MPCCSim(path, **kw3) if which == 'mpcc' else
+              FFBSim(path, **kw3) if which == 'ffb' else
+              FastPubSim(path, **kw3) if which == 'fastpub' else
               LegacyMPCSim(path, **lkw))
         out = run(tr, path, laps=args.laps, dist=dist, meta=meta,
                   pose_noise=args.pose_noise, yaw_noise=args.yaw_noise,
@@ -2240,7 +2382,15 @@ def main():
             per_lap(out)
         if args.speed_diag:
             speed_diag(out, path)
-        if which in ('mpc2', 'mpc3') and getattr(tr, 'solve_ms', None):
+        if which == 'ffb':
+            print(f'  ffb: {tr.ffb_calls} frames, MPC envelope took over '
+                  f'{tr.trips} ({100.0 * tr.trips / max(tr.ffb_calls, 1):.1f}%)')
+        if which == 'fastpub':
+            print(f'  fastpub: {tr.replay.pubs} plan re-reads between poses')
+        if which == 'mpcc':
+            print(f'  mpcc: solver braked on {tr.brakes} frames')
+        if which in ('mpc2', 'mpc3', 'mpcc', 'ffb', 'fastpub') and getattr(
+                tr, 'solve_ms', None):
             sm = np.array(tr.solve_ms)
             print(f'  solve time  median {np.median(sm):.2f} ms  '
                   f'p95 {np.percentile(sm,95):.2f} ms  max {sm.max():.2f} ms')
