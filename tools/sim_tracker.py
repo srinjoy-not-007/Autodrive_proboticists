@@ -163,6 +163,24 @@ GRIP_HI = 1.05
 LAT_TAU = 0.043             # s, lateral first-order pole (tools/lateral_id.py)
 GRIP_AY0 = 7.5              # m/s2 of asked ay above which ax starts to cost
                             # lateral grip (`--plant-grip-c`, default off)
+# BREAKAWAY, measured on the same two logs: the delivery ratio's p50 runs 0.936
+# (ay 6-7), 0.923 (7-8), 0.904 (8-9) and then **0.486** (9-12).  The affine
+# `GRIP_A - GRIP_B*ay` is right to ay ~8.5 and 0.38 too high above 9.  Two
+# independent confirmations: no first-order pole fits the ay > 8 samples at all
+# (rms 0.25 1/m, FLAT in tau, against 0.063 at ay 6-8), and the -explore
+# skidpad reports the tyre holding ~0.9 of asked curvature to 9.9 m/s2 and then
+# collapsing to 0.24-0.35 inside one 0.5 m/s step.
+#
+# The two estimates disagree and the LIVE RECORD breaks the tie.  Fitted to the
+# racing logs the cliff wants to sit at 8.8 with a post-ratio of 0.48; run that
+# way the shipping config -- which has 100 clean live laps at BOTH periods --
+# collides once in 120 surrogate display laps and loses 0.28 s/lap, so 8.8 is
+# too low.  At 9.6 the shipping config is clean and within 0.07 s/lap of live
+# at both periods, which is also where the skidpad puts it.  The 40 racing
+# samples above ay 9 are therefore read as transients, not as steady state.
+GRIP_CLIFF = 9.6            # m/s2 of ASKED ay where breakaway starts
+GRIP_CLIFF_W = 0.8          # m/s2 over which it completes
+GRIP_POST = 0.70            # delivery ratio past it
 # STEERING.  publish -> rack effective lag measured at 0.056 + 0.50 * period
 # (tools/steer_residual_id.py, reproducible to 0.001 s).  In this harness the
 # command is latched at a frame boundary, which already costs 0.5 * period on
@@ -248,7 +266,9 @@ class Plant:
                  frame=FRAME, tick_frac=1.0, brake_at_zero=0.0,
                  lat_law='knee', grip_a=GRIP_A, grip_b=GRIP_B,
                  grip_lo=GRIP_LO, grip_hi=GRIP_HI, lat_tau=0.0,
-                 grip_c=0.0, grip_ay0=GRIP_AY0):
+                 grip_c=0.0, grip_ay0=GRIP_AY0,
+                 grip_cliff=0.0, grip_cliff_w=GRIP_CLIFF_W,
+                 grip_post=GRIP_POST):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
         self.servo_k = float(servo_k)
@@ -287,6 +307,9 @@ class Plant:
         self.lat_tau = float(lat_tau)
         self.grip_c = float(grip_c)
         self.grip_ay0 = float(grip_ay0)
+        self.grip_cliff = float(grip_cliff)
+        self.grip_cliff_w = float(grip_cliff_w)
+        self.grip_post = float(grip_post)
         self.accel = 0.0                 # last longitudinal acceleration, m/s2
 
     def accept_frame(self, t, steer_cmd, throttle):
@@ -338,6 +361,20 @@ class Plant:
                 r -= (self.grip_c * max(0.0, self.accel)
                       * max(0.0, ay_ask - self.grip_ay0))
             r = max(self.grip_lo, min(self.grip_hi, r))
+            if self.grip_cliff > 0.0 and ay_ask > self.grip_cliff:
+                # BREAKAWAY.  The affine ratio holds to ay ~8.5 and then falls
+                # off a cliff: measured delivery ratio p50 is 0.936 at ay 6-7,
+                # 0.923 at 7-8, 0.904 at 8-9 and 0.486 at 9-12.  The skidpad in
+                # the -explore world says the same thing from the other side
+                # ("holds ~0.9 of asked curvature to 9.9 m/s2, then collapses
+                # to 0.24-0.35 within one 0.5 m/s step").  No value of the
+                # first-order pole fits the ay > 8 samples at all -- the rms is
+                # 0.25 1/m and FLAT in tau -- which is what a missing cliff
+                # looks like.  This is the only identified mechanism that makes
+                # the car run wide on a corner exit the way the live logs do.
+                f = min(1.0, (ay_ask - self.grip_cliff)
+                        / max(self.grip_cliff_w, 1e-6))
+                r = r * (1.0 - f) + self.grip_post * f
             k_ss = k_ask * r
         else:
             ay = self.v * self.v * abs(k_ask) * GRIP_RATIO
@@ -1912,6 +1949,11 @@ def main():
                          'per (m/s2 of ax) x (m/s2 of asked ay above '
                          '--plant-grip-ay0).  Measured 0.06 on 82 samples.')
     ap.add_argument('--plant-grip-ay0', type=float, default=GRIP_AY0)
+    ap.add_argument('--plant-grip-cliff', type=float, default=0.0,
+                    help='asked ay (m/s2) at which lateral grip BREAKS AWAY; '
+                         '0 = off.  --plant-fit sets the measured 8.8.')
+    ap.add_argument('--plant-grip-cliff-w', type=float, default=GRIP_CLIFF_W)
+    ap.add_argument('--plant-grip-post', type=float, default=GRIP_POST)
     ap.add_argument('--plant-lat-tau', type=float, default=0.0,
                     help='lateral first-order pole, s (identified 0.043)')
     ap.add_argument('--plot', default='')
@@ -1952,6 +1994,8 @@ def main():
             args.plant_lat_law = 'fit'
         if args.plant_lat_tau <= 0.0:
             args.plant_lat_tau = LAT_TAU
+        if args.plant_grip_cliff <= 0.0:
+            args.plant_grip_cliff = GRIP_CLIFF
         if args.plant_dead is None:
             args.plant_dead = FIT_DEAD
         if args.plant_brake_at_zero <= 0.0:
@@ -2001,7 +2045,8 @@ def main():
     act_cfg = None
     if (args.plant_actuator != 'slew' or args.plant_steer_rate is not None
             or args.plant_dead is not None or args.plant_lat_law != 'knee'
-            or args.plant_lat_tau > 0.0 or args.plant_grip_c > 0.0):
+            or args.plant_lat_tau > 0.0 or args.plant_grip_c > 0.0
+            or args.plant_grip_cliff > 0.0):
         act_cfg = dict(actuator=args.plant_actuator,
                        steer_rate=args.plant_steer_rate,
                        tau=args.plant_tau, dead=args.plant_dead,
@@ -2009,6 +2054,9 @@ def main():
                        lat_law=args.plant_lat_law,
                        grip_a=args.plant_grip_a, grip_b=args.plant_grip_b,
                        grip_c=args.plant_grip_c, grip_ay0=args.plant_grip_ay0,
+                       grip_cliff=args.plant_grip_cliff,
+                       grip_cliff_w=args.plant_grip_cliff_w,
+                       grip_post=args.plant_grip_post,
                        lat_tau=args.plant_lat_tau)
 
     drop_cfg = (dict(every=args.drop_every, n=args.drop_n,

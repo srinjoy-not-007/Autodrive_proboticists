@@ -114,6 +114,33 @@ def test_friction_ellipse_bites_above_its_threshold():
     assert abs(b.kappa) / k_ask == pytest.approx(want, rel=1e-6)
 
 
+def test_grip_cliff_is_off_by_default_and_bites_where_it_was_measured():
+    assert _plant(lat_law='fit').grip_cliff == 0.0
+    k_ask = abs(math.tan(0.35) / L)
+    # below the cliff: the affine ratio, untouched
+    below = _plant(delta=0.35, v=2.4, lat_law='fit', grip_cliff=ST.GRIP_CLIFF)
+    below.step(0.0)
+    ay = 2.4 ** 2 * k_ask
+    assert ay < ST.GRIP_CLIFF
+    assert abs(below.kappa) / k_ask == pytest.approx(
+        ST.GRIP_A - ST.GRIP_B * ay, rel=1e-6)
+    # well above it: the post-breakaway ratio, roughly half
+    above = _plant(delta=0.35, v=3.2, lat_law='fit', grip_cliff=ST.GRIP_CLIFF)
+    above.step(0.0)
+    ay2 = 3.2 ** 2 * k_ask
+    assert ay2 > ST.GRIP_CLIFF + ST.GRIP_CLIFF_W
+    assert abs(above.kappa) / k_ask == pytest.approx(ST.GRIP_POST, rel=1e-6)
+    assert ST.GRIP_POST < 0.8                 # it really is a cliff
+
+
+def test_grip_cliff_constants_sit_between_the_two_measurements():
+    # the racing logs want 8.8 (ratio p50 0.904 at ay 8-9, 0.486 at 9-12); the
+    # -explore skidpad puts the collapse at 9.9; 8.8 contradicts the shipping
+    # config's 100 clean live laps, so the constant sits at the skidpad end.
+    assert 9.0 <= ST.GRIP_CLIFF <= 10.0
+    assert 0.40 <= ST.GRIP_POST <= 0.75
+
+
 def test_brake_at_zero_is_the_measured_constant():
     assert ST.FIT_BRAKE_AT_ZERO == pytest.approx(4.15)
     p = _plant(v=4.0, lat_law='fit', brake_at_zero=ST.FIT_BRAKE_AT_ZERO,
