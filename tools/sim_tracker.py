@@ -143,6 +143,78 @@ GRIP_RATIO = 0.95           # of asked curvature, well inside the envelope
 AY_MAX = 6.5
 AY_KNEE = 0.85              # fraction of AY_MAX where saturation starts
 
+# --- the LOG-FITTED plant (`--plant-fit`), Sep 19 -------------------------
+# Identified on the two shipping 100-lap logs (race_20260919_044701 at 0.058 s
+# and _050630 at 0.094 s), ground truth only, by tools/fit_plant.py.  Nothing
+# below runs unless `--plant-fit` or an explicit `--plant-lat-law fit` asks.
+#
+# LATERAL.  Achieved path curvature over the curvature the RACK angle asks for,
+# binned by asked lateral acceleration (n = 18 187 samples with |kappa| > 0.15
+# and v > 1.5): 1.019 at ay 2-4, 0.964 at 4-6, 0.933 at 6-8, 0.872 at 8-11.
+# There is NO knee in that range and no measurable dependence on longitudinal
+# acceleration (ratio 0.94-0.97 across every ax tercile inside ay 4-9), so the
+# 'knee' law's hard 6.5 m/s2 ceiling is simply wrong: it under-delivers 5-8 %
+# of curvature in the hairpins and costs ~1.4 s of harness lap time.
+GRIP_A = 1.050              # delivery ratio at ay -> 0
+GRIP_B = 0.0180             # ratio lost per m/s2 of asked ay
+GRIP_LO = 0.78
+GRIP_HI = 1.05
+LAT_TAU = 0.043             # s, lateral first-order pole (tools/lateral_id.py)
+GRIP_AY0 = 7.5              # m/s2 of asked ay above which ax starts to cost
+                            # lateral grip (`--plant-grip-c`, default off)
+# STEERING.  publish -> rack effective lag measured at 0.056 + 0.50 * period
+# (tools/steer_residual_id.py, reproducible to 0.001 s).  In this harness the
+# command is latched at a frame boundary, which already costs 0.5 * period on
+# average, so the residual constant the plant owes is exactly 0.056 s.
+FIT_DEAD = 0.056
+# LONGITUDINAL.  `throttle == 0.0` decel measured against speed: 4.99 (v 2-3),
+# 5.07 (3-4), 5.29 (4-5), 5.74 (5-7) m/s2.  The plant adds `drag * v` on top,
+# so the constant part is 4.15, not 4.6.
+FIT_BRAKE_AT_ZERO = 4.15
+# POSE.  est - truth at the pose's OWN stamp, body frame, both logs:
+# along +0.100 m (p50, identical at both periods), lateral unbiased on the
+# straight and -0.038 m OUTWARD at |kappa| > 1, std 0.029 m with an
+# autocorrelation time of 0.3-0.8 s.  The pose's age at the row that carries it
+# is exactly one sensor period.
+FIT_POSE_LON_BIAS = 0.100
+FIT_POSE_BIAS_INSIDE = -0.055
+FIT_POSE_NOISE = 0.0095
+FIT_POSE_LATENCY = 0.044
+# ENCODER.  The speed channel the live bridge delivers tracks the IPS ground
+# speed with ONE sample of delay and no measurable extra filter: correlation
+# against truth peaks at lag 1-2 samples (0.985/0.986) with an rms of
+# 0.32-0.34 m/s and a mean bias of +0.008 / -0.116 m/s, and the quasi-steady
+# wheel/ground ratio is 1.020 (0.058 s) / 1.003 (0.094 s).  The historical
+# harness modelled it as a 0.193 s first-order lag with 3.9 % slip, which
+# over-reads by up to 1.43 m/s in a braking zone where the live channel stays
+# inside 0.55 -- and `brake_mode:=zero` then holds the brake for 4 m where the
+# live car holds it for 1.5.  That single defect was most of the harness's
+# 1.4 s/lap corner-entry pessimism.
+FIT_ENC_ALPHA = 1.0         # no extra pole; the frame quantum IS the delay
+FIT_ENC_SLIP = 1.01
+# The pose error is heteroscedastic in curvature (both logs, est-truth at the
+# pose's own stamp):
+#   |kappa|     lat mean (signed inside)    lat std
+#   < 0.2            -0.002                 0.009 / 0.010
+#   0.5-1.0          -0.017 .. -0.023       0.021 / 0.030
+#   > 1.0            -0.040 .. -0.059       0.026 / 0.057
+# so the straight is almost noiseless and the hairpins carry 4-6x the scatter
+# plus a systematic OUTWARD offset.  A single constant misses both ends.
+FIT_POSE_NOISE_K = 0.040    # extra std at |kappa| >= FIT_POSE_BIAS_KAPPA
+FIT_POSE_BIAS_KAPPA = 1.2   # 1/m at which the bias and the extra noise saturate
+# Telemetry gaps: 0.50 % of frames at 0.058 s are longer than 1.5x the median
+# (p999 0.163 s, max 0.290) against 0.02 % at 0.094 s (p999 0.128).  One frame
+# lost every ~200 at the display period, essentially none at the Xvfb period.
+FIT_DROP_EVERY_058 = 11.6   # s between single dropped frames at 0.058
+# Heading: the estimate's yaw error is 0.009 rad std on the straight, 0.012-
+# 0.019 in a hairpin, with a systematic -0.017 rad (outward) mean there.  Small
+# -- 0.015 rad over one dead time at 2.6 m/s is 0.01 m -- but the harness had
+# it at exactly zero.
+FIT_YAW_NOISE = 0.013
+# Sensor-period jitter, measured: p5-p95 0.057-0.060 at a 0.058 s median and
+# 0.091-0.098 at 0.094.
+FIT_FRAME_JITTER = 0.0015
+
 
 # ---------------------------------------------------------------------------
 # plant
@@ -172,7 +244,10 @@ class Plant:
     def __init__(self, x, y, yaw, v=0.0, ay_max=AY_MAX, servo_k=SERVO_K,
                  a_accel=SERVO_A, a_brake=SERVO_A, drag=0.0,
                  actuator='slew', steer_rate=None, tau=0.0, dead=None,
-                 frame=FRAME, tick_frac=1.0, brake_at_zero=0.0):
+                 frame=FRAME, tick_frac=1.0, brake_at_zero=0.0,
+                 lat_law='knee', grip_a=GRIP_A, grip_b=GRIP_B,
+                 grip_lo=GRIP_LO, grip_hi=GRIP_HI, lat_tau=0.0,
+                 grip_c=0.0, grip_ay0=GRIP_AY0):
         self.x, self.y, self.yaw, self.v = x, y, yaw, v
         self.ay_max = float(ay_max)
         self.servo_k = float(servo_k)
@@ -202,6 +277,16 @@ class Plant:
         # was produced with this off, so it stays off by default.
         self.brake_at_zero = float(brake_at_zero)
         self._tick_budget = 0.0          # rad left in this telemetry tick
+        # --- OPT-IN log-fitted lateral law ('knee' = the historical one) ----
+        self.lat_law = str(lat_law)
+        self.grip_a = float(grip_a)
+        self.grip_b = float(grip_b)
+        self.grip_lo = float(grip_lo)
+        self.grip_hi = float(grip_hi)
+        self.lat_tau = float(lat_tau)
+        self.grip_c = float(grip_c)
+        self.grip_ay0 = float(grip_ay0)
+        self.accel = 0.0                 # last longitudinal acceleration, m/s2
 
     def accept_frame(self, t, steer_cmd, throttle):
         """The bridge picks the latched command up; it bites `dead` later."""
@@ -232,13 +317,42 @@ class Plant:
         self.delta = max(-vehicle.MAX_STEER, min(vehicle.MAX_STEER, self.delta))
 
         k_ask = math.tan(self.delta) / vehicle.WHEELBASE
-        ay = self.v * self.v * abs(k_ask) * GRIP_RATIO
-        knee = AY_KNEE * self.ay_max
-        if ay > knee:
-            span = max(self.ay_max - knee, 1e-6)
-            ay = knee + span * (1.0 - math.exp(-(ay - knee) / span))
-        self.kappa = (math.copysign(ay, k_ask) / max(self.v * self.v, 1e-3)
-                      if abs(k_ask) > 1e-9 else 0.0)
+        if self.lat_law == 'fit':
+            # Delivery ratio identified from the live logs: achieved path
+            # curvature over the curvature the rack angle asks for, as an
+            # affine function of the ASKED lateral acceleration.  There is no
+            # knee below ~10 m/s2 in the data (see tools/fit_plant.py), which
+            # is the opposite of the 'knee' law's hard 6.5 ceiling.
+            ay_ask = self.v * self.v * abs(k_ask)
+            r = self.grip_a - self.grip_b * ay_ask
+            if self.grip_c > 0.0:
+                # OPT-IN friction-ellipse coupling.  Measured only in the far
+                # corner of the envelope, and on 82 samples: at asked ay 8-10
+                # the delivery ratio is 0.922 below ax 1.5 m/s2 and 0.744-0.825
+                # above it, while the same ax makes no difference at all below
+                # ay 8 (0.93-0.97 flat across every ax band).  Off by default
+                # because 82 samples is thin evidence, even though it is the
+                # only measured mechanism for "running wide tracks EXIT
+                # ACCELERATION, not apex speed".
+                r -= (self.grip_c * max(0.0, self.accel)
+                      * max(0.0, ay_ask - self.grip_ay0))
+            r = max(self.grip_lo, min(self.grip_hi, r))
+            k_ss = k_ask * r
+        else:
+            ay = self.v * self.v * abs(k_ask) * GRIP_RATIO
+            knee = AY_KNEE * self.ay_max
+            if ay > knee:
+                span = max(self.ay_max - knee, 1e-6)
+                ay = knee + span * (1.0 - math.exp(-(ay - knee) / span))
+            k_ss = (math.copysign(ay, k_ask) / max(self.v * self.v, 1e-3)
+                    if abs(k_ask) > 1e-9 else 0.0)
+        if self.lat_tau > 0.0:
+            # First-order lateral transient, tau 0.043 s identified by
+            # tools/lateral_id.py (rms 0.106 1/m).
+            self.kappa += (1.0 - math.exp(-DT / self.lat_tau)) * (k_ss
+                                                                  - self.kappa)
+        else:
+            self.kappa = k_ss
 
         if self.brake_at_zero > 0.0 and self.throttle == 0.0 and self.v > 0.0:
             a = -self.brake_at_zero
@@ -247,6 +361,7 @@ class Plant:
             a = max(-self.a_brake, min(self.a_accel,
                                        self.servo_k * (v_tgt - self.v)))
         a -= self.drag * self.v
+        self.accel = a
         self.v = max(-3.0, self.v + a * DT)
         yr = self.v * self.kappa
         ym = self.yaw + 0.5 * yr * DT
@@ -398,7 +513,8 @@ class MPC3Sim:
                       cap_use_measured=True, max_predict_s=0.35,
                       v_meas_min=0.2, v_start=0.5, servo_k=18.0, servo_drag=0.273,
                       servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
-                      servo_head_max=0.5, servo_u_max=0.60, servo_v_floor=1.0,
+                      servo_head_max=0.5, servo_head_kappa=0.0,
+                      servo_u_max=0.60, servo_v_floor=1.0,
                       servo_gain=24.6,
                       # --- OPT-IN real brake (see throttle2) ---------------
                       brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
@@ -475,7 +591,8 @@ class MPC3Sim:
             K=self.P['servo_k'], drag=self.P['servo_drag'],
             tau=self.P['cmd_dead_time'], a_auth=self.P['servo_a_auth'],
             a_accel=self.P['servo_a_accel'], k_p=self.P['servo_k_p'],
-            head_max=self.P['servo_head_max'], lead_max=0.0,
+            head_max=self.P['servo_head_max'],
+            head_kappa=self.P['servo_head_kappa'], lead_max=0.0,
             ay_limit=self.mpc.cfg['ay_budget'], v_floor=self.P['servo_v_floor'],
             u_max=self.P['servo_u_max'], servo_gain=self.P['servo_gain'],
             brake_mode=str(self.P['brake_mode']),
@@ -1113,7 +1230,8 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         pose_lon_bias=0.0, teleport=None,
         pose_speed_cap=0.0, pose_lag_tau=0.5, pose_lag_kappa=0.2, actuator=None,
         publish=None, pose_age_frames=0.0, pose_age_s=0.0,
-        steer_fb_lag=0.0, drop=None, watchdog_hz=20.0):
+        steer_fb_lag=0.0, drop=None, watchdog_hz=20.0,
+        pose_noise_kappa=0.0, pose_bias_kappa=0.4, frame_jitter=0.0):
     """Drive ``tracker`` round ``path`` until ``laps`` are complete.
 
     Localization error is modelled as an Ornstein-Uhlenbeck process in the
@@ -1242,7 +1360,19 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
         elif t >= next_frame - 1e-9:
             gyro = plant.v * plant.kappa
             sd = math.sqrt(max(1.0 - beta * beta, 1e-9))
-            err_lat = beta * err_lat + rng.normal(0, pose_noise * sd)
+            # OPT-IN (`pose_noise_kappa` 0 = off): the localization lateral
+            # error is NOT homoscedastic.  Measured on both shipping logs, its
+            # std runs 0.009-0.010 m where |kappa| < 0.2 and 0.035-0.057 m
+            # where |kappa| > 1.0 -- the scan stops observing lateral position
+            # where the corridor curves away.  A single constant either
+            # over-noises the straight or under-noises the hairpin, and the
+            # hairpin is where every marginal arm fails.
+            noise_lat = pose_noise
+            if pose_noise_kappa > 0.0:
+                kr = abs(float(path.kappa[last_i]))
+                noise_lat = pose_noise + pose_noise_kappa * min(
+                    1.0, kr / max(pose_bias_kappa, 1e-6))
+            err_lat = beta * err_lat + rng.normal(0, noise_lat * sd)
             err_yaw = beta * err_yaw + rng.normal(0, yaw_noise * sd)
             bias = 0.0
             if pose_bias_inside:
@@ -1252,7 +1382,7 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
                 # the filter alike.  Inside is the sign of the curvature.
                 kr = float(path.kappa[last_i])
                 bias = (math.copysign(pose_bias_inside, kr)
-                        * min(1.0, abs(kr) / 0.4))
+                        * min(1.0, abs(kr) / max(pose_bias_kappa, 1e-6)))
             # A LONGITUDINAL pose error is not the same failure as a lateral
             # one and the harness modelled only the lateral kind.  Measured
             # est-truth along the car's own axis at the s 11.3 hairpin: -0.21/
@@ -1313,7 +1443,12 @@ def run(tracker, path, laps=6, dist=None, meta=None, seed=0, pose_noise=0.0,
             if pub_on:
                 steer_cmd, throttle = latch(pub_q, t, (steer_cmd, throttle))
             plant.accept_frame(t, steer_cmd, throttle)
-            next_frame += frame
+            # OPT-IN (`frame_jitter` 0 = off, the exactly-periodic sensor this
+            # harness has always had).  The live period is not a constant: at
+            # 0.094 s it runs 0.091-0.098 p5-p95, at 0.058 s 0.057-0.060.
+            next_frame += (frame if frame_jitter <= 0.0 else
+                           max(0.2 * frame,
+                               frame + rng.normal(0.0, frame_jitter)))
         while pending and pending[0][0] <= t:
             _, ts, nx, ny, nyaw = pending.pop(0)
             tracker.on_pose(t, ts, nx, ny, nyaw)
@@ -1638,6 +1773,16 @@ def main():
     ap.add_argument('--pose-lag-kappa', type=float, default=0.2,
                     help='curvature 1/m at which the lag recovers at full rate')
     ap.add_argument('--pose-noise', type=float, default=0.0)
+    ap.add_argument('--frame-jitter', type=float, default=0.0,
+                    help='OPT-IN, 0=off: 1-sigma gaussian jitter on the sensor '
+                         'period, s (measured 0.0020 at 0.094, 0.0010 at 0.058)')
+    ap.add_argument('--pose-noise-kappa', type=float, default=0.0,
+                    help='OPT-IN, 0=off: EXTRA lateral pose-noise std at high '
+                         'curvature, m.  The measured error is 0.009 m on the '
+                         'straight and 0.03-0.06 m in a hairpin.')
+    ap.add_argument('--pose-bias-kappa', type=float, default=0.4,
+                    help='curvature 1/m at which --pose-bias-inside and '
+                         '--pose-noise-kappa saturate (measured 1.2)')
     ap.add_argument('--yaw-noise', type=float, default=0.0)
     ap.add_argument('--noise-tau', type=float, default=0.5,
                     help='correlation time of the localization error, s')
@@ -1722,6 +1867,23 @@ def main():
                          'throttle command is exactly 0.0, as the simulator '
                          'does (locked ~4.6, modulated up to ~7.1). '
                          '0 = off, the historical servo-only plant.')
+    ap.add_argument('--plant-fit', action='store_true',
+                    help='OPT-IN: the whole LOG-FITTED plant and sensor chain '
+                         '(see GRIP_A..FIT_POSE_LATENCY).  Implies '
+                         '--plant-realistic.  Explicit flags still win.')
+    ap.add_argument('--plant-lat-law', default='knee', choices=('knee', 'fit'),
+                    help="plant lateral law: 'knee' is the historical "
+                         'saturating ay ceiling, "fit" the delivery ratio '
+                         'identified from the live logs')
+    ap.add_argument('--plant-grip-a', type=float, default=GRIP_A)
+    ap.add_argument('--plant-grip-b', type=float, default=GRIP_B)
+    ap.add_argument('--plant-grip-c', type=float, default=0.0,
+                    help='OPT-IN, 0=off: friction-ellipse coupling, ratio lost '
+                         'per (m/s2 of ax) x (m/s2 of asked ay above '
+                         '--plant-grip-ay0).  Measured 0.06 on 82 samples.')
+    ap.add_argument('--plant-grip-ay0', type=float, default=GRIP_AY0)
+    ap.add_argument('--plant-lat-tau', type=float, default=0.0,
+                    help='lateral first-order pole, s (identified 0.043)')
     ap.add_argument('--plot', default='')
     # OPT-IN, '' = off: write the raw per-tick record of the LAST tracker run
     # to a CSV (columns: t,x,y,yaw,v,delta,s,e,clear,lap,thr_plant,thr_cmd,
@@ -1751,6 +1913,39 @@ def main():
     # `--plant-realistic` is one switch for the whole measured sensor+plant
     # chain, because the parts are not independent: an identified plant with a
     # perfect speed sensor is not the live car either.  Explicit flags still win.
+    # `--plant-fit` is the whole identified chain in one switch.  It only ever
+    # fills in values the caller left at their defaults, so an explicit flag
+    # still wins and nothing changes without the switch.
+    if args.plant_fit:
+        args.plant_realistic = True
+        if args.plant_lat_law == 'knee':
+            args.plant_lat_law = 'fit'
+        if args.plant_lat_tau <= 0.0:
+            args.plant_lat_tau = LAT_TAU
+        if args.plant_dead is None:
+            args.plant_dead = FIT_DEAD
+        if args.plant_brake_at_zero <= 0.0:
+            args.plant_brake_at_zero = FIT_BRAKE_AT_ZERO
+        if args.pose_lon_bias == 0.0:
+            args.pose_lon_bias = FIT_POSE_LON_BIAS
+        if args.pose_bias_inside == 0.0:
+            args.pose_bias_inside = FIT_POSE_BIAS_INSIDE
+        if args.pose_noise == 0.0:
+            args.pose_noise = FIT_POSE_NOISE
+        if args.pose_noise_kappa == 0.0:
+            args.pose_noise_kappa = FIT_POSE_NOISE_K
+        if args.pose_bias_kappa == 0.4:
+            args.pose_bias_kappa = FIT_POSE_BIAS_KAPPA
+        if args.yaw_noise == 0.0:
+            args.yaw_noise = FIT_YAW_NOISE
+        if args.frame_jitter == 0.0:
+            args.frame_jitter = FIT_FRAME_JITTER
+        if args.pose_latency == POSE_LATENCY:
+            args.pose_latency = FIT_POSE_LATENCY
+        if args.enc_alpha <= 0.0:
+            args.enc_alpha = FIT_ENC_ALPHA
+        if args.enc_slip == 1.0:
+            args.enc_slip = FIT_ENC_SLIP
     enc_alpha = args.enc_alpha
     enc_slip = args.enc_slip
     log_enc_alpha = args.log_enc_alpha
@@ -1775,11 +1970,16 @@ def main():
     # stays reproducible without the flag.
     act_cfg = None
     if (args.plant_actuator != 'slew' or args.plant_steer_rate is not None
-            or args.plant_dead is not None):
+            or args.plant_dead is not None or args.plant_lat_law != 'knee'
+            or args.plant_lat_tau > 0.0 or args.plant_grip_c > 0.0):
         act_cfg = dict(actuator=args.plant_actuator,
                        steer_rate=args.plant_steer_rate,
                        tau=args.plant_tau, dead=args.plant_dead,
-                       tick_frac=args.plant_tick_frac)
+                       tick_frac=args.plant_tick_frac,
+                       lat_law=args.plant_lat_law,
+                       grip_a=args.plant_grip_a, grip_b=args.plant_grip_b,
+                       grip_c=args.plant_grip_c, grip_ay0=args.plant_grip_ay0,
+                       lat_tau=args.plant_lat_tau)
 
     drop_cfg = (dict(every=args.drop_every, n=args.drop_n,
                      block_cmds=args.drop_block_cmds,
@@ -1821,7 +2021,10 @@ def main():
                                  if args.plant_brake_at_zero > 0.0 else {}))
                          or None),
                   actuator=act_cfg, drop=drop_cfg,
-                  watchdog_hz=args.watchdog_hz)
+                  watchdog_hz=args.watchdog_hz,
+                  pose_noise_kappa=args.pose_noise_kappa,
+                  pose_bias_kappa=args.pose_bias_kappa,
+                  frame_jitter=args.frame_jitter)
         report(which, out, path, lo, hi)
         if drop_cfg:
             g = out['gap']
