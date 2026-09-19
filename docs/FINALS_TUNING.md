@@ -138,6 +138,8 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_exm10h3_x32` / `_disp` | **`finals_mesh_exitm_m10t6_h3_race.csv`**: exit-margin geometry, ay 9.0, safe speeds at s 17.5-21.5, 36-40, 42-44.7+0-2 (ideal 10.48) | Xvfb **114.990 s**; display **109.360 s**, both + 0 | 32 / 0 each (the display log's lap-32 event is the end-of-run stop: cmd and steering exactly 0 through the hairpin) | wall min anywhere: 0.35 m Xvfb, 0.25 m display | **BEST CLEAN CANDIDATE AT BOTH PERIODS** (shipping 117.11 / 111.38). In the 100-lap Xvfb gate (`race_20260919_010749`, `_011513`) |
 | `fin_exm10h3_x100` / `_disp100` | exit-margin h3 line, BOTH 100-lap gates | Xvfb **114.158 s**; display **109.210 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 07:30 IST)**: entrypoint `LINE` for finals_mesh, image v4 built (v3 kept as `:iros2026-finals-v3`). Shipping was 117.11 / 111.38 (`race_20260919_012258`, `_014335`) |
 | image v4 (Sep 19 08:00 IST) | built image with the exit-margin h3 line | Xvfb default **115.143**, Xvfb cmd **114.353**, display **109.548 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v3: 117.59 / 117.04 / 111.87, kept as `:iros2026-finals-v3`) |
+| `fin_exm_h4_x32` (Xvfb) | exit-margin h3 with the FIRST hairpin at full ay 9 (`_h4`, ideal 10.37) | 114.085 s + 0 | 32 / 0 | — | clean, no gain over h3's 114.16 — extra apex speed at s 19 does not convert at 0.098. h5 / h6 half-steps not driven (superseded) (`race_20260919_021641`) |
+| `fin_e18a075_x32` (Xvfb 0.093) | later-apex geometry `exitm2_e18n10`, last hairpin at 75 % of the ay-9 raise | 117.034 + 40 s | 26 / **10** | every hit the last hairpin exit again (s 44.25-44.35, −0.30..−0.39) plus a rebound next lap at s 0.3-0.7 | **REJECTED — the last hairpin takes no more than its safe speed at the organisers' period**, whatever the geometry (+0.10 m wall, apex R 0.637). The a10 rung was not driven (`race_20260919_022735`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -1018,6 +1020,16 @@ speed estimate forever; int-truncated grid index below the map origin; NaN pose
 publish; zero `sigma_hit`/`beam_temp`. The log's `speed` column is the LOGGER's
 left-wheel filter, not localization's estimator — the "enc_tau lags p2 −1.1 m/s"
 note was about the logger. Always pass `LOC_ARGS` on live arms (done tonight).
+
+**Where the gated h3 line still loses time (Sep 19 08:45, 100-lap logs at each
+period, 2 m segments).** It is AT its ideal almost everywhere at both periods.
+The one period-dependent loss is the FIRST hairpin: s 18-20 ideal 0.90 / display
+0.91 / **Xvfb 1.11 s** (+0.2 s/lap = 2 s/race). At 0.098 s the car turns in later
+(|steer| 0.06-0.10 at s 17.5-18 vs 0.12-0.17), runs wider at the apex (−0.18 vs
+−0.10 at s 19.5) and carries 1.63 vs 1.85 m/s through it. Cause: the steering
+readout lead is 4.0 sensor periods on the display and 2.8 on Xvfb. The Sep 19
+lead-law test equalised them DOWN to 2.8 (slower at both); `lead_tk 4.0`
+equalises UP and leaves the display unchanged by construction — in flight.
 
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
