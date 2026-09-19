@@ -1,0 +1,51 @@
+{
+ "line": "finals_mesh_hyb675b_race.csv",
+ "map": "finals_mesh",
+ "total_s": 44.71081127190853,
+ "blend_m": 1.561,
+ "windows": [
+  {
+   "name": "hp19_entry",
+   "s0": 16.26,
+   "s1": 19.0,
+   "barrier_margin": 0.4435,
+   "note": "barrier_margin 0.4435, not the baseline's 0.50: the BO moved it DOWN and the window's leading edge 0.26 m LATER. The barrier is clipped out at the apex so this acts as an outward bias on the approach; at 0.44 the bias is smaller and the entry is quicker for an entry cut that is unchanged (p50 0.063 vs 0.061, p95 0.199 vs 0.197 at 0.098 over 192 laps)."
+  },
+  {
+   "name": "hp19_exit",
+   "s0": 19.2,
+   "s1": 21.0,
+   "v_mod_min": 0.7642,
+   "note": "v_mod_min 0.7642 on the hairpin EXIT only. The e_free/k_e cross-track cut is the only _speed_plan term that binds on this track and it clips here while the car is already under plan. Costs 0.032 m of the s 21 bin's p2 clearance at 0.058 -- the largest single price in this file."
+  },
+  {
+   "name": "med_corners",
+   "s0": 21.5,
+   "s1": 32.0,
+   "v_scale": 1.0695,
+   "note": "v_scale 1.0695 over s 21.5-32, the third of the lap no window touched and no collision has ever happened in. It STOPS at 32, before the s 33.7 brake zone, so the raise cannot arrive as entry speed at s 37 -- the per-segment-optimism failure that killed lmpc_a/b/d/e."
+  },
+  {
+   "name": "c37_entry",
+   "s0": 33.7,
+   "s1": 37.5,
+   "thr_brake_lead_s": 0.1165,
+   "note": "thr_brake_lead_s 0.1165 (global 0.05) starting 0.8 m EARLIER than the baseline's 34.5. This is what pays for everything else: s 36-39 clearance 0.200 -> 0.224 m at 0.098 and 0.112 -> 0.158 m at 0.058, and the corner is 0.08 s faster because the car stops arriving hot."
+  },
+  {
+   "name": "hp43_entry",
+   "s0": 39.73,
+   "s1": 43.5,
+   "thr_brake_lead_s": 0.0171,
+   "note": "thr_brake_lead_s 0.0171, i.e. the period-stretched global lead almost removed, from 0.8 m earlier than the baseline. s 42-44 passage 1.010 -> 0.940 s at 0.098."
+  },
+  {
+   "name": "hp43_apex",
+   "s0": 43.2,
+   "s1": 44.5,
+   "v_scale": 1.0994,
+   "note": "v_scale 1.0994 over the s 43.6 apex, which the lateral-jerk limiter sets (the plan asks ay 2.7 where the line's budget is 6.75), not grip. Costs 0.028 m of the s 43 bin's p2 at 0.058."
+  }
+ ],
+ "note": "s-indexed mpc3 parameter schedule for the SRL 2026 IROS track, found by a CONSTRAINED BAYESIAN OPTIMISATION over 117 harness evaluations (tools/sched_bo.py; Matern-5/2 ARD GP + cEI, Gardner et al. ICML 2014), in the shape Froehlich et al. (arXiv:2110.02710) use to tune an MPC for a racing context: here the context is the SENSOR PERIOD, so the objective is the median lap at the organisers' 0.098 s while zero collisions and the baseline's margins are HARD constraints at 0.098 AND 0.058. Objective J = lap_med(0.098) + 10*max(0, 0.10 - min clearance) + 10*collisions. Harness: tools/sim_tracker.py on finals_mesh_hyb675b_race.csv, --plant-realistic --plant-dead 0.045 --plant-brake-at-zero 4.6 --pose-noise 0.03 --pose-latency 0.044, frozen finals args plus pub_gate_corr 0.05 and NO weave notch. Confirmed at 16 seeds x 12 laps = 192 laps per cell at BOTH periods, 0 collisions in all four cells. THE COST, measured: the two speed raises take the hairpin-exit margin p2 from 0.135 to 0.103 m at s 21 and from 0.103 to 0.075 m at s 43 (0.058 s). This RAISES speeds, so like finals_mesh_sched_fast.json it owes Gate C (100 Xvfb laps) and Gate D (32 display laps) in its own right; the harness ranks arms, it does not predict which period fails. A middle rung with v_scale 1.05 / v_mod_min 0.65 was measured and is DOMINATED (12.630 / 12.150 against 12.460 / 12.020, for the same 0.050 m minimum)."
+}

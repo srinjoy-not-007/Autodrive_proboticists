@@ -644,6 +644,105 @@ it does not re-open the late turn-in; it needs the same two gates.
      -p param_schedule:=/home/data/racelines/finals_mesh_sched.json
    ```
 
+5. **The schedule, tuned by constrained Bayesian optimisation (Sep 19, agent,
+   branch `sched-bo`) — harness only, not driven.** Section 5.4's schedule was
+   hand-built one window at a time. Fröhlich et al. (arXiv:2110.02710) tune an
+   MPC's weights with a BO whose GP is given the *operating context*, so the
+   optimum it returns is the optimum for the condition that will actually be
+   raced. Here the context is the **sensor period**, which on this stack is a
+   per-start lottery and is the single variable that decides which corner
+   fails. With only two contexts it is cheaper to EVALUATE both than to learn
+   across them, so the period enters twice: as the **objective** (median lap at
+   the organisers' 0.098 s) and as a **hard constraint** (zero collisions and
+   no lost margin at 0.058 as well).
+
+   ```
+   J = lap_med(0.098) + 10 * max(0, 0.10 - min clearance) + 10 * collisions
+   constraints:  0 collisions at BOTH periods; min footprint clearance,
+                 s 19 entry cut (p50 and p95 over s 17.5-19.5) and s 36-39
+                 clearance no worse than finals_mesh_sched.json, tolerance
+                 0.010 m on a clearance and 0.005 m on the cut (a lap-wide
+                 MINIMUM is one sample and moves a centimetre between seeds)
+   ```
+
+   `tools/sched_bo.py` (Matérn-5/2 ARD GP fitted by marginal likelihood,
+   acquisition = EI x prod P(constraint satisfied), i.e. Gardner et al.'s cEI,
+   numpy/scipy only), `tools/sched_eval.py` (one cell), `tools/sched_table.py`
+   (the gate table). **117 evaluations**, 3 seeds x 12 laps at each period per
+   evaluation, ~40 s each, two processes. 32 of the 117 were feasible; only
+   **one** ever collided, so feasibility here is a MARGIN question, not a
+   crash question. Trace: `data/racelines/finals_mesh_sched_bo_trace.csv`.
+
+   **Ten knobs**: the three committed windows' values and their leading edges,
+   plus `v_scale` on the s 43.6 apex, `v_mod_min` on the s 19 exit, `v_scale`
+   over the medium corners s 21.5-32, and the global ramp width `blend_m`.
+   What the trace says drives the lap (correlation over all 117):
+   `v_scale`(s43) -0.60, `v_scale`(med) -0.51, `blend_m` -0.48, `v_mod_min`
+   -0.45, `barrier_margin`(s19) **+0.43** (a wider margin is SLOWER), `s0` of
+   the s 43 window +0.41, `thr_brake_lead_s`(s43) +0.30.
+
+   The optimum, `data/racelines/finals_mesh_sched_bo.json`, confirmed at
+   **16 seeds x 12 laps = 192 laps per cell** (seeds 0-7 and the holdout 8-15
+   agree; the BO only ever saw seeds 0-2):
+
+   | arm | frame | laps / coll | lap median | s 18-21 | s 36-39 | s 42-44 | min clear | cut p50 / p95 | s 36-39 clear |
+   |---|---|---|---|---|---|---|---|---|---|
+   | shipping (no schedule) | 0.098 | 192 / **0** | 12.950 | 1.625 | 1.305 | 1.115 | 0.112 | 0.064 / 0.200 | 0.152 |
+   | shipping (no schedule) | 0.058 | 192 / **0** | 12.470 | 1.600 | 1.370 | 0.970 | 0.025 | 0.173 / 0.333 | 0.025 |
+   | `finals_mesh_sched` | 0.098 | 192 / **0** | 12.760 | 1.630 | 1.290 | 1.010 | 0.071 | 0.057 / 0.189 | 0.200 |
+   | `finals_mesh_sched` | 0.058 | 192 / **0** | 12.305 | 1.615 | 1.335 | 0.865 | 0.071 | 0.155 / 0.329 | 0.100 |
+   | **`finals_mesh_sched_bo`** | 0.098 | **192 / 0** | **12.460** | 1.585 | **1.210** | **0.940** | 0.079 | 0.063 / 0.199 | **0.224** |
+   | **`finals_mesh_sched_bo`** | 0.058 | **192 / 0** | **12.020** | 1.540 | **1.220** | 0.860 | 0.050 | 0.157 / 0.327 | **0.158** |
+
+   **-0.30 s/lap on the hand-tuned schedule and -0.49 s/lap on the shipping
+   stack at the organisers' period** (-0.29 / -0.45 at 0.058), with the
+   s 36-39 clearance the track actually fails on going 0.152 -> 0.224 m at
+   0.098 and **0.025 -> 0.158 m** at 0.058. Every corner is quicker and the
+   entry cut is unchanged. `finals_mesh_sched_fast.json`, measured on the same
+   96-lap cells, is beaten on every count: 12.720 / 12.220 with **1 collision**
+   at 0.098 and 0.000 m minimum clearance.
+
+   **Where it is paid for, measured** (p2 of footprint clearance per 1 m bin,
+   16 seeds at 0.058, against `finals_mesh_sched`): s 21 **0.135 -> 0.103 m**
+   and s 43 **0.103 -> 0.075 m** — both hairpin EXITS, i.e. exactly the two
+   windows that raise a speed (`v_mod_min` 0.764 and `v_scale` 1.099). The
+   lap-wide minimum falls 0.071 -> 0.050 m for the same reason. A middle rung
+   (`v_scale` 1.05, `v_mod_min` 0.65) was driven in the harness and is
+   **dominated**: 12.630 / 12.150 for the same 0.050 m minimum. So the trade is
+   a real one and it is priced: ~0.03 m of hairpin-exit margin for 0.30 s/lap
+   and +0.058 m where the collisions actually happen.
+
+   **This is a speed-gaining change and owes Gate C (100 Xvfb laps) and Gate D
+   (32 display laps) in its own right.** The harness ranks arms; it does not
+   predict which period fails. Note also that it was tuned WITHOUT the weave
+   notch (`pub_gate_corr 0.05` is in, the notch is not) after the notch became
+   suspect for the rare straight-line collisions at 0.097 s.
+
+   The live run this is waiting on (the schedule path is the one INSIDE the
+   container, and `data/racelines/finals_mesh_sched_bo.json` must be added to
+   the Dockerfile's `COPY data/racelines/...` list before any image ships it):
+
+   ```bash
+   SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+     ./scripts/run_exp.sh schedbo hyb675b_race \
+     -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+     -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+     -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+     -p pub_gate_corr:=0.05 \
+     -p param_schedule:=/home/data/racelines/finals_mesh_sched_bo.json
+   ```
+
+   **Measured and closed inside this feature** (do not re-open): a wider
+   `barrier_margin` on the s 19 entry is SLOWER, not safer — the BO moved it
+   from 0.50 down to 0.444 with the entry cut unchanged to 0.003 m; the
+   medium-corner `v_scale` must STOP before the s 33.7 brake zone (it is the
+   per-segment-optimism failure `lmpc_a/b/d/e` died of, and the constraint on
+   s 36-39 clearance is what keeps it honest); and the lap-wide minimum
+   clearance is a quantised single-sample extreme (0.025 m steps of the map's
+   distance field) that wanders 0.02 m between seed sets, so it ranks arms only
+   when pooled over >= 16 seeds.
+
+
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
 
 **Win-stack lines (Sep 19, Opus agent, branch `win-stack-lines`).** Ideal
