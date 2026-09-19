@@ -166,6 +166,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_f42k2_x32` (Xvfb 0.096 in-band) | `apex_f42k` plain (barrier 0.34) with the v6 controller set | **113.525 + 0** (median **11.361**) | 32 / 0 | — | −0.10 s/lap vs v6 in-band (11.465) at the organisers' period; +0.06 s/lap on the display. Now 64 in-band Xvfb laps + 32 display laps clean. In Gate C (`race_20260919_120336`) |
 | `fin_f42k_x100` (Xvfb) | `apex_f42k` (barrier 0.34) + v6 controller set, Gate C | **113.482 s + 0** (median **11.338**, best 10.970) | **100 / 0** | — | **best 100-lap result at the organisers' period** (v6's 100-lap: 115.77 at a loaded 0.099 s; in-band 32: 11.465). Display gate running (`race_20260919_121531`) |
 | `fin_f42k_disp100` | `apex_f42k` + v6 controller, Gate D | **107.818 s + 0** (median 10.810, best 10.633) | **100 / 0** | — | **PROMOTED — image v7** (v6 kept as `:iros2026-finals-v6`, v5 as `-v5`). vs v6: −0.13 s/lap at the organisers' period, +0.05 s/lap on the display — the organisers' box is the slow-period case, so this is the entry (`race_20260919_123636`) |
+| image v7 (Sep 20 03:40 IST) | built image: apex_f42k line (barrier 0.34) + pub_gate + gated servo + period-gated straight-PP + audit fixes | Xvfb default **113.290**, Xvfb cmd **112.873**, display **108.031 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v6 `-v6` 115.27+10/115.43/108.13; v5 `-v5` 114.82/115.08/108.47) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
