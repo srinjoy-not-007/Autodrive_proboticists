@@ -534,6 +534,10 @@ DEFAULTS = dict(
     straight_hf_gain=1.0,
     straight_hf_tau=0.50,
     straight_lead_scale=1.0,
+    straight_pp_k=0.0,        # s; pure-pursuit lookahead per m/s on straights (0 = off)
+    straight_pp_ld_min=1.5,   # m
+    straight_pp_ld_max=5.0,   # m
+    straight_pp_td=0.20,      # s; dead time the lateral error is projected over
     straight_d=1.5,
     straight_kappa=0.30,
     straight_e=0.25,
@@ -2359,6 +2363,31 @@ class MPC3:
         pub = self._pub[0] if self._pub is not None else d
         cmd = pub[N] if k >= N else pub[k] + frac * (pub[k + 1] - pub[k])
         cmd = float(np.clip(cmd, -cap, cap))
+        # OPT-IN straight-mode steering law (`straight_pp_k` 0 = off,
+        # byte-identical).  The straight weave is the MPC's own limit cycle: at
+        # 8 m/s, 0.035 rad is ~7 m/s2 of lateral acceleration, the solver answers
+        # a 3 cm error with its full allowed angle and reverses one dead time
+        # later.  Clipping (pub_gate) bounds it, a notch adds lag and collided,
+        # a slew limit destabilised it outright.  The fix is a GENTLER law where
+        # there is nothing to track: pure pursuit with a long speed-scaled
+        # lookahead (Ld = k*v, ~4 m at 8 m/s -> 0.04 rad per metre of error,
+        # inherently damped under delay), with the lateral error projected over
+        # the dead time.  Blended by the existing straight gate, so the MPC is
+        # back in full before any corner and whenever the car is off line.
+        spk = float(c.get('straight_pp_k', 0.0) or 0.0)
+        if spk > 0.0:
+            gpp = self._straight_gate(i0, e_lat)
+            if gpp > 0.0:
+                P = self.path
+                vv = max(float(v0), 0.5)
+                Ld = min(max(spk * vv, float(c['straight_pp_ld_min'])),
+                         float(c['straight_pp_ld_max']))
+                e_p = float(e_lat) + vv * float(c['straight_pp_td']) * math.sin(float(e_yaw))
+                alpha = -float(e_yaw) - math.atan2(e_p, Ld)
+                jm = (int(i0) + int(round(0.5 * Ld / max(P.spacing, 1e-3)))) % P.n
+                pp = (math.atan(2.0 * vehicle.WHEELBASE * math.sin(alpha) / Ld)
+                      + math.atan(vehicle.WHEELBASE * float(P.kappa[jm])))
+                cmd = float(np.clip((1.0 - gpp) * cmd + gpp * pp, -cap, cap))
         # OPT-IN no-anticipation gate: on a straight, never publish more than
         # the line-matching angle plus a bounded correction (see DEFAULTS).
         gc = float(c.get('pub_gate_corr', 0.0) or 0.0)
