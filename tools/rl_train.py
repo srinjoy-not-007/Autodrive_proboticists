@@ -205,7 +205,7 @@ def _worker_init(line, map_prefix):
 
 
 def _worker(job):
-    state, seed, laps, frame, deterministic = job
+    state, seed, laps, frame, deterministic, inflate, ct, wc = job
     track = _W['track']
     ag = Agent.from_state(state)
     rng = np.random.default_rng(seed)
@@ -223,7 +223,8 @@ def _worker(job):
         return a, None
 
     dom = E.sample_domain(rng, frame=frame)
-    r = E.rollout(track, act_fn, dom, laps=laps)
+    r = E.rollout(track, act_fn, dom, laps=laps, wall_inflate=inflate,
+                  clear_target=ct, w_clear=wc)
     if r.get('n', 0) == 0:
         return None
     n = len(acts)
@@ -237,13 +238,21 @@ def _worker(job):
                 min_clear=r['min_clear'], frame=dom['frame'])
 
 
-def collect(pool, agent, n_ep, laps, rng, frames=None, deterministic=False):
+def collect(pool, agent, seeds, laps, frames, deterministic=False,
+            inflate=0.05, clear_target=0.30, w_clear=6.0):
+    """COMMON RANDOM NUMBERS.
+
+    The domain randomisation (period 0.055-0.110, grip, pose bias and noise,
+    rack lag, breakaway point) moves the return by +-200 between iterations
+    while a 0.05 s/lap policy improvement is worth about 0.8, so with fresh
+    domains every iteration the learning signal is invisible.  The same
+    (seed, frame) pairs are therefore reused for a block of iterations, and
+    only rotated between blocks: the batch-to-batch difference is then the
+    policy, which is the thing being differentiated.
+    """
     state = agent.state()
-    jobs = []
-    for i in range(n_ep):
-        f = None if frames is None else frames[i % len(frames)]
-        jobs.append((state, int(rng.integers(0, 2 ** 31 - 1)), laps, f,
-                     deterministic))
+    jobs = [(state, s, laps, f, deterministic, inflate, clear_target, w_clear)
+            for s, f in zip(seeds, frames)]
     return [r for r in pool.map(_worker, jobs) if r is not None]
 
 
@@ -295,7 +304,7 @@ def update(agent, batch, opt_p, opt_v, clip=0.2, epochs=6, mb=1024,
             dlogstd -= ent_coef
             opt_p.step(agent.pW + agent.pb + [agent.log_std],
                        gW + gb + [dlogstd])
-            agent.log_std[...] = np.clip(agent.log_std, -3.5, -0.5)
+            agent.log_std[...] = np.clip(agent.log_std, -4.0, -1.2)
 
             v, vcache = mlp_forward(agent.vW, agent.vb, x, False)
             dv = 2.0 * (v[:, 0] - rt)[:, None] / len(sel)
@@ -340,6 +349,21 @@ def main():
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--gamma', type=float, default=0.995)
     ap.add_argument('--lam', type=float, default=0.95)
+    ap.add_argument('--block', type=int, default=10,
+                    help='iterations per fixed domain block (common random '
+                         'numbers; see collect())')
+    ap.add_argument('--ent-coef', type=float, default=0.0)
+    ap.add_argument('--clear-target', type=float, default=0.30,
+                    help='footprint clearance below which the proximity '
+                         'penalty starts, m')
+    ap.add_argument('--w-clear', type=float, default=6.0,
+                    help='weight of that penalty, per metre short')
+    ap.add_argument('--wall-inflate', type=float, default=0.05,
+                    help='metres the wall is inflated by for the CONTACT test '
+                         '(see rl_env: 0.10 makes contact unavoidable on this '
+                         'line and trains "go slower")')
+    ap.add_argument('--log-std', type=float, default=-2.3,
+                    help='initial action std, log; -2.3 = 0.10 of the bound')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out', default='data/rl/residual')
     ap.add_argument('--resume', default='')
@@ -362,16 +386,23 @@ def main():
     if a.resume:
         agent = Agent.from_state(np.load(a.resume))
     else:
-        agent = Agent(RP.N_OBS, rng)
+        agent = Agent(RP.N_OBS, rng, log_std=a.log_std)
     opt_p = Adam(agent.pW + agent.pb + [agent.log_std], lr=a.lr)
     opt_v = Adam(agent.vW + agent.vb, lr=a.lr * 3)
 
-    frames = [0.055, 0.065, 0.080, 0.094, 0.104, 0.110]
+    FRAMES = [0.055, 0.065, 0.080, 0.094, 0.104, 0.110]
+    seeds = frames = None
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_worker_init,
                              initargs=(line, mp)) as pool:
         for it in range(a.iters):
             t0 = time.perf_counter()
-            eps = collect(pool, agent, a.episodes, a.laps, rng, frames)
+            if it % a.block == 0:
+                seeds = [int(rng.integers(0, 2 ** 31 - 1))
+                         for _ in range(a.episodes)]
+                frames = [FRAMES[i % len(FRAMES)] for i in range(a.episodes)]
+            eps = collect(pool, agent, seeds, a.laps, frames,
+                          inflate=a.wall_inflate,
+                          clear_target=a.clear_target, w_clear=a.w_clear)
             if not eps:
                 print('no episodes came back'); break
             advs, rets = [], []
@@ -383,7 +414,8 @@ def main():
                 act=np.concatenate([e['act'] for e in eps]),
                 logp=np.concatenate([e['logp'] for e in eps]),
                 adv=np.concatenate(advs), ret=np.concatenate(rets))
-            st = update(agent, batch, opt_p, opt_v, rng=rng)
+            st = update(agent, batch, opt_p, opt_v, rng=rng,
+                        ent_coef=a.ent_coef)
             # Only AFTER the update: the workers' log-probs were computed with
             # the normalisation the state carried, and moving it under them
             # would corrupt the importance ratio.

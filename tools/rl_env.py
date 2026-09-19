@@ -19,9 +19,14 @@ randomisation:
 * the lateral delivery ratio is cut a further `grip_pess` (0.10-0.15) above
   asked ay 7 whenever the car is accelerating, which is the state every live
   wide-exit failure is in;
-* the wall is inflated by `wall_inflate` (0.10 m) for BOTH the collision test
-  and the proximity penalty, so a policy that learns to graze a wall in the
-  surrogate is already 0.10 m off it in reality;
+* the wall is inflated by `wall_inflate` for the CONTACT test, so a policy
+  that learns to graze a wall in the surrogate is already clear of it in
+  reality.  **0.05 m, not 0.10**: measured, the shipping line's own minimum
+  footprint clearance on a zero-residual pessimistic rollout is 0.079 m, so
+  inflating by 0.10 makes contact unavoidable no matter what the policy does
+  and the only reachable policy is "go slower" -- which is exactly what 0.10
+  trained (near-wall contacts fell, lap time did not move).  An infeasible
+  penalty is not conservatism, it is a broken objective;
 * the sensor period, the pose noise and bias, and the rack lag are randomised
   per episode over the measured spread and beyond.
 
@@ -126,7 +131,7 @@ def sample_domain(rng, frame=None):
     )
 
 
-def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
+def rollout(track, act_fn, dom, laps=3, wall_inflate=0.05,
             clear_target=0.30, w_progress=1.0, w_time=4.0, w_clear=6.0,
             collision_penalty=60.0, residual=True, max_s=None):
     """Drive `laps` laps and return the trajectory and the summary.
