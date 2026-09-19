@@ -154,6 +154,8 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_v86_x32` / `fin_v86_disp` | shipping config with the straight's speed cap raised **8.0 -> 8.6** (`finals_mesh_exitm_m10t6_h3v86_race.csv`) — the user's observation that the straight had room | Xvfb **114.252** (median 11.371, dt 0.092); display **107.400** (median 10.735), both + 0 | 32 / 0 each | — | **clean gain at both periods** (-0.08..-0.10 s/lap). On the straight the car sat at 7.95 of an 8.00 cap at 0.33 of 0.60 throttle; 8.6 is the most the 9.0 m/s encoder guard allows (wheel speed p99 8.96). Owes its 100-lap gates (`race_20260919_075350`, `_080136`) |
 | `fin_pp_disp` / `fin_pp_x32` | v86 + **`straight_pp_k 0.5`** (straight-mode pure-pursuit blend; `straight_d 3.0 straight_kappa 0.10`) | display **107.228 + 0**; Xvfb 117.678 + 10 (dt **0.101**) | 32 / 0 ; 32 / **2** | display straight: rack std 0.0148 -> **0.0068 rad (-54 %)**, cmd std 0.0358 -> 0.0111 (-69 %). Xvfb hits: both on the straight, a heading error after the s 4 kink grows to cte +0.33 over 0.4 s, the `straight_e` release hands back to the MPC, `e_free` brakes at 7 m/s, overshoot into the far wall | **the first swivel fix that works on the display at no cost; too gentle at 0.10 s.** A slew limit was tried first and REMOVED (2-15 harness collisions in 6 laps: a rate limit adds lag). Firmer `k 0.3` + period-scaled dead time (`straight_pp_tk`) in flight (`race_20260919_083141`, `_083850`) |
 | `fin_b40_x32` (Xvfb, dt **0.102**) | v86 line re-planned at brake 4.0 (ideal +0.07) | 115.700 + 0 scored | 32 / **1** | — | slower (median 11.582) and a collision, BUT run at a 10 % longer period than its baseline (0.092): **confounded, to be re-run in-band** (`race_20260919_084719`) |
+| in-band Xvfb A/B (period 0.094-0.100 held by `RATE_MIN_DT/RATE_MAX_DT`) | v86 baseline (dt 0.098); `apex_f42k` + barrier 0.34 (dt 0.095 at check, 0.102 whole-run); v86 + `straight_pp_k 0.3 tk 1.7` (dt 0.095) | 115.066 (median 11.465); 114.205 (11.417); 116.012 (11.650), all + 0 | 32 / 0 each | apex wall min: s 26-30 0.28 (v86 0.58), rest >= 0.35 | apex line: ~-0.05 s/lap at the organisers' period while running a LONGER period (gain understated); firmer straight-PP: clean but +0.19 s/lap — at 0.098 s the baseline barely swivels (rack std 0.006-0.010 vs 0.015 on the display) and the PP law WANDERS 0.35 m and triggers the speed cut (`race_20260919_085901`, `_090635`, `_091619`) |
+| `fin_apex_disp` / `fin_apexpp_disp` | `apex_f42k` (+ barrier 0.34) on the display, alone / + period-gated straight-PP (`straight_pp_period_max 0.075`) | 108.006 (median 10.796) / 107.791 (10.841), both + 0 | 32 / 0 each | — | the apexing line is a WASH: -0.05 s/lap at 0.098, +0.06 s/lap at 0.058 vs v86 (10.735). Period-gated PP is free on the display again. v86 stays the front-runner (`race_20260919_092859`, `_093614`) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -1097,6 +1099,31 @@ starts a metre early: 33.7 vs 34.7). Last hairpin: on plan / slightly under.
 **METHOD RULE from now on: Xvfb A/B runs use `RATE_MIN_DT=0.094
 RATE_MAX_DT=0.100`** — the per-start period lottery (0.088-0.106) confounded two
 verdicts today.
+
+**The swivel, resolved (Sep 19 22:30 IST).** It is a display-period phenomenon:
+straight rack std 0.015 rad at 0.058 s vs 0.006-0.010 at 0.098 s. The cure is a
+GENTLER law where there is nothing to track: `straight_pp_k 0.5` blends a
+pure-pursuit steer (Ld = 0.5 v, 1.5-5 m, dead-time-projected error) through the
+existing straight gate — live on the display rack std 0.0148 -> 0.0068 rad
+(-54 %), cmd std -69 %, time-neutral (107.23 vs 107.40 s). At 0.098 s the same
+law wanders 0.35 m (2 collisions / 32, then +0.19 s/lap when firmed), so
+`straight_pp_period_max 0.075` fades it out above a 0.065-0.075 s measured
+period: identical to the baseline on the organisers' box, calm on a fast one.
+Rejected on the way: a slew limit (adds lag: 2-15 harness collisions in 6 laps),
+the notch (5 and 8 straight-line collisions per 100 Xvfb laps).
+
+**Fitted surrogate (Sep 19, `rl-track` branch, Phase 1).** `tools/surrogate_race.py`
+(on that branch) predicts the shipping config's lap to 0.03-0.08 s at both
+periods (was 1.4 s off): the harness had modelled a 0.193 s encoder lag (live:
+one sample) and a 6.5 m/s2 grip knee (live: affine 1.050 - 0.0180*ay). It
+reproduces 9 of 15 known live verdicts and NEVER invents a collision, but
+misses the rare wide excursions at the limit (6 false "clean"). Use: a
+surrogate collision is a veto, a clean sheet is nothing, its pace is real.
+Closing the blind spot needs the sysid staircase in the `-explore` image.
+
+**In flight at 22:30 IST:** v6 gates (v86 + period-gated PP); Opus agents on
+the unused-width corner speeds (`unused-width`), a MonacoF1-style closed-loop
+throttle (`cl-throttle`), and RL Phase 2 on a pessimistic plant (`rl-track`).
 
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
