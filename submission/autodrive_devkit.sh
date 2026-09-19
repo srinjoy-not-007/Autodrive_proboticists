@@ -266,7 +266,7 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # period of 0.100 s (4 ms ramp); byte-identical below, i.e. at every
     # period the 100-lap gates were run at (0.058, 0.095-0.098).
     CTRL_ARGS+=(-p servo_period_max:=0.100)
-    # Sep 20 00:30 IST (v9): model the shipped `cmd_tau` 0.10 output filter
+    # Sep 20 04:30 IST (v9): model the shipped `cmd_tau` 0.10 output filter
     # INSIDE the solver's rollout (`model_cmd_tau 1.0`) so the plan pre-steers
     # for its own lag -- the tracker was turning in ~0.5 m late at both
     # hairpins.  100 Xvfb laps / 0 / 111.19 s at 0.095 s (v8: 113.48 s).  On the
