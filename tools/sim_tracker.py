@@ -518,6 +518,7 @@ class MPC2Sim:
         self.path = path
         self.P = dict(cmd_dead_time=0.135, extra_latency_s=0.045,
                       ay_limit=6.0, cap_use_measured=1, cap_ff_headroom=1.15,
+                      yaw_rate_cap=0.0,
                       cap_preview_min_m=1.0,
                       brake_horizon_s=0.35, throttle_gain=0.040,
                       brake_gain=0.05, use_steer_feedback=True,
@@ -1000,6 +1001,11 @@ class MPC3Sim:
         cap = min(vehicle.MAX_STEER,
                   math.atan(vehicle.WHEELBASE * ay_cap
                             / max(v_cap * v_cap, 0.25)))
+        yrc = float(self.P.get('yaw_rate_cap', 0.0) or 0.0)
+        if yrc > 0.0:   # mirrors mpc3.MPC3Tracker
+            k_line = abs(float(self.path.kappa[i0]))
+            cap = min(cap, math.atan(max(yrc * vehicle.WHEELBASE / max(v_cap, 0.5),
+                                         float(self.P['cap_ff_headroom']) * vehicle.WHEELBASE * k_line)))
         cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
                                    committed=committed)
         # Hook for trackers that replace or re-read the solved angle (ffb,

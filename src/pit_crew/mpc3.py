@@ -313,6 +313,15 @@ class MPC3Tracker(Node):
             # It is a SPEED-GAINING change and is left at 9.0 until it has
             # Gate C (100 Xvfb laps) and Gate D (32 display laps).
             ('ay_limit', 9.0),
+            # OPT-IN (0 = off): cap the steering command by the measured
+            # yaw-rate breakaway law, delta <= atan(yaw_rate_cap * L / v).  The
+            # sysid staircase (Sep 19) says the tyre lets go at a constant ASKED
+            # yaw rate ~2.7 rad/s (steady) / ~3.5 rad/s (sub-0.3 s excursions),
+            # not at a lateral-acceleration ceiling; the ay_limit cap above is
+            # far looser than that below ~3.5 m/s, which is how an open hairpin
+            # at 2.6 m/s was driven into the cliff at full lock (yc25, 4/10).
+            # Never below what the LINE asks (same rule as ay_limit).
+            ('yaw_rate_cap', 0.0),
             # `cap_ff_headroom` / `cap_preview_min_m`: never cap below the
             # LINE's own feedforward over the preview. Measured inert on this
             # track -- `1.5` is byte-identical to `1.15` at both frames,
@@ -1257,6 +1266,12 @@ class MPC3Tracker(Node):
         cap = min(vehicle.MAX_STEER,
                   math.atan(vehicle.WHEELBASE * ay_cap
                             / max(v_cap * v_cap, 0.25)))
+        yrc = float(self.P['yaw_rate_cap'])
+        if yrc > 0.0:
+            k_line = abs(float(self.path.kappa[i0]))
+            cap_yr = math.atan(max(yrc * vehicle.WHEELBASE / max(v_cap, 0.5),
+                                   float(self.P['cap_ff_headroom']) * vehicle.WHEELBASE * k_line))
+            cap = min(cap, cap_yr)
 
         try:
             cmd, info = self.mpc.solve(e_lat, e_yaw, delta0, i0, v0, cap=cap,
