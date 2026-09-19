@@ -1,0 +1,8 @@
+{
+  "line": "finals_mesh_apex_f42k_race.csv",
+  "blend_m": 0.8,
+  "windows": [
+    {"name": "hairpin_s43_entry", "s0": 41.0, "s1": 43.6,
+     "barrier_margin": 0.50}
+  ]
+}
