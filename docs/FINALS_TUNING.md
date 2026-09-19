@@ -1201,6 +1201,86 @@ had by accepting `min half-width` 0.480 and `barrier_margin` 0.34. That is a
 judgement call for the user, not a change to make unilaterally this close to
 Gate D.
 
+**The APEXING family (Sep 19, agent, branch `corner-audit`). Offline + harness
+only, nothing driven.** The audit above said the 0.53 m floor forbids apexing.
+This is what happens when it is lowered. Relaxed constraints (the coordinator's
+call, on the evidence that MonacoF1 ships a 0.17 m wall margin on this track):
+`pick_config` checkpoint margin >= 0.60, gate separation >= 0.60, **gate
+occupancy 1**, lap-wide |kappa| <= 1.90, and line-to-wall >= 0.40 m everywhere.
+`min half-width >= 0.50` and `barrier_margin 0.40` are NOT required; the barrier
+each line needs is reported instead. Same build chain as everything above.
+
+**Four facts the sweep established, in order of usefulness.**
+
+1. **The floor is worth far more than any margin.** Plain min-curvature at
+   `--min-halfwidth` 0.42 gives ideal **10.147 s** (−0.278) with a lap-wide
+   |kappa| of **1.05 (R 0.956 m)** — the first line here that genuinely apexes.
+   The harness confirms the mechanism: on the shipping line the car runs
+   **+0.171 m inside** it in corners; on the 0.42 line it runs **+0.004 / −0.07 m**,
+   i.e. the line finally goes where the car was always going.
+2. **Gates 7 and 8 sit at the s 18.9 hairpin apex**, 1.03 m apart
+   (`finals_mesh_checkpoints.csv`), so **opening that hairpin shortens the path
+   between them and puts the body in two trigger boxes at once** — a dropped
+   lap. Measured: hp19 apex |kappa| 1.90 (shipping) -> sep > 0.776, occupancy 1;
+   1.42 -> 0.720, occupancy 1; **1.13 -> 0.692, occupancy 2**; 0.99 -> 0.683,
+   occupancy 2. **The first hairpin cannot be opened past |kappa| ~ 1.4.** This
+   is a new hard limit and it is geometric, not dynamic.
+3. **Big one-sided margins at a low floor destroy the apex** (the `cornr_k`
+   result again, now quantified): margins of 0.18 right / 0.11 left on 8 windows
+   at floor 0.42 give |kappa| **2.28 (R 0.44)**; 0.13-0.15 on 6-9 windows give
+   1.65-1.81. Small margins on a low floor beat a high floor.
+4. **Putting the checkpoint/gate constraint inside the optimiser is a dead end
+   here** — `--checkpoints --gate-separation 0.62 --checkpoint-margin 0.32` at
+   floor 0.42 stretches the line from 44.3 to **46.3 m** and gives ideal
+   **11.03 s**, and the checkpoint margin it achieves (0.527) is *worse* than
+   leaving the flag off. Use side margins to place the line instead.
+
+| line | floor | ideal (Δ) | \|k\| hp19 / s37.6 / hp43 | ckpt | gate sep | occ | min line-wall | barrier / lead | harness 3x12 both frames |
+|---|---|---|---|---|---|---|---|---|---|
+| shipping `h3v86` | 0.53 | 10.425 | 1.90 / 1.08 / 1.74 | 0.651 | 0.776 | 1 | 0.520 | **0.40** / 0.05 | 72 / **0**, clr 0.050-0.100 |
+| **`apex_f42k`** | 0.42 | **10.282 (−0.143)** | **1.62** / 1.10 / 1.76 | 0.640 | 0.732 | **1** | 0.460 | **0.34** / 0.05 | **72 / 0**, clr **0.071-0.127** |
+| `apex_f42j` | 0.42 | 10.301 (−0.124) | 1.81 / — / 1.76 | 0.640 | 0.733 | 1 | 0.460 | 0.34 / 0.05 | 71 / **1** (s 37.8, the harness's chronic false positive) |
+| `cornr_mhw50` | 0.50 | 10.329 (−0.096) | 1.56 / 1.00 / 1.57 | 0.601 | 0.757 | 1 | 0.480 | 0.34 / 0.05 | 72 / 0, clr 0.025-0.050 |
+| `apex_f42i` | 0.42 | 10.248 (−0.177) | 0.99 / 1.13 / 1.13 | 0.639 | 0.692 | **2** | 0.440 | 0.34 / 0.00 | 72 / 0, clr 0.056-0.150 |
+| `apex_f42a` | 0.42 | **10.147 (−0.278)** | 0.98 / 0.98 / 1.05 | **0.532** | 0.683 | **2** | 0.420 | 0.34 / 0.00 | 72 / 0, clr 0.050-0.125 |
+| `apex_f45c` | 0.45 | 10.279 (−0.146) | — / — / 1.73 | **0.552** | 0.737 | 1 | 0.440 | 0.34 / 0.05 | not run |
+| `apex_f42d` | 0.42 | 10.264 | 1.42 / 1.06 / 1.65 | **0.515** | 0.720 | 1 | 0.400 | 0.34 / 0.05 | 70 / **2** (s 30.0, s 32.0) |
+| `apex_f42e` / `_f42g` | 0.42 | 10.265 / 10.253 | 1.15 / 1.17 | 0.564 | 0.693 | **2** | 0.420 | 0.34 / 0.00 | f42e 72 / 0 |
+| `apex_f42c` | 0.42 | 10.252 | 1.71 | **0.516** | 0.724 | 1 | 0.400 | 0.34 / 0.05 | not run |
+| `apex_f47a` | 0.47 | 10.533 (+0.108) | 1.18 / — / 1.31 | — | — | — | 0.475 | — | not run |
+| `apex_f42b` / `_f45b` / `_f45d` | 0.42/0.45 | 10.406 / 10.397 / 10.274 | **2.28** / **1.97** / 1.84 | — | — | — | — | — | **kappa veto** |
+| `apex_f42f` / `_f45e` (optimiser checkpoint constraint) | 0.42/0.45 | **11.033 / 11.260** | — | 0.527 | 1.05 | — | — | — | **rejected, see fact 4** |
+
+**`apex_f42k` is the pick.** Floor 0.42 with small live-evidence margins —
+```
+--min-halfwidth 0.42 --side-margin-taper 0.6 --side-margin
+  "19.8:22.5:right:0.15,25.8:28.0:right:0.13,44.3:4.5:right:0.15,
+   36:41.5:right:0.15,8:17:right:0.12,23.2:25.6:left:0.13,
+   42.0:43.4:left:0.15,29:34:left:0.10,18.3:19.8:left:0.06"
+```
+Per corner phase, line-to-wall against shipping: it **keeps** the three places
+the live car is at the limit — s 37.6 exit R **0.619** (shipping 0.619), hp43
+entry L **0.546** (0.555), straight R **0.550** (0.550) — **adds** where the car
+is tightest — s 24 apex L **0.576** (0.534, +0.042) and s 24 exit L **0.690**
+(0.621, +0.069) — and **spends** 0.03-0.09 m only where the audit found unused
+width (s 22, s 24 entry, s 27, s 34 kink, s 40.9, the s 19 hairpin). It opens
+the first hairpin to |kappa| 1.62 (R 0.62), the most the gate-7/8 limit allows,
+and `apex_deviation` is 0.000 (shipping 0.035). In the harness it is clean at
+both frames with **more** footprint clearance than shipping, the corner cut
+falls +0.171 -> +0.102 at 0.058 and +0.075 -> +0.037 at 0.098, and it has the
+best lap medians of the whole family (12.14 / 12.59 against 12.36 / 12.77).
+
+**Two honest caveats.** (a) It needs `barrier_margin 0.34`, not 0.40 — feasible
+margin 0.325. (b) **The flatter a line is, the worse mpc3 holds it**: |e_lat|
+p95 goes 0.346 m (`f42k`) -> 0.41-0.47 (`f42a`/`f42i`/`f42e`), and the harness
+lap medians go the wrong way (12.50-13.06 on the flat lines against 12.14-12.64
+on `f42k`) even though their ideal laps are 0.03-0.14 s quicker. The tracker was
+tuned around a line it cuts; a line it cannot cut is a different control problem.
+`f42a` remains the honest upper bound of the geometry lever (−0.278 s ideal,
+harness clean, best tracking error of the flat family) and is committed for that
+reason, but it fails gate occupancy and the checkpoint margin and must not be
+driven as-is.
+
 ---
 
 ## 6. Submitting
