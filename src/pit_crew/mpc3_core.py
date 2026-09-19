@@ -539,6 +539,7 @@ DEFAULTS = dict(
     straight_pp_ld_max=5.0,   # m
     straight_pp_td=0.20,      # s; dead time the lateral error is projected over
     straight_pp_tk=0.0,       # x measured period, added to straight_pp_td
+    straight_pp_period_max=0.0,   # s; 0 = always on. Blend fades out over the last 0.010 s below this period
     straight_d=1.5,
     straight_kappa=0.30,
     straight_e=0.25,
@@ -2376,8 +2377,17 @@ class MPC3:
         # the dead time.  Blended by the existing straight gate, so the MPC is
         # back in full before any corner and whenever the car is off line.
         spk = float(c.get('straight_pp_k', 0.0) or 0.0)
-        if spk > 0.0:
-            gpp = self._straight_gate(i0, e_lat)
+        # The straight weave is a FAST-period phenomenon (rack std on the straight
+        # 0.015 rad at 0.058 s, 0.006-0.010 at 0.098 s) and this law, which calms
+        # it at 0.058 s, wanders 0.35 m at 0.098 s.  `straight_pp_period_max` > 0
+        # fades it out linearly over the last 0.010 s below that measured period.
+        ppm = float(c.get('straight_pp_period_max', 0.0) or 0.0)
+        if spk > 0.0 and ppm > 0.0:
+            spk_g = min(1.0, max(0.0, (ppm - float(self.period)) / 0.010))
+        else:
+            spk_g = 1.0
+        if spk > 0.0 and spk_g > 0.0:
+            gpp = self._straight_gate(i0, e_lat) * spk_g
             if gpp > 0.0:
                 P = self.path
                 vv = max(float(v0), 0.5)
