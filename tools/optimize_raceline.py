@@ -20,8 +20,9 @@ safety per side), so w_veh only needs the physical car width + small margin.
 # runs on Sep 19.  setdefault, so a caller's own pins win.  Output is identical.
 import os as _os
 for _k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
-           'NUMEXPR_NUM_THREADS'):
+           'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
     _os.environ.setdefault(_k, '1')
+
 import argparse
 import math
 import sys
@@ -586,6 +587,31 @@ def wall_bounds(reftrack, normvec, args):
         while b < len(grid) - 1 and ok[b + 1]:
             b += 1
         lo[i], hi[i] = grid[a], grid[b]
+    # OPT-IN `--side-margin`: an EXTRA one-sided floor on top of `m`.
+    # `hi` is the last offset along +normal (RIGHT of travel) at which the
+    # path still keeps `m` from every wall, so `hi - M` keeps `m + M` off the
+    # wall on the right, and likewise `lo + M` on the left. This is where the
+    # margin has to be stated: shrinking the reported width columns alone is
+    # inert wherever the corridor bound is not the active constraint (measured
+    # on the finals track -- the line sits 0.33 m inside its own corridor
+    # bound at the exits this exists for, so a 0.06-0.14 m corridor shrink
+    # moved it by exactly zero).
+    if getattr(args, 'side_margin', None):
+        sh = side_shrink(reftrack, args.side_margin, args.side_margin_taper)
+        hi_new = np.minimum(hi, hi - sh['right'])
+        lo_new = np.maximum(lo, lo + sh['left'])
+        # never invert the interval: a window placed on a pinch keeps the
+        # roomiest position it can rather than making the track infeasible
+        cross = hi_new < lo_new
+        mid = 0.5 * (lo + hi)
+        hi_new = np.where(cross, np.clip(mid, lo, hi), hi_new)
+        lo_new = np.where(cross, hi_new, lo_new)
+        n_side = int(np.sum((sh['right'] > 1e-3) | (sh['left'] > 1e-3)))
+        print(f'  side margin: extra floor at {n_side} of {len(lo)} reference '
+              f'points (max right {sh["right"].max():.3f} m, left '
+              f'{sh["left"].max():.3f} m); {int(cross.sum())} could not take '
+              f'it')
+        lo, hi = lo_new, hi_new
     n_pinch = int(np.sum(hi - lo < 1e-9))
     print(f'  min-halfwidth {m:.2f} m: corridor from the map, median width '
           f'{np.median(hi - lo):.3f} m, {n_pinch} of {len(lo)} reference '
@@ -605,6 +631,103 @@ def wall_bounds(reftrack, normvec, args):
 # along travel and 0.254 m tall, centred on the track.  A generated line that
 # threads a corner outside one of those boxes would run a whole lap for
 # nothing, which is worth more than any collision penalty.
+
+
+def parse_side_margin(spec):
+    """"s0:s1:side:metres,..." -> [(s0, s1, side, metres), ...]."""
+    out = []
+    for part in str(spec).split(','):
+        part = part.strip()
+        if not part:
+            continue
+        f = part.split(':')
+        if len(f) != 4:
+            raise ValueError(f'--side-margin: "{part}" is not '
+                             f's0:s1:side:metres')
+        s0, s1, side, m = float(f[0]), float(f[1]), f[2].strip().lower(), \
+            float(f[3])
+        if side not in ('left', 'right'):
+            raise ValueError(f'--side-margin: side must be left|right, '
+                             f'got "{f[2]}"')
+        if m < 0.0:
+            raise ValueError('--side-margin: metres must be >= 0')
+        out.append((s0, s1, side, m))
+    return out
+
+
+def _window_weight(s, s0, s1, taper, total):
+    """Smoothstep weight: 1 inside [s0, s1], fading to 0 over `taper` outside.
+
+    `s0 > s1` wraps through s = 0.  The ramp lives outside the window so the
+    stated window carries the full margin -- the same convention as
+    `scripts/win_stack_blend.py` and the controller's `param_schedule`.
+    """
+    taper = max(float(taper), 1e-6)
+    # Signed distance INTO the window, wrapped: >= 0 inside.
+    d0 = (s - s0) % total                 # distance travelled past s0
+    span = (s1 - s0) % total
+    if span == 0.0:
+        span = total
+    inside = d0 <= span
+    # distance outside the window, on whichever end is nearer
+    before = (s0 - s) % total             # how far before s0
+    after = (s - s1) % total              # how far after s1
+    d_out = np.where(inside, 0.0, np.minimum(before, after))
+    u = np.clip(1.0 - d_out / taper, 0.0, 1.0)
+    return u * u * (3.0 - 2.0 * u)        # smoothstep
+
+
+def side_shrink(reftrack, spec, taper):
+    """Per-reference-point margin to take off each side, metres.
+
+    Returned as {'left': array, 'right': array} over `reftrack`'s OWN
+    arc length, so the same spec gives the same physical windows whether it is
+    evaluated on the full centerline or on the thinned reference the QP uses.
+    """
+    xy = reftrack[:, :2]
+    d = np.linalg.norm(np.roll(xy, -1, axis=0) - xy, axis=1)
+    s = np.r_[0.0, np.cumsum(d[:-1])]
+    total = float(s[-1] + d[-1])
+    out = {'left': np.zeros(len(s)), 'right': np.zeros(len(s))}
+    for s0, s1, side, m in parse_side_margin(spec):
+        out[side] = np.maximum(out[side],
+                               m * _window_weight(s, s0, s1, taper, total))
+    return out
+
+
+def apply_side_margin(reftrack, spec, taper, verbose=True):
+    """Shrink one corridor side over arc-length windows of the centerline.
+
+    Column 2 is `w_tr_right_m` and column 3 `w_tr_left_m`; tph's normals point
+    to the RIGHT of travel, so column 2 really is the distance to the wall on
+    the right (see `corridor_of` for the measurement that establishes this).
+    Shrinking column 2 by M therefore tells every downstream stage -- the QP
+    bound, the body sweep, `work`, the alpha smoothing projection -- that the
+    right wall is M metres closer than it is, which is exactly "keep M of
+    extra margin off the right wall here".
+
+    A floor of 0.05 m is kept on the shrunk side so a window placed where the
+    corridor is narrow cannot make it infeasible; the print says when it bit.
+    """
+    if not parse_side_margin(spec):
+        return reftrack
+    shrink = side_shrink(reftrack, spec, taper)
+    s = np.arange(len(reftrack))
+    out = reftrack.copy()
+    for side, col in (('right', 2), ('left', 3)):
+        if shrink[side].max() <= 0.0:
+            continue
+        before = out[:, col].copy()
+        out[:, col] = np.maximum(out[:, col] - shrink[side], 0.05)
+        clipped = int(np.sum(before - out[:, col] < shrink[side] - 1e-9))
+        if verbose:
+            print(f'  side margin {side}: up to '
+                  f'{shrink[side].max():.3f} m off the corridor over '
+                  f'{int(np.sum(shrink[side] > 1e-3))} of {len(s)} reference '
+                  f'points (taper {taper:g} m)'
+                  + (f' -- 0.05 m floor bit at {clipped} points'
+                     if clipped else ''))
+    return out
 
 
 def load_checkpoints(path):
@@ -1442,6 +1565,28 @@ def main():
     ap.add_argument('--w-veh', type=float, default=0.16,
                     help='extra safety on top of the swept footprint')
     ap.add_argument('--kappa-bound', type=float, default=1.6)
+    ap.add_argument('--side-margin', default=None, metavar='SPEC',
+                    help='OPT-IN (off by default, outputs byte-identical '
+                         'without it): shrink the corridor on ONE side over '
+                         'arc-length windows of the INPUT CENTERLINE, before '
+                         'the QP sees it, so the optimiser itself trades '
+                         'corner radius against the margin. '
+                         'SPEC is a comma-separated list of '
+                         '"s0:s1:side:metres", side = left|right relative to '
+                         'travel; a window with s0 > s1 wraps through s = 0. '
+                         'Overlapping windows on the same side take the '
+                         'largest margin. Needs --min-halfwidth, which is '
+                         'where the one-sided floor is applied (the reported '
+                         'width columns are shrunk too, but on a track where '
+                         'the corridor bound is slack that alone does '
+                         'nothing). See --side-margin-taper.')
+    ap.add_argument('--side-margin-taper', type=float, default=1.0,
+                    metavar='M',
+                    help='length of the smoothstep ramp on each side of a '
+                         '--side-margin window, in metres (default 1.0). The '
+                         'window itself carries the full margin; the ramp '
+                         'lives OUTSIDE it, so "19.8:24" is at full strength '
+                         'from 19.8 to 24 and fades to zero by 18.8 / 25.')
     ap.add_argument('--min-halfwidth', type=float, default=None, metavar='M',
                     help='OPT-IN (off by default, outputs byte-identical '
                          'without it): keep the PATH at least M metres from '
@@ -1606,6 +1751,20 @@ def main():
             sys.exit('--gate-separation must be positive')
     reftrack = np.loadtxt(args.centerline, delimiter=',')
     print(f'centerline: {len(reftrack)} pts')
+
+    # OPT-IN, September 19. Shrink one corridor side over s windows BEFORE
+    # anything else reads the widths, so the min-curvature QP trades corner
+    # radius against the margin itself instead of a hand shift bending the
+    # finished line (which costs 0.3-0.9 s of ideal lap in added S-bend
+    # curvature). Default None -> byte-identical output.
+    if args.side_margin:
+        if args.min_halfwidth is None:
+            sys.exit('--side-margin needs --min-halfwidth (and '
+                     '--min-halfwidth-map): the one-sided floor is applied '
+                     'against the map, in wall_bounds')
+        parse_side_margin(args.side_margin)      # fail fast on a bad spec
+        reftrack = apply_side_margin(reftrack, args.side_margin,
+                                     args.side_margin_taper)
 
     # Centerline is already spline-smoothed/uniform; thin to ~0.2 m spacing
     # for a tractable QP (tph.spline_approximation is incompatible with

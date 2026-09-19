@@ -47,6 +47,15 @@ Usage:
   .venv/bin/python tools/make_track_lines.py porto_mesh --min-clearance 0.25
   .venv/bin/python tools/make_track_lines.py porto_mesh --out-name try1
 """
+# Pin BLAS before numpy loads, and for every optimize_raceline subprocess this
+# spawns: unpinned they take every core (63 threads on the finals host) and
+# disturbed the simulator's frame timing during scored runs on Sep 19.
+# setdefault, so a caller's own pins win.  Output is identical.
+import os as _os
+for _k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
+           'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
+    _os.environ.setdefault(_k, '1')
+
 import argparse
 import os
 import shutil
@@ -755,6 +764,18 @@ def configure(argv=None):
                     help='hard floor on the opened reference\'s distance to '
                          'the nearest wall (default 0.45 = car half-width '
                          '0.135 + 0.315). Only used with --open-kappa.')
+    ap.add_argument('--side-margin', default=None, metavar='SPEC',
+                    help='OPT-IN: passed through to optimize_raceline for the '
+                         'width-using raceline candidates only. Shrinks the '
+                         'corridor on ONE side over arc-length windows, '
+                         '"s0:s1:side:metres,..." (side = left|right relative '
+                         'to travel; s0 > s1 wraps through s = 0), so the QP '
+                         'trades corner radius against an explicit wall '
+                         'margin. Default off, outputs byte-identical.')
+    ap.add_argument('--side-margin-taper', type=float, default=None,
+                    metavar='M',
+                    help='ramp length on each side of a --side-margin window '
+                         '(optimize_raceline default 1.0 m)')
     ap.add_argument('--kappa-bound', type=float, default=None, metavar='K',
                     help='pass --kappa-bound to the QP for the raceline '
                          'candidates (opt-in; off by default).')
@@ -811,6 +832,13 @@ def configure(argv=None):
                           '--dkappa-refine', str(cfg.dkappa_refine)]
     if cfg.kappa_bound is not None:
         cfg.race_args += ['--kappa-bound', f'{cfg.kappa_bound:g}']
+    if cfg.side_margin is not None:
+        cfg.race_args += ['--side-margin', cfg.side_margin]
+        if cfg.side_margin_taper is not None:
+            cfg.race_args += ['--side-margin-taper',
+                              f'{cfg.side_margin_taper:g}']
+    elif cfg.side_margin_taper is not None:
+        ap.error('--side-margin-taper needs --side-margin')
     if cfg.min_halfwidth is not None:
         cfg.race_args += ['--min-halfwidth', f'{cfg.min_halfwidth:g}',
                           '--min-halfwidth-map', f'data/maps/{cfg.track}']
