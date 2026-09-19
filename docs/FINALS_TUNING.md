@@ -1320,6 +1320,42 @@ cannot express it. Closing this needs the sysid staircase in the
 `2026-iros-explore` image (`ros2 run pit_crew sysid_run`, then `lateral_id.py
 --sysid --write`), not more racing data.
 
+### 4c.1 What was added after the first table (Sep 19, later)
+
+**A lateral BREAKAWAY cliff, and where the live record puts it.** The affine
+delivery ratio is right to asked ay ~8.5 and badly wrong above it: measured
+p50 on the two shipping logs is 0.936 (ay 6-7), 0.923 (7-8), 0.904 (8-9) and
+**0.486** (9-12). Two independent signs that the quasi-static model stops
+describing that regime: no first-order pole fits the ay > 8 samples at all
+(rms 0.25 1/m, and FLAT in tau, against 0.063 at ay 6-8), and the `-explore`
+skidpad reports the tyre holding ~0.9 of asked curvature to 9.9 m/s² and then
+collapsing to 0.24-0.35 inside one 0.5 m/s step.
+
+Where the cliff sits is settled by the live record, not by the fit. Driven in
+the surrogate, 60-lap cells at both periods:
+
+| cliff / post-ratio | shipping, 0.058 | shipping, 0.097 | h7 | h8 |
+|---|---|---|---|---|
+| 8.8 / 0.48 (the racing-log fit) | 11.140 (+0.33 vs live), **1 collision** | 11.450 (−0.03) | 0 | 0 |
+| 9.3 / 0.55 | 10.970 (+0.16) | 11.410 (−0.07) | 0 | 0 |
+| **9.6 / 0.70 (shipping)** | **10.880 (+0.065)** | **11.420 (−0.063)** | 0 | 0 |
+| 10.0 / 0.55 | 10.880 (+0.065) | 11.400 (−0.08) | 0 | 0 |
+
+The shipping config has 100 clean live laps at both periods, so a cliff that
+makes it collide is too low. 9.6 is both clean and the skidpad's own number,
+so the 40 racing samples above ay 9 are read as transients. **It does not
+rescue the false-clean arms**: h7 and h8 take 0 collisions in 60 laps per
+period at every cliff from 8.8 to 10.0, because they never ask enough ay in
+the surrogate to break away. The cliff is in because it is measured and costs
+nothing, not because it closed the gap.
+
+**Two harness parameters existed only in the node.** `servo_head_kappa` (the
+curvature gate on the exit servo, which the SHIPPING config sets to 0.4) and
+`servo_decel_look_m` were both read into `MPC3Sim.P` and never used, so every
+harness cell that set either of them silently measured the default. Both are
+now ported verbatim; the shipping defaults stay byte-identical under `cmp` on
+`--dump-rec`. Any earlier harness number for those two knobs is void.
+
 ### How to use it, and what it is worth
 
 It is a **one-sided screen**: a surrogate collision is evidence, a surrogate

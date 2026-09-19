@@ -123,15 +123,26 @@ def sample_domain(rng, frame=None):
 
 
 def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
-            clear_target=0.30, w_progress=1.0, w_clear=6.0,
+            clear_target=0.30, w_progress=1.0, w_time=4.0, w_clear=6.0,
             collision_penalty=60.0, residual=True, max_s=None):
     """Drive `laps` laps and return the trajectory and the summary.
 
-    The reward per controller step is progress along the line per second,
-    minus a large penalty on contact and a penalty for coming inside
-    `clear_target` of the (inflated) wall.  Nothing in it rewards steering
-    smoothness or punishes the residual for being non-zero: the bounds are the
-    regularisation.
+    Reward per controller step:
+
+        progress_m  -  w_time * dt  -  w_clear * max(0, 0.30 - clearance)
+                    -  collision_penalty * contact
+
+    The first two terms together are a MINIMUM-TIME objective, and the pair is
+    load-bearing.  An episode is a fixed number of LAPS, so the total progress
+    is a constant (one lap length per lap) whatever the policy does; "progress
+    per second" summed over such an episode is therefore also a constant and
+    rewards nothing at all.  Subtracting `w_time * dt` makes the return
+    `laps * L - w_time * T`, i.e. minimise the time.  `w_time` 4.0 is roughly
+    the lap's mean speed, so a step is positive exactly when the car is beating
+    it.
+
+    Nothing rewards steering smoothness or punishes the residual for being
+    non-zero: the bounds in `pit_crew.residual_policy` are the regularisation.
     """
     path = RefPath(track.line)
     path.load_corridor(track.dist, track.meta)
@@ -197,7 +208,7 @@ def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
     # A contact is a record sample whose (inflated) clearance went negative.
     np.logical_or.at(hit, idx, clear <= 0.0)
 
-    r = w_progress * prog / dt_call                      # m/s of progress
+    r = w_progress * prog - w_time * dt_call             # minimum time
     seen = minraw < 10.0                                 # calls with a record
     r -= w_clear * np.where(seen, np.maximum(0.0, clear_target - minraw), 0.0)
     r -= collision_penalty * hit.astype(float)
