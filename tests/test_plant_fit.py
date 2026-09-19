@@ -141,6 +141,100 @@ def test_grip_cliff_constants_sit_between_the_two_measurements():
     assert 0.40 <= ST.GRIP_POST <= 0.75
 
 
+def test_breakaway_is_off_by_default_and_not_in_the_preset():
+    """It is better physics and it makes the surrogate worse -- 4c.3."""
+    assert _plant(lat_law='fit').breakaway == 0.0
+    import argparse
+    import inspect
+    src = inspect.getsource(ST.main)
+    # the preset must still arm the old cliff, not the new law
+    assert 'args.plant_grip_cliff = GRIP_CLIFF' in src
+    assert 'args.plant_breakaway = 1.0' not in src
+
+
+def test_breakaway_fires_on_asked_YAW_RATE_not_on_ay():
+    """Same asked ay, different asked yaw rate -> different outcome.
+
+    ay = v^2 k and r = v k, so doubling v and quartering k holds ay and
+    HALVES the yaw rate.  An ay cliff cannot tell these two apart; the
+    staircase says the car can.
+    """
+    def cell(v, k):
+        d = math.atan(k * L)
+        p = _plant(delta=d, v=v, lat_law='fit', breakaway=1.0,
+                   servo_k=0.0, drag=0.0, ay_max_break=1e9)
+        for _ in range(2000):
+            p.step(0.0)
+        return p
+
+    v1, k1 = 2.4, 1.60                        # r = 3.84 > R_CRIT
+    v2, k2 = 4.8, 0.40                        # r = 1.92, same ay 9.22
+    assert v1 * v1 * k1 == pytest.approx(v2 * v2 * k2, rel=1e-9)
+    assert v1 * k1 > ST.R_CRIT and v2 * k2 < ST.R_CRIT
+    # the band makes it proportional: slip = (r/R_CRIT - 1) / BREAK_BAND
+    want = (v1 * k1 / ST.R_CRIT - 1.0) / ST.BREAK_BAND
+    assert cell(v1, k1).slip == pytest.approx(want, abs=1e-3)
+    assert cell(v1, k1).slip > 0.5
+    assert cell(v2, k2).slip == pytest.approx(0.0, abs=1e-9)
+
+
+def test_breakaway_threshold_and_post_value():
+    k = lambda d: abs(math.tan(d) / L)
+    # just under the threshold: stays attached however long it is held
+    v, d = 2.0, 0.40
+    assert v * k(d) < ST.R_CRIT
+    p = _plant(delta=d, v=v, lat_law='fit', breakaway=1.0, servo_k=0.0,
+               drag=0.0)
+    for _ in range(2000):                     # 2 s
+        p.step(0.0)
+    assert p.slip == pytest.approx(0.0, abs=1e-9)
+    assert abs(p.kappa) / k(d) > 0.85
+    # well over it: lets go, and settles at C_POST*sqrt(v) of lateral accel
+    v, d = 3.0, 0.50
+    assert v * k(d) > ST.R_CRIT + ST.BREAK_BAND * ST.R_CRIT
+    q = _plant(delta=d, v=v, lat_law='fit', breakaway=1.0, servo_k=0.0,
+               drag=0.0)
+    for _ in range(2000):
+        q.step(0.0)
+    assert q.slip == pytest.approx(1.0, abs=1e-3)
+    ay = v * v * abs(q.kappa)
+    assert ay == pytest.approx(ST.C_POST * math.sqrt(v), rel=0.02)
+
+
+def test_breakaway_needs_TIME_which_is_why_the_track_survives_it():
+    """A 0.25 s excursion past the threshold must not fully break the tyre:
+    live, samples above 2.71 rad/s still deliver a ratio of 0.95."""
+    v, d = 3.0, 0.50
+    p = _plant(delta=d, v=v, lat_law='fit', breakaway=1.0, servo_k=0.0,
+               drag=0.0)
+    for _ in range(250):                      # 0.25 s
+        p.step(0.0)
+    assert p.slip < 0.95
+    assert p.slip > 0.05                      # but it has started
+
+
+def test_breakaway_washes_out_more_slowly_than_it_builds():
+    assert ST.BREAK_TAU_OFF > ST.BREAK_TAU_ON
+    v, d = 3.0, 0.50
+    p = _plant(delta=d, v=v, lat_law='fit', breakaway=1.0, servo_k=0.0,
+               drag=0.0)
+    for _ in range(2000):
+        p.step(0.0)
+    assert p.slip > 0.99
+    p.delta = p.steer_target = 0.05           # demand gone
+    for _ in range(100):                      # 0.1 s
+        p.step(0.0)
+    assert p.slip > 0.5                       # still mostly gone
+
+
+def test_sysid_constants_match_the_staircase():
+    # attached cells reach 2.627 rad/s, broken-by-yaw start at 2.793, so the
+    # steady-state threshold is bracketed; R_CRIT is the LIVE-reconciled one
+    assert 2.6 <= 2.71 <= 2.8                 # the staircase value
+    assert ST.R_CRIT >= 2.79                  # ...and ours is above it
+    assert 2.1 <= ST.C_POST <= 2.5            # ay/sqrt(v) = 2.302 +- 0.146
+
+
 def test_brake_at_zero_is_the_measured_constant():
     assert ST.FIT_BRAKE_AT_ZERO == pytest.approx(4.15)
     p = _plant(v=4.0, lat_law='fit', brake_at_zero=ST.FIT_BRAKE_AT_ZERO,
