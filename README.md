@@ -58,15 +58,20 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-**Sep 19 update — the finals entry is image v5:** mpc3 on
-`finals_mesh_exitm_m10t6_h3_race.csv` (the min-curvature line re-optimised with
-+0.10 m of outside-wall margin on three corner exits, carrying an ay 9.0 speed
-profile with the three slow zones held at safe speeds), plus the publish gate
-and a curvature-gated exit-throttle servo. **100 laps / 0 collisions at both
-sensor periods: 108.37 s on a real display, 114.19 s on Xvfb (~ the organisers'
-period)**; the built image raced 108.47 / 114.82 / 115.08 s, 12 / 0 each.
-`docs/FINALS_TUNING.md` has every driven arm. The paragraph and table below are
-the Sep 18 state (114.04 / 119.51 s), kept for the record.
+**Sep 19 evening — the finals entry is image v8:** mpc3 on
+`finals_mesh_apex_f42k_race.csv` (min-curvature line at a 0.42 m corridor floor
+with small one-sided wall margins where the driven car is tightest, carrying an
+ay 9.0 profile with three slow zones held at safe speeds), `barrier_margin`
+0.34, plus the publish gate, a curvature-gated exit-throttle servo that also
+fades out past a measured sensor period of 0.100 s, and a period-gated
+pure-pursuit blend on the straights. **100 laps / 0 collisions at both sensor
+periods: 107.82 s on a real display (0.058 s), 113.48 s on Xvfb (0.095 s, ~ the
+organisers' period)**; the built image raced 108.33 / 113.20 / 113.23 s, 12 / 0
+each. At the slow end of the period lottery (0.104 s, reachable here only under
+host load) it takes ~1 collision per 64 laps on one corner exit; the servo gate
+cut that from 6 per 64. `docs/FINALS_TUNING.md` has every driven arm. The
+paragraph and table below are the Sep 18 state (114.04 / 119.51 s), kept for the
+record.
 
 Shipping config (Sep 18, finals) = **mpc3** on `finals_mesh_race.csv`, the SRL
 2026 IROS finals track (`2026-iros-compete`), with `rate_adaptive` (timing terms
