@@ -121,6 +121,27 @@ logs) against mpc3's constant 0.175 s model — new opt-in `steer_tau_k`
 alternatives. Two live arms, each owing Gate C then Gate D; the exact
 `run_exp.sh` lines are in FINALS_TUNING 4b.
 
+**Sep 19, exit-margin agent (branch `exit-margin`, offline + harness only).**
+The ay-9.0 rungs all die the same way: the car runs 0.38-0.46 m wide on a
+LEFT-hand corner's EXIT into the RIGHT wall (s 19.9-20.2, 26.8, 44.6 -> 0.3,
+38.6), and the shipping line sits only 0.545-0.555 m from that wall there. New
+**opt-in `--side-margin "s0:s1:side:metres,..."`** on
+`tools/optimize_raceline.py` (+ `--side-margin-taper`, passed through by
+`make_track_lines.py`) shrinks the corridor on ONE side over s windows before
+the QP, so the optimiser trades exit radius against the margin instead of a
+hand shift bending the finished line. Defaults off, shipping lines
+byte-identical, `check_pipeline` PIPELINE OK. **The margin has to be stated in
+`wall_bounds`, not in the width columns** — the line sits 0.33 m inside its own
+corridor bound at those exits, so a 0.06-0.14 m corridor shrink alone moved it
+by exactly zero. Result: `finals_mesh_exitm_m10t6_*` and `_m14t6_*` carry
++0.08..0.125 m of outside margin at all four exits for +0.06..0.12 s of ideal
+lap at ay 6.0, are FASTER than the hand-shifted `hyb675b` geometry at ay 9.0
+(9.94 / 10.03 s against 10.10), beat it on every `pick_config` metric, and are
+**72/72 harness laps clean at both frames where the same ay-9.0 profile on
+`hyb675b` takes 1-2 collisions**. Nothing driven; both owe Gate C then Gate D.
+Details, the table and the `run_exp.sh` lines are in FINALS_TUNING section 4
+("Exit margin from the optimiser").
+
 ### Corrections to the Sep 12 brief below (from reading the simulator source)
 
 - **The brake is throttle exactly 0.0, not negative throttle.** Negative

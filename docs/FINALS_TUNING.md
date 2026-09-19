@@ -643,6 +643,133 @@ it does not re-open the late turn-in; it needs the same two gates.
 
 TUM min-time optimisation: **no** — the corridor cannot pay for it.
 
+**Exit margin from the optimiser, not a hand shift (Sep 19, agent, branch
+`exit-margin`). Offline + harness only, nothing driven.** Every ay-9.0 rung
+fails the same way at the organisers' period: the car runs 0.38-0.46 m WIDE on
+a LEFT-hand corner's EXIT and hits the RIGHT (outside) wall — s 19.9-20.2,
+s 26.8, s 44.6 -> 0.3, and earlier s 38.6. At each of those exits the shipping
+line sits **0.545-0.555 m** from the right wall and 0.62-0.79 m from the left,
+i.e. ~0.42 m of outside margin after the 0.135 m car half-width, which is
+exactly what it runs wide by. The one geometry fix tried so far
+(`tools/fix_s39_finals.py`, 0.08 m inward over s 36-42) worked, but a hand
+shift of the other three exits costs 0.3-0.9 s of ay-9.0 ideal lap because the
+ramps add S-bend curvature.
+
+New **opt-in** `--side-margin "s0:s1:side:metres,..."` on
+`tools/optimize_raceline.py` (and passed through by `tools/make_track_lines.py`
+for the raceline candidates), with `--side-margin-taper` (default 1.0 m,
+smoothstep, ramp OUTSIDE the window; `s0 > s1` wraps through s = 0). It shrinks
+the corridor on ONE side over arc-length windows of the input centerline
+*before* the QP, so the optimiser itself trades exit radius against the margin.
+**Where the margin has to be stated is `wall_bounds`, not the width columns**:
+the shipping line sits 0.33 m INSIDE its own corridor bound at these exits, so
+shrinking `w_tr_right_m` alone moved it by exactly zero (measured). The flag
+therefore requires `--min-halfwidth`, and tightens that one-sided floor
+(`hi -> hi - M` on the right, `lo -> lo + M` on the left) as well as the width
+column. Default off; the shipping line regenerates byte-identical.
+
+The geometry is regenerated from the drill's own reference and flags — verified
+byte-identical to `finals_mesh_race.csv` without the new flag:
+
+```bash
+.venv/bin/python tools/optimize_raceline.py data/racelines/finals_mesh_centerline.csv \
+    --out data/racelines/finals_mesh_exitm_m14t6 --w-veh 0.36 \
+    --ay 6.0 --ax 6.5 --brake 4.0 --jerk-lat 40 --ay-tight 4.5 --kappa-tight 1.15 \
+    --alpha-smooth 11 --dkappa-max 1.5 --dkappa-refine 3 --kappa-bound 1.0 \
+    --min-halfwidth 0.53 --min-halfwidth-map data/maps/finals_mesh \
+    --side-margin "19.8:24:right:0.14,25.8:30:right:0.14,44.3:4:right:0.14,36:42:right:0.08" \
+    --side-margin-taper 0.6
+```
+
+LINE-to-wall distance, marched along the normal in `finals_mesh.pgm`
+(min / median per window), against the shipping geometry:
+
+| geometry | ideal (ay 6.0) | \|k\|max | s 20-23 R | s 26-29 R | s 44.5-2.5 R | s 36-42 R |
+|---|---|---|---|---|---|---|
+| `finals_mesh_race` (shipping) | 11.018 | 1.821 | 0.545 | 0.545 | 0.555 | 0.540 |
+| `hyb675b` (hand shift at s 36-42) | — | 1.821 | 0.545 | 0.545 | 0.555 | 0.610 |
+| `exitm_m06` (taper 1.0) | 11.081 | 1.800 | 0.600 | 0.585 | 0.610 | 0.605 |
+| `exitm_m10` (taper 1.0) | 11.155 | **2.138** | 0.640 | 0.615 | 0.645 | 0.605 |
+| `exitm_m10t6` (taper 0.6) | 11.152 | 1.902 | 0.650 | 0.620 | 0.635 | 0.605 |
+| `exitm_m12` (taper 1.0) | 11.192 | **2.223** | 0.650 | 0.635 | 0.665 | 0.600 |
+| `exitm_m14` (taper 1.0) | 11.140 | 1.829 | 0.665 | 0.665 | 0.680 | 0.605 |
+| **`exitm_m14t6`** (taper 0.6) | 11.137 | 1.826 | **0.670** | **0.660** | **0.680** | 0.605 |
+
+Two things the sweep says. **The 0.08 m at s 36-42 reproduces the hand shift's
+result from inside the optimiser** (0.605 against 0.610) while giving back the
+inside margin the hand shift spent (L 0.555-0.575 against hyb675b's 0.530) and
+lowering the local peak curvature (1.07-1.09 against 1.121). And **the margin
+does not buy curvature monotonically**: at taper 1.0 the ramp reaches back into
+the s 18.9 and s 43.6 hairpin APEXES, and m10 / m12 land on a 2.14 / 2.22 1/m
+apex (radius 0.47 m, inside the 0.561 m steering lock) while m06 and m14 do
+not. Taper 0.6 keeps the ramp off the apex and fixes it (m10: 2.138 -> 1.902).
+
+Cost is small where the hand shift's was not: **+0.06 to +0.12 s of ideal lap
+at ay 6.0**, and at ay 9.0 the new geometries are all FASTER than the
+hand-shifted one (`hyb675b` 10.097 s; m06 9.881, m10t6 9.939, m14t6 10.032),
+because the hand shift's S-bend is gone.
+
+`pick_config finals_mesh --line <X> --no-write` on the blended lines — every
+one **better than the shipping geometry on every metric**: min half-width
+**0.520 m** (hyb675b 0.500), body clearance **0.400 m** (0.388), checkpoint
+margin 0.648-0.651 m (0.650), gate separation 0.766-0.776 m (0.781),
+occupancy 1, and all three clear `barrier_margin` 0.40 on their own feasible
+margin (0.385) where `hyb675b` only clears 0.34.
+
+**Harness** (`tools/sim_tracker.py`, shipping `-r` args + `pub_gate_corr 0.05`,
+NO weave notch, `--plant-realistic --pose-noise 0.03 --pose-latency 0.044
+--plant-brake-at-zero 4.6 --plant-dead 0.045`, 3 seeds x 12 laps = 36 laps per
+cell at each frame). `h1` = ay 9.0 blended back to the `hyb675b` speeds over
+s 36-40; `h2` = the same plus the s 17.5-21.5 hairpin. Wall column = the CAR's
+minimum footprint clearance in that window, worst over the three seeds.
+
+| line | ideal | 0.058 coll / med | 0.098 coll / med | hp1 exit s19.5-21 | s 26-28 | hp3 exit s44-1 | s 38-41 |
+|---|---|---|---|---|---|---|---|
+| `hyb675b` (shipping hybrid) | 10.836 | **0** / 12.430 | **0** / 13.010 | 0.112 / 0.190 | 0.280 / 0.250 | 0.090 / 0.150 | 0.025 / 0.175 |
+| `hyb675b` + ay 9.0, h1 (control) | 10.284 | **2** / 12.020 | **1** / 12.670 | 0.025 / 0.035 | 0.035 / 0.177 | 0.071 / 0.100 | 0.225 / 0.251 |
+| `hyb675b` + ay 9.0, h2 (control) | 10.447 | **1** / 12.010 | 0 / 12.560 | 0.146 / 0.202 | 0.056 / 0.236 | 0.035 / 0.125 | 0.250 / 0.275 |
+| `exitm_m06` h1 | 10.103 | **1** / 12.010 | 0 / 12.610 | 0.071 / 0.056 | 0.106 / 0.224 | 0.071 / 0.071 | 0.050 / 0.168 |
+| `exitm_m06` h2 | 10.234 | **1** / 12.020 | 0 / 12.650 | 0.112 / 0.168 | 0.190 / 0.180 | 0.071 / 0.071 | 0.075 / 0.177 |
+| `exitm_m10t6` h1 | 10.160 | **0** / 12.040 | **0** / 12.720 | 0.056 / 0.125 | 0.177 / 0.266 | 0.056 / 0.025 | 0.025 / 0.182 |
+| **`exitm_m10t6` h2** | **10.267** | **0** / **11.980** | **0** / **12.660** | 0.090 / 0.158 | 0.236 / 0.266 | 0.071 / 0.025 | 0.050 / 0.158 |
+| `exitm_m14t6` h1 | 10.249 | **0** / 12.330 | **0** / 12.840 | 0.079 / 0.125 | 0.280 / 0.354 | 0.071 / 0.090 | 0.035 / 0.251 |
+| **`exitm_m14t6` h2** | 10.384 | **0** / 12.390 | **0** / 12.870 | 0.112 / 0.257 | 0.292 / 0.320 | 0.071 / 0.100 | 0.025 / 0.175 |
+
+**The harness reproduces the live failure and the margin fixes it.** The ay-9.0
+control collides at both frames (2/36 and 1/36 on `h1`, 1/36 on `h2`) with the
+car's own clearance down to 0.000-0.035 m at the very exits the live runs hit;
+every `m10t6` and `m14t6` arm is **72/72 laps clean**. m06 is not enough
+(1 collision at 0.058 on both blends, matching its +0.04..0.055 m of margin —
+under the +0.10 m bar). Read the lap times only as a ranking, never as a gain:
+**four harness-predicted gains failed to transfer live on Sep 19**, and the
+lines that are clean here still owe Gate C and Gate D.
+
+Ranking (fastest ideal lap whose exits carry >= +0.10 m of outside margin and
+which is clean in the harness at both frames): **`exitm_m10t6_h2` first**
+(ideal 10.267, +0.095/+0.075/+0.090 m, 72/0, harness median 11.980/12.660 vs
+the shipping hybrid's 12.430/13.010), **`exitm_m14t6_h2` second** (10.384,
++0.125/+0.115/+0.125 m, 72/0, and by far the best car clearance at s 26-28 and
+the hairpin exits), then their `h1` variants. `m06` is out.
+
+Live, in order — `LOC_ARGS` on every arm, Gate C (100 Xvfb laps) then Gate D
+(32 display laps), abort on the first collision at either period:
+
+```bash
+LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false' \
+SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
+  ./scripts/run_exp.sh exitm_m10t6h2_x100 exitm_m10t6_h2_race \
+  -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
+  -p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05 \
+  -p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6 \
+  -p pub_gate_corr:=0.05
+# then the display, same flags:
+LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false' \
+VISIBLE=1 SIM_QUALITY=ultra CONTROLLER=mpc3 MAP=finals_mesh LIDAR_OFFSET=0.1933 \
+  LAPS=32 ./scripts/run_exp.sh exitm_m10t6h2_disp exitm_m10t6_h2_race <same -p flags>
+# fallback rung, more margin for ~0.12 s of ideal lap:
+#   ... exitm_m14t6h2_x100 exitm_m14t6_h2_race <same -p flags>
+```
+
 **Win-stack lines (Sep 19, Opus agent, branch `win-stack-lines`).** Ideal
 <= 9.3 s IS reachable on this corridor (min-half-width 0.42-0.46 geometries at
 ay 9.0: 8.90-9.27 s) but only by breaking the checkpoint/gate rules, cutting
