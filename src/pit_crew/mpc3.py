@@ -346,6 +346,7 @@ class MPC3Tracker(Node):
             ('servo_a_accel', 5.0),
             ('servo_k_p', 0.0),
             ('servo_head_max', 0.5),
+            ('servo_head_kappa', 0.0),   # 1/m; 0 = off. Fades servo_head_max out while turning
             ('servo_u_max', 0.60),
             ('servo_v_floor', 1.0),
             # OPT-IN real brake; 'none' is the shipping law byte for byte.
@@ -593,6 +594,7 @@ class MPC3Tracker(Node):
             K=v['servo_k'], drag=v['servo_drag'], tau=v['cmd_dead_time'],
             a_auth=v['servo_a_auth'], a_accel=v['servo_a_accel'],
             k_p=v['servo_k_p'], head_max=v['servo_head_max'],
+            head_kappa=v['servo_head_kappa'],
             lead_max=0.0, ay_limit=v['ay_budget'], v_floor=v['servo_v_floor'],
             u_max=v['servo_u_max'], servo_gain=v['servo_gain'],
             brake_mode=str(v['brake_mode']), brake_a_min=v['brake_a_min'],

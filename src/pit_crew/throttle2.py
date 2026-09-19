@@ -72,7 +72,7 @@ class ServoThrottle:
                  lead_max=0.25, ay_limit=6.0, v_floor=1.0, u_max=0.60,
                  hold=CMD_PERIOD, servo_gain=SERVO_GAIN, predict=True,
                  brake_mode='none', brake_a_min=1.5, brake_dv=0.3,
-                 brake_a_full=4.6):
+                 brake_a_full=4.6, head_kappa=0.0):
         self.K = float(K)                # servo proportional gain, 1/s
         self.drag = float(drag)          # rigidbody linear drag, 1/s
         self.tau = float(tau)            # actuator dead time, s
@@ -81,6 +81,7 @@ class ServoThrottle:
         self.hold = float(hold)          # how long one command stays in force
         self.k_p = float(k_p)            # over-command per m/s of speed error
         self.head_max = float(head_max)  # m/s, cap on that over-command
+        self.head_kappa = float(head_kappa)  # 1/m, 0 = off: fade head_max out by |kappa|
         self.lead_max = float(lead_max)  # m/s, cap on the dead-time lead
         self.ay_limit = float(ay_limit)  # m/s2, what the lead may spend
         self.k_ff = float(k_ff)          # fraction of the plan's ax fed forward
@@ -230,7 +231,17 @@ class ServoThrottle:
         # going below it would brake past the corner-entry speed and cost the
         # exit, and (with the `v_floor` below) is the one route to a reverse
         # setpoint, which is what `brake_gain` used to do by accident.
-        target = lead + max(0.0, min(self.head_max, self.k_p * err))
+        head = self.head_max
+        # OPT-IN (`head_kappa` 0 = off, byte-identical).  The over-command
+        # exists to close the straight-line exit deficit; applied while the car
+        # is still TURNING it chases the profile's exit acceleration mid-corner
+        # and runs the car wide (finals, Sep 19: h3c + servo, 6 collisions in
+        # 100 Xvfb laps, all 0.3 m wide on corner exits at kappa 0.3-0.6).  Fade
+        # the headroom linearly to zero as |kappa| under the car rises to
+        # `head_kappa`.
+        if self.head_kappa > 0.0 and kappa is not None:
+            head *= max(0.0, 1.0 - abs(float(kappa)) / self.head_kappa)
+        target = lead + max(0.0, min(head, self.k_p * err))
 
         # Never a reverse setpoint, and never a crawl setpoint while moving:
         # below ~1 m/s a low setpoint reads as "stop".  Do not raise the floor
