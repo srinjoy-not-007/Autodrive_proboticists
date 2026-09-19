@@ -481,6 +481,405 @@ it does not re-open the late turn-in; it needs the same two gates.
 
 ---
 
+## 4c. A log-fitted surrogate of the simulator (Sep 19, agent, branch `rl-track`)
+
+**Nothing here has been driven, and nothing here changes the image.** This
+section is about the offline harness itself: why five of its predictions failed
+live, what was actually wrong with it, and how far a plant identified from the
+logs gets before it, too, runs out.
+
+### Why this was started
+
+The plan was reinforcement learning. The simulator runs at wall-clock 10-17 Hz
+with no headless mode, so RL cannot be trained in it, and a policy trained on a
+*non-predictive* surrogate is worthless. Section 3 records five harness-called
+gains in a row that did not transfer (lead law, s-indexed schedule, BO
+schedule, LMPC profile, `ay_limit 16`) and a harness that called which sensor
+period fails backwards. So the first job was to find out whether a surrogate
+can be made predictive at all. The answer is a qualified yes, and the
+qualification is the interesting part.
+
+### What was wrong with the harness — four measured defects
+
+All four were identified from the two shipping 100-lap logs
+(`race_20260919_044701` at 0.058 s, `race_20260919_050630` at 0.094 s) using
+**ground truth only** (IPS `x,y` differentiated, the `steering` rack feedback,
+the `throttle` in force). The fixes are opt-in behind `--plant-fit`; the
+defaults are verified byte-identical with `cmp` on `--dump-rec`.
+
+1. **The encoder channel — the big one.** The harness modelled the speed the
+   bridge reports as a 0.193 s first-order lag on a wheel speed 3.9 % above
+   ground truth. Measured, the live channel tracks truth with **one sample of
+   delay** (correlation against truth peaks at lag 1-2 samples, 0.985/0.986,
+   rms 0.32-0.34 m/s, mean bias +0.008 / −0.116) and a quasi-steady slip of
+   **1.020 / 1.003**. The modelled lag over-reads by up to **1.43 m/s** in a
+   braking zone where the live channel stays inside 0.55, and `brake_mode:=zero`
+   then keeps the brake on for 4 m where the live car keeps it on for 1.5 —
+   then the deeper deceleration makes the modelled lag worse still. This single
+   defect was most of the harness's corner-entry pessimism.
+2. **The lateral law had a knee that does not exist.** The plant clipped
+   achieved lateral acceleration to 6.5 m/s² through an exponential knee at
+   5.5. Measured delivery ratio (achieved path curvature over the curvature the
+   rack asks for, 18 187 samples with |kappa| > 0.15 and v > 1.5, the rack
+   passed through the identified 0.043 s lateral pole first):
+
+   | asked ay | 2-4 | 4-6 | 6-8 | 8-11 |
+   |---|---|---|---|---|
+   | ratio | 1.019 | 0.964 | 0.933 | 0.872 |
+
+   No knee, and **no dependence on longitudinal acceleration** below ay 8
+   (0.93-0.97 flat across every ax band). The fitted law is the affine
+   `r = 1.050 − 0.0180 · ay_asked`, clipped to [0.78, 1.05], with a 0.043 s
+   first-order pole. The old law under-delivered 5-8 % of curvature in every
+   hairpin.
+3. **The rack's dead time is one constant plus the frame quantum.**
+   `steer_residual_id.py`'s `0.056 + 0.50·T` is exactly what a fixed 0.056 s
+   plant delay gives once the command is latched at a frame boundary, which
+   already costs half a period. `--plant-dead 0.056`, and the period dependence
+   falls out instead of being fitted.
+4. **The brake at throttle 0.0 is 4.15 + drag, not 4.6 + drag.** Measured
+   decel with the throttle at exactly 0.0: 4.99 (v 2-3), 5.07 (3-4), 5.29
+   (4-5), 5.74 (5-7) m/s².
+
+And the pose pipeline, which the harness had roughly right in shape and wrong
+in detail. Measured est−truth **at the pose's own stamp**, body frame,
+identical at both periods: along-track **+0.100 m**, pose age exactly one
+sensor period, and a lateral error that is **heteroscedastic in curvature** —
+
+| \|kappa\| | mean (signed toward the inside) | std |
+|---|---|---|
+| < 0.2 | −0.002 | 0.009 / 0.010 |
+| 0.5-1.0 | −0.017 .. −0.023 | 0.021 / 0.030 |
+| > 1.0 | −0.040 .. −0.059 | 0.026 / 0.057 |
+
+i.e. almost noiseless on the straight, and in a hairpin 4-6x the scatter plus a
+systematic **outward** offset. Yaw error is 0.009 rad std on the straight and
+0.012-0.019 in a hairpin with a −0.017 rad outward mean; the harness had it at
+zero. The sensor period jitters ±0.0015 s, and 0.50 % of frames at 0.058 s are
+longer than 1.5x the median (p999 0.163 s) against 0.02 % at 0.094.
+
+One harness gap was fixed on the way: **`MPC3Sim` never supported
+`servo_head_kappa`**, so the harness could not run the shipping config at all.
+
+### Test (a): pace. It passes.
+
+`tools/surrogate_race.py --compare-log` puts the surrogate's per-2 m segment
+times next to a live log's, median over laps. Shipping config, both held-out
+100-lap logs, 300 surrogate laps each:
+
+| | lap, live | lap, surrogate | per-bin \|error\| p50 / p95 / max |
+|---|---|---|---|
+| display 0.058 s | 10.815 s | **10.890** | 0.017 / 0.097 / 0.111 s |
+| Xvfb 0.094 s | 11.483 s | **11.450** | 0.022 / 0.137 / 0.281 s |
+
+Before the fit the same cells were **+1.4 s/lap** slow, all of it in the corner
+entries (s 36-38 alone was +0.43 s). The cross-track distribution matches too:
+|e| p95 0.221 against live's 0.227, max 0.475 against 0.459, and the per-4 m
+bands agree to 0.03-0.08 m almost everywhere.
+
+### Test (b): live verdicts. It reproduces 8-9 of 15 cells, and it is ONE-SIDED.
+
+*(The table below is the first run, on the plant before the breakaway cliff and
+the two ported parameters; 4c.2 has the final one, which is 8 / 15 with the
+same zero false collides.)*
+
+`tools/surrogate_validate.py`, 100 laps x 3 seeds per cell, every live outcome
+from section 3 and none of it used in the fit. An arm "collides" if it takes at
+least one collision per 100 laps, which is the live gate.
+
+| arm | period | surrogate | live | agree |
+|---|---|---|---|---|
+| shipping (h3 + pub_gate + gated servo) | 0.058 / 0.097 | clean / clean | clean / clean | **YES / YES** |
+| `_h2` (last hairpin at ay 9) | 0.058 / 0.097 | collide (s 42.7-43.2) / collide | collide / collide | **YES / YES** |
+| `_h7` (s 36-40 released, full) | 0.097 | clean | collide (10/27) | NO |
+| `_h8` (s 36-40 released, half) | 0.097 | clean | collide (4/32) | NO |
+| `_h3c` + ungated servo | 0.058 / 0.097 | clean / clean | clean / collide (6/100) | **YES** / NO |
+| ungated servo on h3 | 0.058 / 0.097 | clean / clean | collide (1/100) / clean | NO / **YES** |
+| `ay_limit 16` | 0.058 / 0.097 | clean, **+0.38 / +0.35 s/lap** | clean but slower | **YES / YES** |
+| `lead_tk 4.0` | 0.097 | collide (153/300) | collide (10/23) | **YES** |
+| weave notch | 0.097 | clean | collide (5 and 8 per 100) | NO |
+| `finals_mesh_sched_bo.json` | 0.097 | clean | collide (10/15) | NO |
+
+**Confusion, cells = arm x period: 3 true collide, 6 false clean, 6 true clean,
+0 false collide. Agreement 9 / 15.** The user's bar for starting RL was six of
+the nine named arms; by arm this gets four fully right (shipping, `_h2`,
+`ay_limit 16`, `lead_tk 4.0`) and two half. **The bar is not met, so no policy
+was trained.**
+
+The failure is not random, and that is what makes the tool usable: **the
+surrogate never invents a collision.** Every cell it calls "collides" collided
+live, including getting `_h2`'s at BOTH periods and `ay_limit 16`'s *lap-time*
+loss at both periods right. What it cannot do is clear an arm.
+
+### Why it cannot clear an arm — the specific, measured gap
+
+The surrogate reproduces the median and the p95 of cross-track error and not
+the rare wide excursion that actually hits the wall. At s 36-40 on the shipping
+config at 0.094 s, live reaches **−0.345 m** (5 events in 100 laps); the
+surrogate reaches **−0.102 m** in 300. The live events are unambiguous in the
+log: at s 38 the car is on the line at 2.35 m/s, the controller commands
+0.42-0.47 rad of rack against a median 0.32, the asked ay is 8-9 m/s² while the
+car is accelerating at ~2.3 m/s², and the car then runs 0.32 m wide in 0.5 s —
+it is not delivering anything like the curvature it is asking for.
+
+Five candidate mechanisms were built and measured, and **none of them produces
+that tail**. Recorded so nobody re-runs them:
+
+* **Friction-ellipse coupling.** It is real but thin: at asked ay 8-10 the
+  delivery ratio is 0.922 below ax 1.5 m/s² and 0.744-0.825 above it, on 82
+  samples, with no effect at all below ay 8. Implemented as opt-in
+  `--plant-grip-c` (default 0). Turning it on changes the s 36-40 minimum by
+  0.00 m and makes the verdict table *worse* (`_h2` at 0.097 goes clean),
+  because a car with less grip simply drives more conservatively.
+* **Sensor-period jitter** (0.002, 0.006 s), **publish latency and jitter**
+  (10/6 and 20/12 ms), **dropped frames** (one per 11.6 s and per 30 s), and
+  all of them together: lap time stays within +0.02..+0.07 s and the s 36-40
+  minimum stays between −0.06 and −0.14 m. None reaches −0.345.
+* **A stochastic grip residual.** The fractional delivery residual has std
+  0.099 / 0.159 but is essentially **white** (autocorrelation 0.35 / 0.02 at
+  lag 1 and ~0 beyond), so it is mostly the 10 Hz IPS differentiation, and
+  injecting white curvature noise displaces the car by millimetres.
+
+The honest reading is the one `tools/lateral_id.py` already reaches from the
+other direction: **the car has never been asked to corner hard at speed on
+track** (0 quasi-steady samples above 4.5 m/s with more than 0.15 rad of
+steering, 28 in the whole corpus above 0.33 rad), so the limit behaviour that
+produces these excursions — transient sideslip at the front axle — is not
+identifiable from racing laps, and a kinematic bicycle with a delivery ratio
+cannot express it. Closing this needs the sysid staircase in the
+`2026-iros-explore` image (`ros2 run pit_crew sysid_run`, then `lateral_id.py
+--sysid --write`), not more racing data.
+
+### 4c.1 What was added after the first table (Sep 19, later)
+
+**A lateral BREAKAWAY cliff, and where the live record puts it.** The affine
+delivery ratio is right to asked ay ~8.5 and badly wrong above it: measured
+p50 on the two shipping logs is 0.936 (ay 6-7), 0.923 (7-8), 0.904 (8-9) and
+**0.486** (9-12). Two independent signs that the quasi-static model stops
+describing that regime: no first-order pole fits the ay > 8 samples at all
+(rms 0.25 1/m, and FLAT in tau, against 0.063 at ay 6-8), and the `-explore`
+skidpad reports the tyre holding ~0.9 of asked curvature to 9.9 m/s² and then
+collapsing to 0.24-0.35 inside one 0.5 m/s step.
+
+Where the cliff sits is settled by the live record, not by the fit. Driven in
+the surrogate, 60-lap cells at both periods:
+
+| cliff / post-ratio | shipping, 0.058 | shipping, 0.097 | h7 | h8 |
+|---|---|---|---|---|
+| 8.8 / 0.48 (the racing-log fit) | 11.140 (+0.33 vs live), **1 collision** | 11.450 (−0.03) | 0 | 0 |
+| 9.3 / 0.55 | 10.970 (+0.16) | 11.410 (−0.07) | 0 | 0 |
+| **9.6 / 0.70 (shipping)** | **10.880 (+0.065)** | **11.420 (−0.063)** | 0 | 0 |
+| 10.0 / 0.55 | 10.880 (+0.065) | 11.400 (−0.08) | 0 | 0 |
+
+The shipping config has 100 clean live laps at both periods, so a cliff that
+makes it collide is too low. 9.6 is both clean and the skidpad's own number,
+so the 40 racing samples above ay 9 are read as transients. **It does not
+rescue the false-clean arms**: h7 and h8 take 0 collisions in 60 laps per
+period at every cliff from 8.8 to 10.0, because they never ask enough ay in
+the surrogate to break away. The cliff is in because it is measured and costs
+nothing, not because it closed the gap.
+
+**Two harness parameters existed only in the node.** `servo_head_kappa` (the
+curvature gate on the exit servo, which the SHIPPING config sets to 0.4) and
+`servo_decel_look_m` were both read into `MPC3Sim.P` and never used, so every
+harness cell that set either of them silently measured the default. Both are
+now ported verbatim; the shipping defaults stay byte-identical under `cmp` on
+`--dump-rec`. Any earlier harness number for those two knobs is void.
+
+### 4c.2 The verdict table on the final plant, and what it screened
+
+Re-run after the cliff and the two ported parameters, 200 laps per cell
+(2 seeds x 100), both periods:
+
+| arm | surrogate | live | agree |
+|---|---|---|---|
+| shipping (h3 + pub_gate + gated servo) | clean / clean | clean / clean | **YES / YES** |
+| `_h2` | collide (s 42.7-43.0) / clean | collide / collide | **YES** / NO |
+| `_h7`, `_h8` | clean | collide (10/27, 4/32) | NO |
+| `_h3c` + ungated servo | clean / clean | clean / collide (6/100) | **YES** / NO |
+| ungated servo on h3 | clean / clean | collide (1/100) / clean | NO / **YES** |
+| `ay_limit 16` | clean, **+0.385 / +0.380 s/lap** | clean but slower | **YES / YES** |
+| `lead_tk 4.0` | collide (106 in 200) | collide (10/23) | **YES** |
+| weave notch, `sched_bo` | clean | collide | NO |
+
+**2 true collide, 0 false collide, 6 true clean, 7 false clean: 8 / 15.** The
+one-sided reading is unchanged and is the whole value of the tool: a surrogate
+collision is evidence, a surrogate clean sheet is not.
+
+Driven as a screen on the candidates that were open on Sep 19 (200 laps per
+cell, shipping flags, baseline 10.890 / 11.425):
+
+| candidate | 0.058 | 0.097 | |
+|---|---|---|---|
+| `h3v86`, `cornr_mhw50`, `servo_k_p 1.0`, `servo_head_max 0.6`, `servo_decel_look_m` 1.5/3.0 | −0.025..+0.045 | +0.010..+0.020 | neutral, and the last two agree with the live "wash" |
+| `steer_tau_k` −0.25 / −0.10 | −0.010 | +0.075 / +0.040 | no gain at the organisers' period, where its claim was −0.05 s/lap |
+| `lmpc_c` | +0.240 | +0.425 | **slower at both**, where its claim was −0.05 s/lap at 0.098 |
+| `lon_v8b55a65` | +0.410 | +0.410 | slower |
+| `apex_f42a`, `apex_f42i` | +0.445, +0.685 | +0.475, +0.645 | slower |
+| `hyb675b` | +0.290 | +0.535 | slower; live says +0.244 / +0.295, so the sign and roughly the size |
+| `exitm _h4` | −0.040 but **3 collisions / 200 at s 24.7** | +0.190 | **VETO** — the corner the related `_ay90h4` arm hit live at s 26.8 |
+
+and on the f42k geometry's per-zone speed releases (built with
+`scripts/partial_blend.py`; the all-zeros blend reproduces the committed
+`finals_mesh_apex_f42k_race.csv` to 0.014 m/s and the same 10.282 s ideal, so
+the zones really are s 17.5-21.5, 36-40 and 42-2.1):
+
+| release | ideal | 0.058 | 0.097 |
+|---|---|---|---|
+| base (= f42k_race) | 10.282 | +0.135 | +0.135 |
+| A 0.25 / 0.50 (first hairpin) | 10.243 / 10.205 | +0.105 / +0.105 | +0.120 / +0.090 |
+| **B 0.25 / 0.50 (s 36-40)** | 10.217 / **10.160** | +0.075 / **+0.020** | +0.020 / **−0.030** |
+| C 0.25 / 0.50 (last hairpin) | 10.222 / 10.168 | +0.135 / +0.100 (**2 coll at s 42.6-42.8**) | +0.105 / +0.080 |
+
+**B 0.50 is the only arm in 22 cells that beats shipping anywhere, and it does
+it at both periods**; C 0.50 is the only collision, on the corner the live
+record already says is capped by the steering lock. One caveat that has not
+gone away: f42k_base reads 0.135 s/lap slower than shipping here while the
+live Xvfb run has it 0.05 s FASTER, so on the f42k geometry the surrogate and
+the live run disagree by ~0.19 s/lap — use these numbers for the DIFFERENCES
+between releases on the same geometry, not for the geometry itself.
+
+### How to use it, and what it is worth
+
+It is a **one-sided screen**: a surrogate collision is evidence, a surrogate
+clean sheet is not. Used that way it would have vetoed `_h2` and `lead_tk 4.0`
+before they took live slots, and it correctly called `ay_limit 16` slower at
+both periods — four of the five live slots that section 3 records as wasted on
+harness predictions.
+
+```bash
+# laps / collisions (with s) / per-2 m segment times, shipping flags by default
+taskset -c 16-27 nice -n 19 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  MKL_NUM_THREADS=1 .venv/bin/python tools/surrogate_race.py \
+  --line finals_mesh_exitm_m10t6_h3_race --frame 0.097 --laps 100 --seeds 3
+
+# a candidate param is one -r, exactly as run_exp.sh takes -p
+... tools/surrogate_race.py --line finals_mesh_hyb675b_race -r ay_limit=16.0
+
+# pace against a live log, bin by bin
+... tools/surrogate_race.py --line finals_mesh_exitm_m10t6_h3_race --frame 0.058 \
+      --compare-log data/logs/race_20260919_044701.csv
+
+# the whole held-out verdict table
+... tools/surrogate_validate.py --laps 100 --seeds 3
+```
+
+`tests/test_plant_fit.py` pins the opt-in property and every fitted constant.
+
+---
+
+## 4d. The RL residual policy (Sep 19, agent, branch `rl-track`)
+
+**Nothing here is in the image and nothing here has been driven.** Phase 2 of
+the RL track, built on the surrogate of section 4c and reported whatever it
+said.
+
+### What was built
+
+`src/pit_crew/residual_policy.py` is a pure-numpy tanh MLP loaded from an
+`.npz` (the competition image has numpy only). It reads the state mpc3 already
+holds and returns two numbers: an **additive steering delta** hard-bounded to
+**±0.03 rad**, and a **multiplicative scale on the speed setpoint** bounded to
+**0.95-1.05**. mpc3 gains one parameter, `residual_policy` (default `''`,
+verified byte-identical), applied after the solve and before the publish
+guard, re-clipped by the same grip cap the solver used. `tools/sim_tracker.py`
+mirrors the application exactly, so the trainer and the node cannot drift.
+
+The bounds are asymmetric on purpose. Every live failure on this track is the
+car running **wide on a corner exit under acceleration**, and section 4c
+measured the surrogate to be optimistic exactly there, so the policy is given
+**no authority to add speed** inside the three slow zones (s 17.5-21.5, 36-40
+and 42-44.7 + 0-2) or wherever `|kappa|` under the car exceeds 0.3. It may
+slow the car anywhere. An `.npz` may narrow the bounds, never widen them; a
+non-finite net falls back to the identity `(0.0, 1.0)`; an empty parameter
+loads nothing and a missing file raises rather than silently not running.
+
+Observation (18 numbers): cross-track error, heading error, speed, the
+measured sensor period, the line's curvature at 6 preview distances
+(0-4 m) and the left/right wall distance from the car at 4 of them.
+
+`tools/rl_env.py` runs whole episodes of the REAL mpc3 with the policy plugged
+in where the node plugs one in — not a gym `step()` API, so there is no second
+implementation of the control law to get wrong. `tools/rl_train.py` is PPO in
+numpy: no torch, so the arrays that come out of training are the arrays that
+ship. The gradients are checked against finite differences and the export is
+pinned to the trainer's own forward pass (`tests/test_rl_train.py`).
+
+### Three things that had to be fixed before it trained at all
+
+Worth recording, because each looked like "RL doesn't work here":
+
+1. **A fixed-lap episode cannot reward speed.** The first reward was progress
+   per second; summed over an episode of a fixed number of laps the total
+   progress is a constant, so the return was a constant too and rewarded
+   nothing. It is now `progress − w_time · dt`, a minimum-time objective, with
+   `w_time` 4.0 ≈ the lap's mean speed.
+2. **Domain randomisation buried the signal.** The randomised period, grip,
+   pose bias and rack lag move the return by ±200 between iterations while a
+   0.05 s/lap improvement is worth about 0.8. Fixed `(seed, frame)` blocks —
+   common random numbers — make the batch-to-batch difference the policy.
+3. **An infeasible penalty is not conservatism.** Inflating the wall by 0.10 m
+   for the contact test, as the brief asked, makes contact unavoidable: the
+   shipping line's own minimum footprint clearance on a zero-residual
+   pessimistic rollout is 0.079 m. Trained that way the only reachable policy
+   is "go slower", and that is exactly what it learned — near-wall contacts
+   fell from 26 per batch to 0 and the lap time did not move. At 0.05 m the
+   task is feasible and tight.
+
+### What it learned: nothing worth driving
+
+Two training configurations, 250 PPO iterations each (12 episodes x 4 laps per
+iteration, ~3 000 surrogate laps per run), evaluated **held out** — the
+evaluation seeds are not the training seeds — at 200 laps per period on the
+fitted surrogate and 96 laps on the pessimistic plant.
+
+| arm | fitted 0.058 | fitted 0.097 | pessimistic: contacts / lap / min clear |
+|---|---|---|---|
+| shipping mpc3 | **10.890**, 0 coll / 200 | **11.425**, 0 coll / 200 | 5 / 11.185 / 0.050 |
+| `res_v1` (clear target 0.30, w 6) | 10.965 (**+0.075**), 0 / 200 | 11.470 (**+0.045**), 0 / 200 | 7 / 11.240 / 0.035 |
+| `res_v2` (clear target 0.20, w 3) | 10.885 (**−0.005**), 0 / 200 | 11.430 (**+0.005**), 0 / 200 | 3 / 11.200 / 0.000 |
+
+`res_v1` is strictly worse: it bought wall margin it did not need and paid
+0.045-0.075 s/lap for it. `res_v2`, trained with the proximity penalty relaxed
+so lap time could dominate the return, is **indistinguishable from the
+shipping controller** — ±0.005 s/lap, which is inside the surrogate's own
+noise — and on the pessimistic plant it trades two contacts for the last of
+the clearance (min 0.050 → 0.000 m). Neither is worth a live gate.
+
+**Why, and it is not a training failure.** On the fitted surrogate the
+shipping controller laps 10.890 against the live 10.815, i.e. the whole
+distance between the surrogate's shipping config and the fastest lap anyone
+has driven on this line is **0.075 s**, which is the surrogate's own accuracy.
+A residual bounded to ±0.03 rad and ±5 % of the speed setpoint, forbidden from
+adding speed in the three zones and in any corner, is being asked to find a
+gain smaller than the measurement error of the thing it is being trained on.
+The PPO run does what it should: the return improves monotonically within each
+common-random-number block, the near-wall count goes to zero and stays there,
+the policy std anneals 0.100 → 0.066 — and the lap time does not move.
+
+The surrogate's verdict on the whole exercise is the same one section 4c's
+verdict table gives: **on this line, at this sensor period, the shipping
+controller is at its optimum to within what can be measured offline.** Every
+gain left on this track is geometry and speed profile, which is exactly what
+the live record has been saying since Sep 19 07:30.
+
+### If it is ever picked up again
+
+* `residual_policy:=data/rl/res_v2.npz` is a live-ready parameter today
+  (`tests/test_residual_policy.py` pins the bounds and the gates), and it owes
+  the same two gates as anything else. It is not recommended: it buys nothing.
+* The thing that would change the answer is not more PPO, it is a surrogate
+  that reproduces the rare wide excursion (section 4c). That needs the sysid
+  staircase in the `-explore` image, not more racing data:
+  `TAG=2026-iros-explore ./scripts/sim_restart_connect.sh`, then
+  `ros2 run pit_crew sysid_run`, then
+  `tools/lateral_id.py --sysid data/logs/sysid_*.csv --write`.
+* Do not re-run these two arms. `res_v1`'s conservatism came from an
+  infeasible wall penalty and `res_v2` is a clean no-op; a third arm inside
+  the same bounds has nothing left to find.
+
+---
+
 ## 5. What is left, in order
 
 1. **Planned ay on the shipping geometry, paired with the brake lead — they are

@@ -48,6 +48,31 @@ Driven: **real display (0.058 s) 32 laps / 0 collisions / OFFICIAL 114.042 s**
 **12 laps / 0 collisions / 119.57 s**. Without the brake the same line, the safe
 line and barrier 0.34 each took **10 collisions in 11-14 display laps** — a DQ.
 
+**Sep 19, branch `rl-track` — a log-fitted surrogate you can screen candidates
+on, and an RL result that says no.** `docs/FINALS_TUNING.md` sections 4c and
+4d. The offline harness was 1.4 s/lap pessimistic in every corner entry; with
+the plant identified from the two shipping 100-lap logs it now reproduces the
+shipping config's per-2 m segment times to a median of 0.017 / 0.022 s and its
+lap to 10.890 vs live 10.815 (0.058 s) and 11.425 vs 11.483 (0.097 s). On 15
+arm x period cells with known live verdicts it agrees on 8 with **zero false
+collides** — so a surrogate collision is evidence and a surrogate clean sheet
+is not. Screen anything with
+
+```bash
+taskset -c 22-27 nice -n 19 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  MKL_NUM_THREADS=1 .venv/bin/python tools/surrogate_race.py \
+  --line <name> --frame 0.097 --laps 100 --seeds 3 [-r key=value ...]
+```
+
+Two harness bugs found on the way: `servo_head_kappa` and `servo_decel_look_m`
+existed only in the node, so every harness cell that set either measured the
+default. The RL residual policy (opt-in `residual_policy` parameter, numpy
+MLP, ±0.03 rad and ±5 % of the speed setpoint) trains cleanly and is a
+**no-op**: ±0.005 s/lap against the shipping controller over 200 surrogate
+laps per period. HOST RULE added: at most **6** single-threaded workers on
+cores 22-27 — more drags the simulator's Xvfb period out of the organisers'
+band.
+
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
 **22:30 IST, Sep 19 — where it stands.** Banked image v5 (108.37 / 114.19 s,
