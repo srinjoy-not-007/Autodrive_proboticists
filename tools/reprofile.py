@@ -15,6 +15,13 @@ Usage:
                [--jerk-lat 40] [--vmax 8.0] --out <stem>
 """
 
+# Pin BLAS before numpy loads: unpinned, this tool takes every core (63 threads
+# on the finals host) and disturbed the simulator's frame timing during scored
+# runs on Sep 19.  setdefault, so a caller's own pins win.  Output is identical.
+import os as _os
+for _k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
+           'NUMEXPR_NUM_THREADS'):
+    _os.environ.setdefault(_k, '1')
 import argparse
 import os
 import sys
