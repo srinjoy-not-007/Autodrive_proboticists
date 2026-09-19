@@ -16,11 +16,20 @@ verified byte-identical (`cmp` on `--dump-rec`, mpc3 at 0.058 s, 4 laps).
 
 ## 0. The verdict in four lines
 
-| candidate | 0.058 s vs mpc3 | 0.098 s vs mpc3 | verdict |
+Baseline, same line and flags: `mpc3` laps **11.015 s** at 0.058 and
+**11.545 s** at 0.098 (200 surrogate laps each, 0 collisions).
+
+| candidate | 0.058 s | 0.098 s | verdict |
 |---|---|---|---|
-| **A. `mpcc` — joint speed+steering MPC** | *(table 3)* | *(table 3)* | **the only one worth a live slot** |
-| B. `ffb` — preview feedforward + feedback | *(table 4)* | *(table 4)* | **rejected offline**: slower at the organisers' period in every arm |
-| C. `fastpub` — plan re-read between poses | *(table 5)* | *(table 5)* | **null, and the mechanism says it must be**: no topic is faster than the pose and the bridge latches one command per tick |
+| **A. `mpcc` — joint speed+steering MPC** | −0.085 s/lap, **5 collisions / 300 laps** | **−0.425 s/lap, 0 / 300** | **clears the bar at the organisers' period and only there.** Does not pass both gates, so no shipping slot; one bounded live experiment is justified (§6) |
+| B. `ffb` — preview feedforward + feedback | −0.135 s/lap, 0 / 100 | **+0.635 s/lap**, 0 / 100 | **rejected offline** — its anticipation is a distance computed from a constant dead time, so it looks at the wrong place at a 69 % longer period |
+| C. `fastpub` — plan re-read between poses | −0.015 s/lap, 0 / 100 | +0.025 s/lap, 0 / 100 | **null, and the mechanism says it had to be**: no topic on this stack is faster than the pose (measured) and the bridge latches one command per tick |
+
+The one-line answer to the brief's question — *can an architectural alternative
+beat mpc3 by ≥ 0.3 s/lap at the slow period without collisions?* — is **yes at
+that period and no overall**: candidate A does 0.425 s/lap over 300 clean
+surrogate laps at 0.098 s, and then takes five collisions in 300 laps at
+0.058 s at a corner the live record already names.
 
 ---
 
@@ -183,16 +192,16 @@ speed-aware barrier. And **the servo reserve is not a free knob**: it is the
 one place where the joint plan has to be handed to a speed servo that eases off
 near its setpoint, and getting it wrong costs more than the architecture wins.
 
-### 3.2 Where the time comes from (0.098 s, 24 laps, per 2 m bin)
+### 3.2 Where the time comes from (0.098 s, 24 laps, per 2 m bin, final config)
 
 | zone | mpcc − mpc3 |
 |---|---|
-| straight s 0-16 | **−0.135 s** |
-| first hairpin s 16-22 | **−0.140 s** |
-| s 24-27 (the tightest corner) | −0.100 s |
-| s 37 corner (s 32-41) | −0.105 s |
-| last hairpin s 41-46 | **+0.085 s** |
-| **lap** | **−0.395 s** |
+| straight s 0-16 | **−0.140 s** |
+| first hairpin s 16-22 | **−0.135 s** |
+| s 24-27 (the tightest corner) | −0.135 s |
+| s 37 corner (s 32-41) | −0.135 s |
+| last hairpin s 41-46 | **+0.060 s** |
+| **lap** | **−0.485 s** |
 
 The single biggest bin is s 16.0 (−0.080 s), which is the braking zone into the
 first hairpin — the corner the Sep 20 braking audit measured the car entering
@@ -201,33 +210,146 @@ stack 0.2 s/lap there. The last hairpin goes the other way, which is the
 expected sign: the live record says that corner is capped by the steering lock,
 so a controller that plans more entry speed there pays for it.
 
-### 3.3 Gates, 100 laps per seed
+### 3.3 The 100-lap gates found a collision, and what fixed it
 
-PLACEHOLDER_GATE
+The 24-lap screen above is clean everywhere. **The 200-lap gate is not**, and
+that is the whole reason for running it:
 
-### 3.4 The cost: solve time
+| arm | period | laps / collisions | median | at s |
+|---|---|---|---|---|
+| `mpc3` | 0.058 | 200 / **0** | 11.015 | — |
+| `mpc3` | 0.098 | 200 / **0** | 11.545 | — |
+| `mpcc` v1 | 0.058 | 200 / **3** | 11.080 | 0.9 ; 24.1, 25.2 |
+| `mpcc` v1 | 0.098 | 200 / **2** | 11.250 | 0.9, 3.2 |
+
+Both failure sites are corners the live record already names: **s 0.9-3.2 is
+the last hairpin's exit onto the start straight** — the `_ay90h2` failure
+("cte grows monotonically from s 1.5 to −0.4 m by s 4.3", triggered by the
+ay-9 exit speed of the last hairpin) — and **s 24-25 is the tightest point of
+the lap**. Both are exit-acceleration failures, i.e. the one thing
+`docs/FINALS_TUNING` says running wide tracks.
+
+Two candidate fixes, 48 laps per cell:
+
+| arm | 0.058 | 0.098 |
+|---|---|---|
+| fade the servo reserve by curvature (`mpcc_res_kappa 0.4`) | 48 / 0, **14.400** | 48 / 0, **13.910** |
+| cap the setpoint by the envelope at the CURRENT curvature (`mpcc_cap_now`) | 48 / 0, **11.060** | 48 / 0, **11.220** |
+| both | 48 / 0, 14.400 | 48 / 0, 13.910 |
+
+**The curvature fade is a trap and is now default-off with the number in the
+comment.** Unlike `servo_head_kappa`, which fades only the extra head on top of
+the setpoint, it fades the reserve that keeps the speed servo saturated at all,
+so the car sits under plan through every corner: 14.40 s/lap against 11.06.
+
+**`mpcc_cap_now` is the version of the idea that works** and is on by default:
+the setpoint is additionally capped by `envelope_speed(kappa under the car)`.
+On a hairpin exit the line's curvature falls away inside one lead distance
+while the car is still turning, so a setpoint read ahead is a licence to
+accelerate mid-corner; capping it by the measured envelope at the curvature the
+car is actually at is the same statement the solver's own hinge makes, applied
+to the number the throttle receives.
+
+That fixed the DISPLAY period and not the organisers' one. 200 laps per period,
+`mpcc_cap_now` on:
+
+| arm | period | laps / collisions | median | at s |
+|---|---|---|---|---|
+| `mpcc` v2 | 0.058 | **200 / 0** | 11.060 | — |
+| `mpcc` v2 | 0.098 | 200 / **3** | 11.265 | 0.8, 3.2 ; 24.6 |
+| `mpcc` v2, `lon_brake_plan 4.6` | 0.058 | 200 / **1** | 11.065 | 24.4 |
+| `mpcc` v2, `lon_brake_plan 4.6` | 0.098 | 200 / **2** | 11.245 | 24.3, 20.6 |
+
+Same two corners, and `lon_brake_plan` is not the variable — planning on the
+profile's own 4.6 m/s² of brake collides as well. So it is not "arrives hot
+because it braked late": it is the corner EXIT.
+
+**The fix that works is the combined-slip bound on the longitudinal input**
+(`mpcc_ellipse`, default 1.0). A tyre already spending `ay` of its envelope on
+turning has `sqrt(1 - (ay/ay_max)²)` of the longitudinal axis left, so the
+plan's accelerating bound is scaled by that — one-sided, because entering a
+corner slower has never been the failure here. It is item (2) on
+`docs/FINALS_TUNING`'s own literature list ("exit-acceleration-limited
+(combined-slip) forward pass, matching the finding that running wide tracks
+exit acceleration"), and it makes the candidate both **safer and faster**:
+48 laps per cell, `ell 1.0` gives 10.940 at 0.058 and **11.110** at 0.098
+against `ell 0` 11.060 / 11.220, `ell 0.5` 11.050 / 11.230, and
+`ell 1.0 + grip_use 0.85` 11.040 (3 collisions) / 11.250.
+
+Gates on the final configuration, 300 laps per period (3 seeds × 100):
+
+| arm | period | laps / collisions | median | vs mpc3 |
+|---|---|---|---|---|
+| `mpc3` | 0.058 | 200 / 0 | 11.015 | — |
+| `mpc3` | 0.098 | 200 / 0 | 11.545 | — |
+| **`mpcc` final** | **0.098** | **300 / 0** | **11.120** | **−0.425 s/lap** |
+| `mpcc` final | 0.058 | 300 / **5** | 10.930 | −0.085 s/lap; s 1.0-1.4 ×4, s 38.0 |
+
+**That is the honest state of candidate A, and it is not a clean sweep.** At
+the organisers' period it does exactly what the brief asked: 0.425 s/lap over
+300 surrogate laps with no collisions, well past the 0.3 s/lap bar. At the
+display period it is only 0.085 s/lap up and it takes 5 collisions in 300
+laps — about one in 60 — all but one at s 1.0-1.4, the last hairpin's exit,
+which is the same corner `_h2` and `_ay90h2` failed at live.
+
+Note the direction of the trade across the three versions: **v2 (no ellipse) is
+clean at 0.058 and collides at 0.098; the final one is clean at 0.098 and
+collides at 0.058.** Same corner family both times. A third attempt at closing
+it — capping the setpoint by the worst curvature over 0.8-2.5 m of line BEHIND
+the car — is recorded in `mpcc_cap_back_m` as closed: every value over-caps the
+whole lap (11.33-12.86 s/lap) and two of the three still collide.
+
+Under this project's own rule — *a non-zero collision count at either period
+disqualifies a rung*, because failures here are clusters and not a rate —
+**candidate A does not earn a shipping gate as it stands.** What it has earned
+is a narrower experiment; see section 6.
+
+### 3.4 The mechanism, in the trace
+
+12 laps at 0.098 s, shipping flags, median speed and brake duty per 1 m of `s`
+through the braking zone into the first hairpin:
+
+| s | speed mpc3 / mpcc | brake duty mpc3 / mpcc |
+|---|---|---|
+| 10 | 7.73 / **8.16** (+0.43) | **69 %** / 4 % |
+| 11 | 7.15 / **7.94** (+0.80) | **72 %** / 1 % |
+| 12 | 6.47 / **7.46** (+0.99) | 47 % / 28 % |
+| 13 | 5.89 / **6.81** (+0.92) | 43 % / **83 %** |
+| 14 | 5.36 / 5.95 (+0.59) | 48 % / 67 % |
+| 16 | 3.78 / 4.32 (+0.54) | 46 % / 57 % |
+| 18 (entry) | 1.73 / 1.91 (+0.18) | 0 % / 15 % |
+| 19 (apex) | 1.86 / **1.78** (−0.08) | 8 % / 37 % |
+
+**mpc3 starts braking at s 10.1 and holds ~70 % duty for two metres; `mpcc`
+runs 1 % duty there and brakes hard at s 13.** It carries up to 1 m/s more
+through the zone, arrives at the entry only 0.18 m/s hot and takes the apex
+0.08 m/s SLOWER than mpc3 — brake later and harder, rather than earlier and
+longer, which is the thesis the candidate was built on. Over the lap the
+exact-0.0 brake is published on 22.9 % of samples against mpc3's 16.7 %.
+
+### 3.5 The cost: solve time
 
 Same host, same pinned cores, 6 laps at 0.098 s:
 
 | | median | p95 | max |
 |---|---|---|---|
 | `mpc3` | 5.83 ms | 6.41 ms | 7.04 ms |
-| `mpcc` | **13.04 ms** | **18.20 ms** | 23.37 ms |
+| `mpcc` (final) | **14.92 ms** | **21.45 ms** | 27.58 ms |
 
 **This is the one real shipping risk in candidate A.** It is inside the 20 ms
 budget on this host, but the live solve is not this host's: `docs/FINALS_TUNING`
 measures mpc3's live solve at 10-40 ms, i.e. up to 6x the harness figure, and
 mpc3 already counts `solve over period` in its periodic log line. At 2.2x mpc3
 the worst live case would drop poses at the display period. Mitigations, in
-order: `mpcc_iters:=1` (13.04 -> ~9 ms, costs 0.13 s/lap at 0.098 and nothing
-at 0.058), `mpcc_outer:=1`, `horizon:=16`. **Read the node's `solve NN.N ms`
-line in the first 20 s of the first live run before trusting any lap time from
-it.**
+order: `mpcc_iters:=1` (~-35 % of the solve, costs 0.13 s/lap at 0.098 and
+nothing at 0.058), `mpcc_outer:=1`, `horizon:=16`. **Read the node's
+`solve NN.N ms` line in the first 20 s of the first live run before trusting
+any lap time from it.**
 
 (A rollout micro-optimisation — one corridor lookup per step instead of two,
 and skipping the saturation exponential when nothing is over the knee — took
-the median 16.63 -> 13.04 ms and reproduces the same 6-lap run to every printed
-digit, so the screening numbers above stand.)
+the median 16.63 -> 13.04 ms and reproduced the same 6-lap run to every printed
+digit; the combined-slip bound then put ~2 ms back.)
 
 ## 4. Candidate B — the numbers
 
@@ -295,43 +417,59 @@ recorded: it was not the rate, it was re-solving from a stale pose with
 
 ## 6. What to do with this
 
-**Candidate A is the one worth a live slot, and its claim is specifically about
-the ORGANISERS' period.** It is neutral on a real display and ~0.35-0.40 s/lap
-quicker at 0.098 s, which is the right shape: image v7 was promoted on exactly
-that trade (−0.13 s/lap at the organisers' period, +0.05 on the display).
+**Candidate A is the only one worth any live time, and it is NOT a shipping
+candidate.** The claim it earns is narrow and specific: *at the organisers'
+sensor period, giving the controller the speed as a decision variable is worth
+0.4 s/lap, and the mechanism is that it brakes later and limits exit
+acceleration by the measured envelope rather than by two thresholds.* The claim
+it does not earn is "drop it in": it collides at the display period, at one
+corner, roughly once in 60 laps.
+
+Two ways to spend it, and they are different decisions:
+
+* **The cheap one (recommended): one 32-lap Xvfb run, in band, to see whether
+  the 0.4 s/lap is real at all.** The surrogate's pace is the part §4c
+  validated, but five harness-predicted gains failed to transfer live on
+  Sep 19 and this is a bigger claim than any of them. If the lap time does not
+  move live, the whole architecture question is answered for the cost of one
+  slot and nothing else needs doing. **Do not run Gate D on it as it stands.**
+* **The expensive one: close the last hairpin's exit first.** The failure is at
+  s 1.0-1.4 at 0.058 s, where `v_prof_cap` is already 1.00 and `mpcc_ellipse`
+  already limits exit acceleration; the obvious next lever is a per-zone
+  `v_prof_cap` below 1.0 over s 42-2.5, which is the same shape as
+  `finals_mesh_sched.json` and was not tried. Only after that is it worth
+  Gate C + Gate D.
 
 Standing caveats, in the order they should be believed:
 
-1. **A surrogate clean sheet is not evidence.** Five harness-predicted gains
-   failed to transfer live on Sep 19 and the surrogate's own verdict table is
-   8/15 with seven false cleans. What IS evidence here is the collisions it
-   found while the candidate was being built — at s 36.5-36.8 when
-   `v_prof_cap` was 1.25, at s 24 when the arc grid was frozen, at s 21 when
-   the servo reserve was two-sided — every one of them a corner the live record
-   already names. The shipped defaults are the configuration that survived
-   those.
+1. **A surrogate clean sheet is not evidence — but its collisions are.** The
+   collisions it found while the candidate was being built are the useful part:
+   s 36.5-36.8 when `v_prof_cap` was 1.25, s 24 when the arc grid was frozen,
+   s 21 when the servo reserve was two-sided, s 0.8-3.2 twice. Every one is a
+   corner the live record already names, which is the strongest available
+   argument that the remaining 0.058 s failure is real too.
 2. **The pace claim is the part the surrogate is good at** (per-2 m segment
    times reproduce the live log to a median of 0.02 s), and it is a 0.4 s/lap
    claim, not a 0.05 s/lap one — i.e. outside the ±0.06 s/lap accuracy §4c
    measured, and outside the one disagreement it has on this geometry
    (0.19 s/lap on `apex_f42k`). It would still not be the first 0.4 s/lap
    surrogate claim to evaporate.
-3. **Solve time (3.4) is the thing most likely to turn this into a DQ**, and it
+3. **Solve time (3.5) is the thing most likely to turn this into a DQ**, and it
    is measurable in the first 20 s of the first run.
-4. This is a controller change, so it owes **Gate C (100 Xvfb laps, in band,
-   0 collisions) and Gate D (32 display laps, 0 collisions)** in its own right,
-   and it must not go near the image until both pass.
+4. It must not go near the image on anything less than Gate C **and** Gate D,
+   and it cannot pass Gate D today.
 
-### The live run, in order
+### The live run
 
-Gate C first, in band (`RATE_MIN_DT`/`RATE_MAX_DT`, the Sep 20 method rule), on
-a quiet host:
+The 32-lap Xvfb probe, in band (`RATE_MIN_DT`/`RATE_MAX_DT`, the Sep 20 method
+rule), on a quiet host. `LAPS=100` turns the same command into Gate C for
+whoever closes the last hairpin first:
 
 ```bash
 LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false' \
 RATE_MIN_DT=0.094 RATE_MAX_DT=0.100 \
-SIM_QUALITY=ultra CONTROLLER=mpcc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
-  ./scripts/run_exp.sh mpcc_x100 apex_f42k_race \
+SIM_QUALITY=ultra CONTROLLER=mpcc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=32 \
+  ./scripts/run_exp.sh mpcc_x32 apex_f42k_race \
   -p map_prefix:=/home/data/maps/finals_mesh \
   -p rate_adaptive:=true -p w_dcmd:=50.0 -p cmd_tau:=0.10 -p steer_tau:=0.04 \
   -p barrier_margin:=0.34 -p thr_brake_lead_s:=0.05 \
@@ -343,30 +481,36 @@ SIM_QUALITY=ultra CONTROLLER=mpcc MAP=finals_mesh LIDAR_OFFSET=0.1933 LAPS=100 \
   -p mpcc_brake_a:=2.5
 ```
 
-Then Gate D, the same flags with `VISIBLE=1 ... LAPS=32 ./scripts/run_exp.sh
-mpcc_disp apex_f42k_race ...`.
+What to read out of it, in order: (1) the node's periodic `solve NN.N ms`
+against the measured period — if it exceeds it, switch to `mpcc_iters:=1` and
+restart, and do not read that run at all; (2) the lap median against a same-
+session mpc3 control on the same line and band (the surrogate says
+11.545 -> 11.120, so live it should be ~0.4 s/lap); (3) collisions, and where.
 
 `brake_mode:=zero` is passed for one reason: the node logs the override
 (`ServoThrottle brake_mode zero -> none`), so a run that lost the flag is
 visible in the first second of the log. In `mpcc` the brake is the SOLVER's.
 
-**Abort rules.** Any collision at either period; the node's periodic
-`solve NN.N ms` exceeding the measured period (switch to `mpcc_iters:=1` and
-restart — do not read that run); driven ay p99 above 9.3; a rising cte p95.
+**Abort rules.** Any collision; the solve over the period; driven ay p99 above
+9.3; a rising cte p95.
 
-**If Gate C passes and the solve time is tight**, the cheaper rungs in order
-are `mpcc_iters:=1`, then `mpcc_outer:=1`. If Gate C fails at a corner, the
-knob that moved it most offline is `lon_brake_plan` (5.2 -> 4.6 gives 0.12
-s/lap back and brakes where the profile does).
+**Knobs, with what each is worth offline.** `mpcc_iters:=1` cheaper solve for
++0.13 s/lap at 0.098; `lon_brake_plan:=4.6` brakes where the profile does, for
++0.12 s/lap; `mpcc_ellipse:=0` restores the version that is clean at 0.058 and
+collides at 0.098 (11.060 / 11.265); `mpcc_brake_a` 1.5 costs 0.17 s/lap at
+0.098. `mpcc_res_kappa` and `mpcc_cap_back_m` are closed — both are recorded
+in the defaults with the numbers that closed them.
 
-### What would be next if it works
+### What would be next if the pace is real live
 
-`v_prof_cap` is the whole remaining lever and it is pinned at 1.00 — `mpcc` is
-not allowed to be faster than the offline profile anywhere, only to reach it
-later. At 1.25 the surrogate says 0.6 s/lap more and collides at s 36.5-36.8.
-The honest version of that experiment is a per-zone cap (1.00 in the three
-hand-held safe zones, 1.05-1.10 elsewhere), which is the same shape as
-`finals_mesh_sched.json` and owes the same two gates.
+1. **The last hairpin's exit at the display period**, which is the one thing
+   between this and a shipping gate. `v_prof_cap` is a single global 1.00; a
+   per-zone version below 1.0 over s 42-2.5 is the obvious next arm and is the
+   same shape as `finals_mesh_sched.json`.
+2. **Then `v_prof_cap` upward everywhere else.** It is the whole remaining
+   lever: `mpcc` is currently not allowed to be faster than the offline profile
+   anywhere, only to reach it later. At a flat 1.25 the surrogate says 0.6 s/lap
+   more and collides at s 36.5-36.8, so this one is per-zone too.
 
 ### Files
 

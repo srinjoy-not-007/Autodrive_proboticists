@@ -146,12 +146,30 @@ MPCC_DEFAULTS = dict(
     # corner exit).  Measured here too: without it, 3 collisions per 200
     # surrogate laps at 0.058 and 2 at 0.098, at the last hairpin's exit
     # (s 0.9-3.2) and the tightest corner (s 24-25).
-    mpcc_res_kappa=0.4,
+    # DEFAULT OFF, and measured to be a trap: unlike `servo_head_kappa`, which
+    # fades only the EXTRA head on top of the setpoint, this fades the reserve
+    # that keeps the servo saturated at all, so at 0.4 the car sits under plan
+    # through every corner -- 14.40 s/lap against 11.06 over 48 laps. The
+    # curvature cap below is the version of this idea that works.
+    mpcc_res_kappa=0.0,
     # Hard cap on the setpoint by the MEASURED envelope at the curvature the
     # car is at RIGHT NOW, not at the lead point.  On a hairpin exit the line's
     # curvature falls away within one lead distance while the car is still
     # turning, so a setpoint read ahead is a licence to accelerate mid-corner.
     mpcc_cap_now=1,
+    # DEFAULT OFF and CLOSED.  The idea was to cap by the worst curvature over
+    # this much line BEHIND the car as well as under it, on the theory that at
+    # the last hairpin's exit the line has straightened but the car has not.
+    # It is a third trap of the same family as `mpcc_res_kappa`: every value
+    # over-caps the whole lap.  96 laps per cell against the 10.94 / 11.11 the
+    # default gives -- 0.8 m: 11.330 (0.058) and 11.520 with a collision
+    # (0.098); 1.5 m: 11.760 and 12.070; 2.5 m: 12.550 with a collision and
+    # 12.860.  Do not re-open without a per-zone version.
+    mpcc_cap_back_m=0.0,
+    # Combined slip on the ACCELERATING side of the longitudinal input (0 = off,
+    # 1 = the full friction ellipse against `grip_use * ay_break`).  See
+    # `_lon_bounds`.
+    mpcc_ellipse=1.0,
 )
 
 
@@ -191,11 +209,25 @@ class MPCC(MPC3):
         self.last_brake = False
 
     # ------------------------------------------------------------------
-    def _lon_bounds(self, v):
+    def _lon_bounds(self, v, ay=None):
         c = self.cfg
         a_hi = np.minimum(c['lon_a_accel'],
                           c['lon_K'] * (c['lon_g'] * c['lon_u_max'] - v))
         a_hi = a_hi - c['lon_drag'] * v
+        # COMBINED SLIP on the accelerating side only.  Every live failure on
+        # this track is the car running wide on a corner EXIT under
+        # acceleration, and `docs/FINALS_TUNING` §5.2 says it tracks exit
+        # ACCELERATION rather than apex speed.  A tyre that is already spending
+        # `ay` of its envelope on turning has `sqrt(1 - (ay/ay_max)^2)` of the
+        # longitudinal axis left, so the plan is not allowed to ask for more.
+        # Deliberately one-sided: the braking side is left alone, because
+        # entering a corner slower is never the failure here.
+        el = float(c.get('mpcc_ellipse', 0.0) or 0.0)
+        if el > 0.0 and ay is not None:
+            f = np.sqrt(np.maximum(
+                0.0, 1.0 - (ay / (float(c['grip_use'])
+                                  * float(c['ay_break']))) ** 2))
+            a_hi = a_hi * (1.0 - el + el * f)
         a_lo = -(c['lon_brake_a0'] + c['lon_drag'] * v)
         return a_lo, np.maximum(a_hi, a_lo + 1e-3)
 
@@ -337,7 +369,8 @@ class MPCC(MPC3):
             if k < nd:
                 a_look = self.a_hold
             else:
-                lo_a, hi_a = self._lon_bounds(vk)
+                ay_k = vk * vk * np.abs(k_lin)
+                lo_a, hi_a = self._lon_bounds(vk, ay_k)
                 a_look = np.clip(A[k - nd], lo_a, hi_a)
             v_next = np.clip(vk + a_look * dt, c['lon_v_min'], c['lon_v_max'])
             ds_k = np.maximum(0.5 * (vk + v_next) * dt, min_ds)
@@ -582,7 +615,13 @@ class MPCC(MPC3):
         # collides 4-6 times per 24 laps at s 24 (the tightest corner) at the
         # organisers' period.
         res = float(c['mpcc_servo_reserve']) * max(0.0, min(1.0, a_cmd / 0.5))
-        k_now = abs(float(self.path.kappa[i0]))
+        bk = float(c.get('mpcc_cap_back_m', 0.0) or 0.0)
+        if bk > 0.0:
+            nb = max(1, int(round(bk / max(self.path.spacing, 1e-3))))
+            jb = (int(i0) - np.arange(nb + 1)) % self.path.n
+            k_now = float(np.abs(self.path.kappa[jb]).max())
+        else:
+            k_now = abs(float(self.path.kappa[i0]))
         rk = float(c.get('mpcc_res_kappa', 0.0) or 0.0)
         if rk > 0.0:
             res *= max(0.0, 1.0 - k_now / rk)
