@@ -281,7 +281,7 @@ class TestTheLineDefaultFollowsTheMap:
     @pytest.mark.parametrize('slug,controller,want', [
         ('porto_mesh', 'mpc3', '/home/data/racelines/porto_mesh_cr_dk0.8.csv'),
         ('porto_mesh', 'mpc', '/home/data/racelines/porto_mesh_safe.csv'),
-        ('finals_mesh', 'mpc3', '/home/data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv'),
+        ('finals_mesh', 'mpc3', '/home/data/racelines/finals_mesh_apex_f42k_race.csv'),
         ('finals_mesh', 'mpc', '/home/data/racelines/finals_mesh_safe.csv'),
     ])
     def test_the_default_is_derived_from_the_slug(self, slug, controller, want):
@@ -430,7 +430,7 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
 
     FROZEN = {
         'rate_adaptive': 'true', 'w_dcmd': '50.0', 'cmd_tau': '0.10',
-        'steer_tau': '0.04', 'barrier_margin': '0.40',
+        'steer_tau': '0.04', 'barrier_margin': '0.34',
         'thr_brake_lead_s': '0.05', 'brake_mode': 'zero',
         'brake_a_min': '1.5', 'brake_dv': '0.3', 'brake_a_full': '4.6',
         'pub_gate_corr': '0.05',
@@ -445,7 +445,7 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         race after the gate.
         """
         line, eff = self.effective('finals_mesh', 'mpc3')
-        assert line == '/home/data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv', line
+        assert line == '/home/data/racelines/finals_mesh_apex_f42k_race.csv', line
         assert eff['map_prefix'] == '/home/data/maps/finals_mesh'
         for param, value in self.FROZEN.items():
             assert eff.get(param) == value, (param, eff.get(param), value)
@@ -456,9 +456,14 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         gets attributed to the wrong knob."""
         src = source()
         assert 'barrier_margin:=0.34' in src      # still present, still dead
-        for slug in ('finals_mesh', 'porto_mesh', 'icra2026_mesh'):
+        # Sep 20 (v7): the finals line `apex_f42k` has a feasible cap of 0.325
+        # and ships at 0.34 via a `case` on the LINE that runs AFTER the 0.40;
+        # every other slug still gets the unconditional 0.40.
+        for slug in ('porto_mesh', 'icra2026_mesh'):
             _line, eff = self.effective(slug, 'mpc3')
             assert eff['barrier_margin'] == '0.40', slug
+        _line, eff = self.effective('finals_mesh', 'mpc3')
+        assert eff['barrier_margin'] == '0.34'
 
     def test_the_legacy_mpc_is_passed_no_mpc3_only_parameter(self):
         """`mpc` does not declare `map_prefix`, `brake_mode` or the rest, and

@@ -59,7 +59,13 @@ elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == finals_mesh ]]; then
     # 8.6 m/s (the car sat at 7.95 of 8.00 at 0.33 of 0.60 throttle; 8.6 is the
     # most the 9.0 m/s encoder guard allows).  100 display laps / 0 / median
     # 10.76 s and 100 Xvfb laps / 0 (h3: 10.82 / 11.47).
-    LINE=/home/data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv
+    # Sep 20 (v7): superseded by the apexing line -- the line finally apexes
+    # (the 0.53 m floor left the optimiser 4-17 cm of freedom in a 0.57-0.70 m
+    # corridor, so it ran mid-corridor everywhere and the car did the apexing
+    # by cutting).  Same profile chain (ay 9.0, vmax 8.6, three slow zones at
+    # the safe speeds).  100 Xvfb laps / 0 / 113.48 s (v6 in-band median 11.47
+    # -> 11.34) and 100 display laps / 0 / 107.82 s (10.76 -> 10.81).
+    LINE=/home/data/racelines/finals_mesh_apex_f42k_race.csv
 elif [[ "$CONTROLLER" == mpc3 ]]; then
     LINE="/home/data/racelines/${SLUG}_race.csv"
 else
@@ -228,6 +234,13 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # was indistinguishable (both DQ without the brake, both clean with it),
     # and 0.40 is the value every clean display run was measured at.
     CTRL_ARGS+=(-p barrier_margin:=0.40 -p thr_brake_lead_s:=0.05)
+    # Sep 20 (v7): the APEXING line `finals_mesh_apex_f42k_race.csv` (min-
+    # curvature floor 0.42 instead of 0.53, with small one-sided margins where
+    # the live car is at the limit) has a feasible barrier cap of 0.325, so
+    # it runs at 0.34 -- the LAST -p wins in ROS, so this line overrides the
+    # 0.40 above.  Gates: 100 Xvfb laps / 0 / 113.48 s (median 11.34, v6 in-band
+    # 11.47) and 100 display laps / 0 / 107.82 s (median 10.81, v6 10.76).
+    case "$LINE" in *apex_f42k_race.csv) CTRL_ARGS+=(-p barrier_margin:=0.34) ;; esac
     CTRL_ARGS+=(-p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6)
     # Sep 19: no-anticipation publish gate on straights (the "swivel"): clips
     # the published angle to line-matching + 0.05 rad while no corner is within

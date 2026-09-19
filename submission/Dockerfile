@@ -108,7 +108,8 @@ ARG FINALS_SLUG=finals_mesh
 COPY data/racelines/finals_mesh_hyb675_race.csv \
      data/racelines/finals_mesh_hyb675b_race.csv \
      data/racelines/finals_mesh_exitm_m10t6_h3_race.csv \
-     data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv /home/data/racelines/
+     data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv \
+     data/racelines/finals_mesh_apex_f42k_race.csv /home/data/racelines/
 COPY data/racelines/${FINALS_SLUG}_centerline.csv \
      data/racelines/${FINALS_SLUG}_race.csv \
      data/racelines/${FINALS_SLUG}_safe.csv \
