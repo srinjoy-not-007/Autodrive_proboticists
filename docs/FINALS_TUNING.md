@@ -1643,6 +1643,14 @@ is PAST breakaway (why the hairpins cannot be driven faster); the tyre delivers
 the winners' 9-10 m/s2 at 4-5 m/s but only inside 0.15-0.20 rad of steering.
 Handed to the surrogate for the limit refit.
 
+**Brake probe (Sep 19 19:00 IST, `brake_probe` in the `-explore` image,
+`data/logs/brake_20260919_132335.csv`).** From 7.1 m/s: throttle EXACTLY 0.0
+gives 6.39 m/s2 with the wheels LOCKED (encoder/IPS slope ratio 0.30, slip
++0.90); every negative command also locks the wheels and the best, −0.15, gives
+6.52 m/s2 — not a proportional brake, and a locked wheel steers nothing. The
+measured held deceleration from high speed is ~6.4 m/s2 incl. drag, above the
+profile's 4.6 plan; the earlier "4.55 held ceiling" is the low-speed figure.
+
 **Closed by agents, Sep 20 06:00 IST.** (a) Unused-width corners: three of four
 (s 22.2, s 40.9, s 27.6) cannot be given speed — longitudinal REACHABILITY between
 the capped zones, not wall width, binds them; only s 30-33 has room (−0.02 s/lap,
