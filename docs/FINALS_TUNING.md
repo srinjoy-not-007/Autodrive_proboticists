@@ -119,7 +119,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_lead_x32` (Xvfb 0.095) | hyb675b + pub_gate + full lead fix (`lead_mode time lead_tk 2.8, rate_terms without thr, thr_lead_s 0.126, dead_tick_c 0`) | 119.538 s + 0 | 32 / 0 | s 19.5 apex −0.344 wide (shipping −0.212) | **slower live (+0.17 s/lap) where the harness said −0.67**: the throttle half works (s 15-18 −0.06, s 36-39 −0.07, entry speed 2.97 -> 3.44 at s 18) but the shorter STEERING lead turns in late at the hairpin (|steer| 0.073 vs 0.143 at s 18), runs wide, apex 1.21 vs 1.56 m/s, s 18-21 **+0.25 s**. Next arm: pin the throttle lead only (`race_20260918_200647`) |
 | `fin_lead_disp` | same full lead fix, display 0.058 | 115.212 s + 0 | 32 / 0 | — | **REJECTED**: 3.6 s slower than shipping on the display too (`race_20260918_201451`). The steering-lead half is wrong at both periods; the throttle-lead pin is being tested alone |
 | `fin_thrpin_x32` (Xvfb) | hyb675b + pub_gate + throttle-lead pin only (`rate_terms:=apply,predict,enc,pose thr_lead_s:=0.126`) | 117.789 s + 0 | 32 / **1** | — | **REJECTED**: no gain over 117.11 and a collision (`race_20260918_202247`). The whole lead-law family is closed live: full fix +0.17 s/lap Xvfb / +3.6 s display, throttle-only neutral + 1 collision |
-| `fin_notch_x32` / `fin_notch_disp` | hyb675b + pub_gate + **weave notch** (`weave_notch_k 0.227 q 0.7 straight_d 3.0 straight_kappa 0.10`) | Xvfb **117.082 s** (shipping 117.11); display **111.297 s** (shipping 111.65), both + 0 | 32 / 0 each | — | **works, time-neutral to slightly better**: display straight steering std per 2 m bin 0.0224 (frozen) -> 0.0183 (gate) -> **0.0105 (notch)**, the 3 Hz peak gone; Xvfb weave already small (0.0139 -> 0.0133). **REJECTED Sep 19 04:10**: the two 100-lap Xvfb runs that carried it took 5 and 8 straight-line collisions; the same rung without it took 0 on the straight. 64 clean laps were not enough evidence (`race_20260918_203220`, `_204004`) |
+| `fin_notch_x32` / `fin_notch_disp` | hyb675b + pub_gate + **weave notch** (`weave_notch_k 0.227 q 0.7 straight_d 3.0 straight_kappa 0.10`) | Xvfb **117.082 s** (shipping 117.11); display **111.297 s** (shipping 111.65), both + 0 | 32 / 0 each | — | **works, time-neutral to slightly better**: display straight steering std per 2 m bin 0.0224 (frozen) -> 0.0183 (gate) -> **0.0105 (notch)**, the 3 Hz peak gone; Xvfb weave already small (0.0139 -> 0.0133). **REJECTED Sep 19 09:40**: the two 100-lap Xvfb runs that carried it took 5 and 8 straight-line collisions; the same rung without it took 0 on the straight. 64 clean laps were not enough evidence (`race_20260918_203220`, `_204004`) |
 | `fin_ay90_x32` (Xvfb 0.094) | `finals_mesh_win_b_ay90h1_race.csv` (ay 9.0, s 36-40 blend) + pub_gate + notch | 115.966 + 10 = 125.97 s | 32 / **2** | s 19.96 exit −0.439 wide at 1.5 m/s (lap 29); lap 1 at s 3.1 | **DISQUALIFIED at this rung**: 1.2 s/lap faster on clean laps (best 11.19) but the hairpin exit runs wide, the same failure as the servo arm. Fallback `_ay90h2` adds the s 17.5-21.5 blend (`race_20260918_204800`) |
 | `fin_ay90_disp` | same ay 9.0 rung, display | 108.970 + 10 = 118.97 s | 32 / **4** | all four at s 19.9-20.2, −0.42..−0.46 wide at 1.5 m/s | fastest race time ever here (best lap 10.742) and ONE corner fails: the s 19 hairpin exit at both periods. `_ay90h2` (s 17.5-21.5 + 36-40 blends, ideal 10.45) in flight (`race_20260918_205557`) |
 | `fin_ay90h2_x32` / `fin_ay90h2_disp` | `finals_mesh_win_b_ay90h2_race.csv` (ay 9.0, s 17.5-21.5 + 36-40 blends, ideal 10.45) + pub_gate + notch | Xvfb (0.096) **116.350 s**; display **109.338 s**, both + 0 | 32 / 0 each | Xvfb wall min: s 0-0.5 0.23 (last-hairpin exit), s 42-44.5 0.29, s 39-41 0.32 | **NEW BEST at both periods** (shipping+notch 117.08 / 111.30); best lap 10.874 display. In the 100-lap Xvfb gate; fallback `_ay90h4` blends all three hairpins (ideal 10.64) (`race_20260918_210358`, `_211133`) |
@@ -131,12 +131,12 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_h4sched2_x32` / `fin_h4_x32b` (Xvfb) | `_ay90h4` + pub_gate, with / without the schedule | 116.353 + 0 / 116.406 + 0 (scored) | 32 / 0 and 32 / **1** | the control's hit: s 26.8, in +0.26 out −0.38 at the ay-9 speed of the s 24-27 corner | schedule neutral again; **`_ay90h4` is NOT promotable** (1 collision in 132 Xvfb laps) — the s 24-27 corner needs the safe speeds at 0.098 too, which leaves ~nothing of the ay-9 gain. The profile route is exhausted at the organisers' period (`race_20260918_232128`, `_232901`) |
 | `fin_ayl16_x32` / `_disp` / `_a5_x32` | hyb675b + pub_gate + `ay_limit 16.0` (third: + `a_accel 5.0`) | Xvfb 117.788; display 112.605; Xvfb 118.245, all + 0 | 32 / 0 each | — | **REJECTED**: slower than shipping at both periods (117.11 / 111.65) where the harness said −0.33 / −0.46 s/lap over 108 laps per frame. **Fourth harness-predicted gain in a row that did not transfer (lead law, schedule, LMPC profile, steering cap): the harness no longer earns live slots for lap-time claims** (`race_20260918_233705`, `_234504`, `_235230`) |
 | `fin_geod_x32` (Xvfb 0.093) | `finals_mesh_geod_ay90h1_race.csv`: hand-shifted 0.06 m inward on three exits + ay 9.0 | 120.548 + 70 s | 11 / **10** | s 27.96 off **+0.395 (LEFT)**, then 7 re-collisions wedged at the s 27 respawn; s 19.86 −0.389; s 44.5 | **REJECTED — the hand shift backfires in the S-bends**: the s 26-30.5 window runs into the following right-hander, where left is the OUTSIDE. Exit margin has to come from the optimiser with a one-sided corridor (agent, branch `exit-margin`), not from a lateral shift (`race_20260919_000056`) |
-| image v3 (Sep 19 06:00 IST) | hyb675b + pub_gate + audit fixes (restart forgiveness, non-finite command guard, guarded callbacks, brake_mode validation, localization clock-reset / encoder-wedge fixes, thread-pinned tools) | Xvfb default **117.588**, Xvfb cmd **117.036**, display **111.869 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE.** A first attempt took a collision under a load-32 host (an agent's 63-thread optimiser: dt p50 0.073, max gap 0.35 s) and is discarded; scored chains now wait for load < 6 (`submission_20260919_05*`/`06*`) |
+| image v3 (Sep 19 11:30 IST) | hyb675b + pub_gate + audit fixes (restart forgiveness, non-finite command guard, guarded callbacks, brake_mode validation, localization clock-reset / encoder-wedge fixes, thread-pinned tools) | Xvfb default **117.588**, Xvfb cmd **117.036**, display **111.869 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE.** A first attempt took a collision under a load-32 host (an agent's 63-thread optimiser: dt p50 0.073, max gap 0.35 s) and is discarded; scored chains now wait for load < 6 (`submission_20260919_05*`/`06*`) |
 | `fin_ship_disp100` | shipping config (hyb675b + pub_gate), display | **111.375 s + 0** | **100 / 0** | — | the shipping config now has 100 clean laps at BOTH periods (`race_20260919_002638`) |
 | `fin_exm10_x32` / `_disp` | **optimiser-built exit-margin geometry** `finals_mesh_exitm_m10t6_h2_race.csv` (one-sided +0.10 m corridor on three exits, ay 9.0, s 17.5-21.5 + 36-40 safe; ideal 10.27) | Xvfb 113.734 + 20; display **107.045** + 0 scored | 32 / **9** ; 32 / **1** | EVERY hit is the last hairpin exit (s 44.1-44.3, −0.22..−0.37 wide, two rebounds at s 0.3-0.5). Elsewhere the margin worked: wall min s 20-23 0.57, s 26-30 0.58 (Xvfb) | fastest runs yet at both periods (best lap 10.99 Xvfb / 10.59 display) with ONE failing corner. `_h3` blends the last hairpin back (s 42-44.7 + 0-2, ideal 10.48) — in flight (`race_20260919_004820`, `_005604`) |
 | `fin_schedbo_x32` (Xvfb) | hyb675b + `finals_mesh_sched_bo.json` | 119.327 + 50 s | 15 / **10** | — | **REJECTED**: the harness showed 192/0 and −0.49 s/lap. Fifth harness prediction to fail live (`race_20260919_010311`) |
 | `fin_exm10h3_x32` / `_disp` | **`finals_mesh_exitm_m10t6_h3_race.csv`**: exit-margin geometry, ay 9.0, safe speeds at s 17.5-21.5, 36-40, 42-44.7+0-2 (ideal 10.48) | Xvfb **114.990 s**; display **109.360 s**, both + 0 | 32 / 0 each (the display log's lap-32 event is the end-of-run stop: cmd and steering exactly 0 through the hairpin) | wall min anywhere: 0.35 m Xvfb, 0.25 m display | **BEST CLEAN CANDIDATE AT BOTH PERIODS** (shipping 117.11 / 111.38). In the 100-lap Xvfb gate (`race_20260919_010749`, `_011513`) |
-| `fin_exm10h3_x100` / `_disp100` | exit-margin h3 line, BOTH 100-lap gates | Xvfb **114.158 s**; display **109.210 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 07:30 IST)**: entrypoint `LINE` for finals_mesh, image v4 built (v3 kept as `:iros2026-finals-v3`). Shipping was 117.11 / 111.38 (`race_20260919_012258`, `_014335`) |
+| `fin_exm10h3_x100` / `_disp100` | exit-margin h3 line, BOTH 100-lap gates | Xvfb **114.158 s**; display **109.210 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 13:00 IST)**: entrypoint `LINE` for finals_mesh, image v4 built (v3 kept as `:iros2026-finals-v3`). Shipping was 117.11 / 111.38 (`race_20260919_012258`, `_014335`) |
 | image v4 (Sep 19 08:00 IST) | built image with the exit-margin h3 line | Xvfb default **115.143**, Xvfb cmd **114.353**, display **109.548 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v3: 117.59 / 117.04 / 111.87, kept as `:iros2026-finals-v3`) |
 | `fin_exm_h4_x32` (Xvfb) | exit-margin h3 with the FIRST hairpin at full ay 9 (`_h4`, ideal 10.37) | 114.085 s + 0 | 32 / 0 | — | clean, no gain over h3's 114.16 — extra apex speed at s 19 does not convert at 0.098. h5 / h6 half-steps not driven (superseded) (`race_20260919_021641`) |
 | `fin_e18a075_x32` (Xvfb 0.093) | later-apex geometry `exitm2_e18n10`, last hairpin at 75 % of the ay-9 raise | 117.034 + 40 s | 26 / **10** | every hit the last hairpin exit again (s 44.25-44.35, −0.30..−0.39) plus a rebound next lap at s 0.3-0.7 | **REJECTED — the last hairpin takes no more than its safe speed at the organisers' period**, whatever the geometry (+0.10 m wall, apex R 0.637). The a10 rung was not driven (`race_20260919_022735`) |
@@ -145,7 +145,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_h3_servo_x32` / `_disp` | shipping h3 line + **`servo_k_p 0.5 servo_head_max 0.3`** (exit-throttle servo) | Xvfb **113.623 s**; display **107.269 s**, both + 0 | 32 / 0 each | — | **NEW BEST CLEAN AT BOTH PERIODS** (h3 alone 114.16 / 109.21). The same arm took a collision at the first hairpin's exit on the OLD geometry (0.42 m exit margin); the exit-margin geometry (0.55 m) makes it safe. In the 100-lap Xvfb gate (`race_20260919_030650`, `_031419`) |
 | `fin_h3_servo_x100` / `_disp100` | h3 + servo, 100-lap gates | Xvfb **114.718 s + 0** (median 11.382 vs h3 11.458); display 108.154 s (scored clean) | 100 / 0 ; 100 / **1** | the display hit: lap 86, s 26.7, cte −0.40 — the s 24-27 corner's exit, where the servo had thinned the wall margin 0.57 -> 0.20-0.23 m | **Xvfb gate passed, display gate FAILED by one lap.** `_h3c` holds s 24-28 at HALF the ay-9 raise (ideal 10.55; full hold `_h3b` 10.65 gives the servo's gain back) — in the display gate (`race_20260919_032153`, `_034239`) |
 | `fin_h3c_servo_disp100` / `_x100` | `_h3c` (s 24-28 at half the ay-9 raise, ideal 10.55) + servo | display **108.815 s + 0**; Xvfb 115.834 + 10 | 100 / 0 ; 100 / **6** | Xvfb hits: s 25.6-26.7 (x4), s 30.2, s 38.8 — all 0.30-0.37 m WIDE RIGHT on a corner exit, right wall 0.33-0.36 m from the car centre | **display gate passed, Xvfb gate FAILED — and the SLOWER corner made it worse.** Holding the apex down makes the profile demand a steeper acceleration right after it, and the servo chases that while the car is still turning: running wide tracks EXIT ACCELERATION, not apex speed. Fix: opt-in `servo_head_kappa` (fade the servo headroom to zero as |kappa| under the car rises to the gate) — h3 + servo + gate 0.4 in the display gate (`race_20260919_040336`, `_042330`) |
-| `fin_h3_servok_disp100` / `_x100` | h3 + servo + **`servo_head_kappa 0.4`** | display **108.373 s**; Xvfb **114.192 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 11:30 IST)**: both 100-lap gates passed; +0.8 s on the display, level on Xvfb (h3: 109.21 / 114.16). Image v5 built, v4 kept as `:iros2026-finals-v4` (`race_20260919_044701`, `_050630`) |
+| `fin_h3_servok_disp100` / `_x100` | h3 + servo + **`servo_head_kappa 0.4`** | display **108.373 s**; Xvfb **114.192 s**, both + 0 | **100 / 0 each** | — | **PROMOTED (Sep 19 17:00 IST)**: both 100-lap gates passed; +0.8 s on the display, level on Xvfb (h3: 109.21 / 114.16). Image v5 built, v4 kept as `:iros2026-finals-v4` (`race_20260919_044701`, `_050630`) |
 | image v5 (Sep 19 12:00 IST) | built image: exit-margin h3 line + pub_gate + curvature-gated servo + audit fixes | Xvfb default **114.816**, Xvfb cmd **115.075**, display **108.466 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v4 `:iros2026-finals-v4` 115.14 / 114.35 / 109.55; v3 `-v3` 117.59 / 117.04 / 111.87) |
 | gated-servo ladder, display 32 laps each (`servo_head_kappa 0.4`) | `k_p 1.0 / head 0.3`; `k_p 1.0 / head 0.6`; `k_p 1.0 / head 1.0`; `k_p 0.5 / head 0.3 + e_cut_accel_scale 0 kappa 0.3` | 107.659 (median 10.814); 107.973 (10.768); 107.791 (10.759); 108.171 (10.817) | 32 / 0; 32 / 0; 32 / 0; 32 / **2** | the e_cut hits: one event, lap 30 at s 26.0 + rebound, clean sensor timing | gain 1.0 = gain 0.5 (the cap binds, not the gain); headroom plateaus at ~10.76 by 0.6 (shipping 0.3: 10.817). **Carry `k_p 1.0 head 0.6`** (-0.05 s/lap) to Xvfb. The exit speed-cut relaxation hits the s 26 exit again and gains nothing; one re-run queued at the user's request (`race_20260919_054126`, `_055820`, `_060530`, `_055051`) |
 | `fin_sv_hd06_x32` (Xvfb) / `fin_sv_ecut2_disp` | gated servo `k_p 1.0 head 0.6`; exit-cut arm re-run on display | 115.903 + 0 (median 11.548) ; 108.005 + 0 (median 10.789) | 32 / 0 each | — | head 0.6 gains 0.05 s/lap on the display and LOSES 0.08 at 0.098 (shipping 0.3: 11.473) — shipping value stays. The exit-cut arm over 64 display laps: one collision event for 0.03 s/lap — not carried (`race_20260919_061256`, `_062036`) |
@@ -157,7 +157,7 @@ is no special startup mode, so the warm-up lap is free.
 | in-band Xvfb A/B (period 0.094-0.100 held by `RATE_MIN_DT/RATE_MAX_DT`) | v86 baseline (dt 0.098); `apex_f42k` + barrier 0.34 (dt 0.095 at check, 0.102 whole-run); v86 + `straight_pp_k 0.3 tk 1.7` (dt 0.095) | 115.066 (median 11.465); 114.205 (11.417); 116.012 (11.650), all + 0 | 32 / 0 each | apex wall min: s 26-30 0.28 (v86 0.58), rest >= 0.35 | apex line: ~-0.05 s/lap at the organisers' period while running a LONGER period (gain understated); firmer straight-PP: clean but +0.19 s/lap — at 0.098 s the baseline barely swivels (rack std 0.006-0.010 vs 0.015 on the display) and the PP law WANDERS 0.35 m and triggers the speed cut (`race_20260919_085901`, `_090635`, `_091619`) |
 | `fin_apex_disp` / `fin_apexpp_disp` | `apex_f42k` (+ barrier 0.34) on the display, alone / + period-gated straight-PP (`straight_pp_period_max 0.075`) | 108.006 (median 10.796) / 107.791 (10.841), both + 0 | 32 / 0 each | — | the apexing line is a WASH: -0.05 s/lap at 0.098, +0.06 s/lap at 0.058 vs v86 (10.735). Period-gated PP is free on the display again. v86 stays the front-runner (`race_20260919_092859`, `_093614`) |
 | `fin_v86pp_x100` / `_disp100` | **v6** = h3v86 line (straight cap 8.6) + period-gated straight-PP (`straight_pp_k 0.5 straight_d 3.0 straight_kappa 0.10 straight_pp_period_max 0.075`) + shipping servo | Xvfb 115.767 s (median 11.554, dt 0.099 with a 1.1 s gap ridden out, host load ~10); display 108.075 s (median **10.758**, v5 10.817), both + 0 | **100 / 0 each** | — | **PROMOTED — image v6 built** (v5 kept as `:iros2026-finals-v5`). Xvfb median is period/load-confounded; the 32-lap in-band v86 run had 11.371 at 0.092 s (`race_20260919_100453`, `_102721`) |
-| image v6 (Sep 20 00:40 IST) | built image: h3v86 line + period-gated straight-PP + gated servo + pub_gate + audit fixes | Xvfb default 115.273 + **10** (1 collision lap 2 at s 26.7, the s 24-27 exit, 0.43 m wide at 3.2 m/s, dt 0.096); Xvfb cmd **115.434 + 0**; display **108.129 + 0** | 12 / 1 ; 12 / 0 ; 12 / 0 | — | **built, NOT yet preferred over v5** (`:iros2026-finals-v5`, 0 collisions in all its tests): the s 26.7 exit hits ~1 in 200 laps on this family. Insurance line `h3v86c` (s 24-28 at half raise) and the PI throttle are being driven; the choice of image follows (`submission_20260919_162108` etc.) |
+| image v6 (Sep 20 06:10 IST) | built image: h3v86 line + period-gated straight-PP + gated servo + pub_gate + audit fixes | Xvfb default 115.273 + **10** (1 collision lap 2 at s 26.7, the s 24-27 exit, 0.43 m wide at 3.2 m/s, dt 0.096); Xvfb cmd **115.434 + 0**; display **108.129 + 0** | 12 / 1 ; 12 / 0 ; 12 / 0 | — | **built, NOT yet preferred over v5** (`:iros2026-finals-v5`, 0 collisions in all its tests): the s 26.7 exit hits ~1 in 200 laps on this family. Insurance line `h3v86c` (s 24-28 at half raise) and the PI throttle are being driven; the choice of image follows (`submission_20260919_162108` etc.) |
 | `fin_pi_x32` (Xvfb 0.096) | v6 + closed-loop PI throttle (`thr_pi_kp 3 ki 5 prefilter 0.15 slip 0.15`) | — | 4 / **12** | car reached **11.8 m/s** against a plan of 8.6, arrived at the first hairpin at 9.4 m/s | **REJECTED — a runaway.** The encoder estimator rejects wheel speeds above 9.0 m/s, so once the PI pushed past that it was blind to its own speed, read a deficit and wound up to full throttle. The surrogate does not model the guard (it had this arm clean and −0.13 s/lap). Any closed loop here must be bounded by a speed source the guard cannot blind (`race_20260919_111243`) |
 | `fin_v86c_x32` (Xvfb 0.096 in-band) | `h3v86c` = v6 line with s 24-28 at half its raise (insurance for the s 26.7 exit) | 114.950 + 0 (median 11.523) | 32 / 0 | — | clean; 0.05 s/lap slower than v6 in-band (11.465), as its ideal predicted. Display run next (`race_20260919_111636`) |
 | `fin_b50_x32` (Xvfb 0.095 in-band) | `apex_f42k_b50` (apexing geometry, s 36-40 at HALF the ay-9 raise, barrier 0.34; ideal 10.16) | 112.227 + 0 scored (median **11.244**, best 10.936) | 32 / **2** | s 25.1 (the tightest corner, −0.15) and s 38.5 (the released corner, −0.31 wide) | **fastest ever at the organisers' period by 0.2 s/lap**, not clean. Quarter release `_b25` next (`race_20260919_112931`) |
@@ -166,7 +166,7 @@ is no special startup mode, so the warm-up lap is free.
 | `fin_f42k2_x32` (Xvfb 0.096 in-band) | `apex_f42k` plain (barrier 0.34) with the v6 controller set | **113.525 + 0** (median **11.361**) | 32 / 0 | — | −0.10 s/lap vs v6 in-band (11.465) at the organisers' period; +0.06 s/lap on the display. Now 64 in-band Xvfb laps + 32 display laps clean. In Gate C (`race_20260919_120336`) |
 | `fin_f42k_x100` (Xvfb) | `apex_f42k` (barrier 0.34) + v6 controller set, Gate C | **113.482 s + 0** (median **11.338**, best 10.970) | **100 / 0** | — | **best 100-lap result at the organisers' period** (v6's 100-lap: 115.77 at a loaded 0.099 s; in-band 32: 11.465). Display gate running (`race_20260919_121531`) |
 | `fin_f42k_disp100` | `apex_f42k` + v6 controller, Gate D | **107.818 s + 0** (median 10.810, best 10.633) | **100 / 0** | — | **PROMOTED — image v7** (v6 kept as `:iros2026-finals-v6`, v5 as `-v5`). vs v6: −0.13 s/lap at the organisers' period, +0.05 s/lap on the display — the organisers' box is the slow-period case, so this is the entry (`race_20260919_123636`) |
-| image v7 (Sep 20 03:40 IST) | built image: apex_f42k line (barrier 0.34) + pub_gate + gated servo + period-gated straight-PP + audit fixes | Xvfb default **113.290**, Xvfb cmd **112.873**, display **108.031 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v6 `-v6` 115.27+10/115.43/108.13; v5 `-v5` 114.82/115.08/108.47) |
+| image v7 (Sep 20 09:10 IST) | built image: apex_f42k line (barrier 0.34) + pub_gate + gated servo + period-gated straight-PP + audit fixes | Xvfb default **113.290**, Xvfb cmd **112.873**, display **108.031 s**, all + 0 | 12 / 0 each | — | **THE BANKED IMAGE** (v6 `-v6` 115.27+10/115.43/108.13; v5 `-v5` 114.82/115.08/108.47) |
 
 All three DQ arms failed at **s 18.0-18.5, 0.35-0.56 m inside the line, at
 1.0-1.5 m/s true speed** — crawling, and still steered into the inside wall.
@@ -1536,7 +1536,7 @@ LOC_ARGS='-p max_step_mps:=9.0 -p publish_on_reloc:=false -p lidar_offset_overri
   ... same line and CTRL flags ...
 ```
 
-**Where the gated h3 line still loses time (Sep 19 08:45, 100-lap logs at each
+**Where the gated h3 line still loses time (Sep 19 14:15, 100-lap logs at each
 period, 2 m segments).** It is AT its ideal almost everywhere at both periods.
 The one period-dependent loss is the FIRST hairpin: s 18-20 ideal 0.90 / display
 0.91 / **Xvfb 1.11 s** (+0.2 s/lap = 2 s/race). At 0.098 s the car turns in later
@@ -1546,7 +1546,7 @@ readout lead is 4.0 sensor periods on the display and 2.8 on Xvfb. The Sep 19
 lead-law test equalised them DOWN to 2.8 (slower at both); `lead_tk 4.0`
 equalises UP and leaves the display unchanged by construction — in flight.
 
-**Why the servo gains nothing at 0.098 s (Sep 19 13:00, 100-lap logs).** With
+**Why the servo gains nothing at 0.098 s (Sep 19 18:30, 100-lap logs).** With
 the servo on, the first hairpin s 18-20 goes 1.11 -> **1.24 s** on Xvfb (ideal
 0.90): the approach s 16-18 is 0.04 s quicker and the corner 0.13 s slower. The
 servo pushes the car up to plan speed right INTO the braking zone; at the slow
@@ -1554,7 +1554,7 @@ period it arrives hot, runs wide, and the speed cut slows the apex. Opt-in fix:
 `servo_decel_look_m` — no over-command when the profile brakes (a_prof < −0.5)
 within the next N metres. In flight at 1.5 and 3.0 m.
 
-**Other teams' public stacks (Sep 19 18:40 IST, Opus agent; read, never run).**
+**Other teams' public stacks (Sep 20 00:10 IST, Opus agent; read, never run).**
 **MonacoF1 / Ekumen (ICRA 2026 finals winner, 110.27 s) ships its full source in
 a public image, `ealban/monaco_f1tenth:2026-iros-compete`** (pushed Sep 19 — their
 entry for this final). From their shipped config: Nav2 regulated pure pursuit at
@@ -1588,7 +1588,7 @@ hardware); (6) residual RL inside the sim (3-6 %, ~33 h of wall clock, post-fina
 Drifting: inapplicable to this tyre. To download: arXiv 2509.18506 "Spatial
 Envelope MPC"; Velenis & Tsiotras ISIE 2005.
 
-**Braking audit (Sep 19 20:30 IST, 100-lap logs).** Driven minus planned speed
+**Braking audit (Sep 20 02:00 IST, 100-lap logs).** Driven minus planned speed
 through each braking zone: into the FIRST hairpin (s 12-18.8, plan 8.0 -> 1.85
 at the brake's 4.6 m/s2 limit) the car is +0.26 / +0.30 m/s over plan mid-zone
 at both periods and **still +0.25 m/s hot at the END on Xvfb** (on plan on the
@@ -1599,7 +1599,7 @@ starts a metre early: 33.7 vs 34.7). Last hairpin: on plan / slightly under.
 RATE_MAX_DT=0.100`** — the per-start period lottery (0.088-0.106) confounded two
 verdicts today.
 
-**The swivel, resolved (Sep 19 22:30 IST).** It is a display-period phenomenon:
+**The swivel, resolved (Sep 20 04:00 IST).** It is a display-period phenomenon:
 straight rack std 0.015 rad at 0.058 s vs 0.006-0.010 at 0.098 s. The cure is a
 GENTLER law where there is nothing to track: `straight_pp_k 0.5` blends a
 pure-pursuit steer (Ld = 0.5 v, 1.5-5 m, dead-time-projected error) through the
@@ -1620,7 +1620,7 @@ misses the rare wide excursions at the limit (6 false "clean"). Use: a
 surrogate collision is a veto, a clean sheet is nothing, its pace is real.
 Closing the blind spot needs the sysid staircase in the `-explore` image.
 
-**Surrogate screening of the open candidates (Sep 19 23:00, 200 laps/cell, both
+**Surrogate screening of the open candidates (Sep 20 04:30, 200 laps/cell, both
 periods).** VETO: exitm `_h4` (3 collisions at s 24.7 — the live-failing corner
 family). Not worth a slot (slower at both periods): `lmpc_c` +0.24/+0.43,
 `lon_v8b55a65` +0.41, `apex_f42a` +0.45, `apex_f42i` +0.65-0.69, `steer_tau_k`
@@ -1628,10 +1628,10 @@ arms +0.04-0.08 at 0.097. Washes confirmed: servo gain 1.0, headroom 0.6,
 `cornr_mhw50`. DISAGREEMENT: `apex_f42k` live -0.05 s/lap at 0.098 vs surrogate
 +0.125 — outside its demonstrated +-0.06 accuracy; trust the live run there.
 Harness correction: `servo_head_kappa` and `servo_decel_look_m` were never
-ported to the harness's MPC3Sim until Sep 19 23:00 — every earlier HARNESS cell
+ported to the harness's MPC3Sim until Sep 20 04:30 — every earlier HARNESS cell
 that set them measured the ungated servo (all LIVE results stand).
 
-**THE GRIP MAP (Sep 20 04:10 IST, `sysid_run` in the `-explore` image, 61
+**THE GRIP MAP (Sep 20 18:45 IST, `sysid_run` in the `-explore` image, 61
 cells, `data/logs/sysid_20260919_131340.csv`).** Delivered/kinematic yaw-rate
 ratio 0.93-0.95 up to the peak, then a ONE-STEP collapse to 0.25-0.50; past
 breakaway the car holds only 3.2-5.3 m/s2 whatever the steering. Peak ay and
@@ -1643,7 +1643,7 @@ is PAST breakaway (why the hairpins cannot be driven faster); the tyre delivers
 the winners' 9-10 m/s2 at 4-5 m/s but only inside 0.15-0.20 rad of steering.
 Handed to the surrogate for the limit refit.
 
-**Closed by agents, Sep 20 00:30 IST.** (a) Unused-width corners: three of four
+**Closed by agents, Sep 20 06:00 IST.** (a) Unused-width corners: three of four
 (s 22.2, s 40.9, s 27.6) cannot be given speed — longitudinal REACHABILITY between
 the capped zones, not wall width, binds them; only s 30-33 has room (−0.02 s/lap,
 below the surrogate's resolution). (b) Pose offset: the +0.08 m along-track lead
@@ -1656,7 +1656,7 @@ family) — insurance variant `h3v86c` (s 24-28 at half raise, ideal 10.50) buil
 (d) Closed-loop PI throttle (`thr_pi_kp 3 ki 5 prefilter 0.15 slip 0.15`, opt-in,
 merged): surrogate −0.21 / −0.13 s/lap, live gates pending.
 
-**In flight at 22:30 IST:** v6 gates (v86 + period-gated PP); Opus agents on
+**In flight at 04:00 IST:** v6 gates (v86 + period-gated PP); Opus agents on
 the unused-width corner speeds (`unused-width`), a MonacoF1-style closed-loop
 throttle (`cl-throttle`), and RL Phase 2 on a pessimistic plant (`rl-track`).
 
@@ -1946,3 +1946,5 @@ to spend that margin on lap time.
 1 speed cap, 2 longitudinal, 3 grip, 4 line, 5 controller, 6 validation,
 7 image). Checkpoint 0 passed with the brake; 1 was dropped; 2, 3, 4 and 5 are
 folded into sections 4 and 5; 6 and 7 are section 6.
+
+*Timestamp note (Sep 19 19:00 IST): earlier session labels were derived from the UTC log stamps and mislabelled as IST; corrected above (+5:30). Log filenames stay UTC.*

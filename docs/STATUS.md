@@ -24,7 +24,7 @@ speeds too, so `finals_mesh_hyb675b_race.csv` (0.08 m inward there, exit capped
 at 3.0 m/s) replaced it: **100 Xvfb laps / 0 / 118.07 s with 0.566 m margin
 at s 39-41, display 32 / 0 / 111.59 s**, and the rebuilt image raced 117.13
 (Xvfb), 117.80 (Xvfb, cmd entry) and 111.74 s (display), all 12 / 0. That image
-is `bongracers/roboracer:iros2026-finals` as of Sep 19 01:40 IST. Behind it,
+is `bongracers/roboracer:iros2026-finals` as of Sep 19 07:10 IST. Behind it,
 two single-knob arms on the frozen line behind it (`servo_k_p 0.5 +
 servo_head_max 0.3` for the corner exits; `pub_gate_corr 0.05` for the straight
 weave — both opt-in, committed, defaults off, see FINALS_TUNING section 5). Note the frozen profile's own wall margin at s 39 is 0.25 m at
@@ -75,7 +75,7 @@ band.
 
 ### The under-100 s plan (Sep 19, 02:00 IST — the user's standing target)
 
-**03:15 IST, Sep 20 — IMAGE v7 built: the apexing line.** Entry =
+**08:45 IST, Sep 20 — IMAGE v7 built: the apexing line.** Entry =
 `finals_mesh_apex_f42k_race.csv` (min-curvature floor 0.42 with small
 live-evidence side margins; ay 9.0 / vmax 8.6; three slow zones at safe speeds)
 at `barrier_margin 0.34`, + pub_gate + gated servo + period-gated straight-PP +
@@ -90,7 +90,7 @@ lever that costs pace), unused-width corners (reachability-capped), apex zone
 releases (hit the s 24 exit). Still owed: the sysid staircase + brake probe in
 the `-explore` image; the MonacoF1 benchmark (DDS interop on this host).
 
-**22:30 IST, Sep 19 (superseded above) — where it stood.** Banked image v5 (108.37 / 114.19 s,
+**04:00 IST, Sep 20 (superseded above) — where it stood.** Banked image v5 (108.37 / 114.19 s,
 100/0 each). Best clean runs since: **107.23 s display** (v86 line = straight cap
 8.0 -> 8.6, + period-gated straight-PP swivel fix), 114.25 s Xvfb; v6 = that pair,
 in its 100-lap gates now. Closed since 13:15: the apexing line family (a wash
@@ -102,7 +102,7 @@ METHOD RULES added today: Xvfb A/B in-band (`RATE_MIN_DT=0.094 RATE_MAX_DT=0.100
 host load < 14 with agents pinned to cores 16-31, mouse untouched during the
 Connection click of display runs.
 
-**13:15 IST, Sep 19 (superseded above) — PLATEAU. Image v5 is the entry unless something new
+**18:45 IST, Sep 19 (superseded above) — PLATEAU. Image v5 is the entry unless something new
 appears.** v5 = `finals_mesh_exitm_m10t6_h3_race.csv` + `pub_gate_corr 0.05` +
 gated servo (`servo_k_p 0.5 servo_head_max 0.3 servo_head_kappa 0.4`) + the
 audit fixes: **100 / 0 / 108.37 s display, 100 / 0 / 114.19 s Xvfb; as-shipped
@@ -131,7 +131,7 @@ help); the steering lead is at its optimum in both directions; running wide on
 exits tracks exit ACCELERATION, not apex speed (a slower apex made the ungated
 servo worse).
 
-**07:30 IST update (superseded above) — NEW SHIPPING LINE.** `finals_mesh_exitm_m10t6_h3_race.csv`:
+**13:00 IST update (superseded above) — NEW SHIPPING LINE.** `finals_mesh_exitm_m10t6_h3_race.csv`:
 the min-curvature optimiser re-run with a ONE-SIDED corridor (`--side-margin`,
 +0.10 m of outside-wall margin on the three corner exits where every faster
 profile ran wide), ay 9.0 profile, safe speeds kept at s 17.5-21.5, 36-40 and
@@ -143,7 +143,7 @@ never a controller knob; five harness-predicted gains failed live. Faster rungs
 on the same geometry are built (`_h4` first hairpin at ay 9, `_h5`/`_h6`
 half-steps; the last hairpin at full ay 9 collides at its exit at both periods).
 
-**06:00 IST update (superseded above) — where it stood.** Banked image v3 = hyb675b + `pub_gate_corr
+**11:30 IST update (superseded above) — where it stood.** Banked image v3 = hyb675b + `pub_gate_corr
 0.05` + the audit fixes: **117.59 / 117.04 s Xvfb, 111.87 s display, 12 / 0
 each**. Rejected live since 03:20 (all clean-host, both periods unless noted):
 the weave notch (caused 5 and 8 straight-line collisions per 100 Xvfb laps), the
@@ -157,7 +157,7 @@ BO schedule (agent, `sched-bo`), localization sharpening (`beam_temp 4.0`).
 HOST RULE: every offline tool now pins BLAS itself; scored chains wait for
 load < 6.
 
-**03:20 IST update (superseded above) — candidate ahead of the image:** ay 9.0 profile on the
+**08:50 IST update (superseded above) — candidate ahead of the image:** ay 9.0 profile on the
 hyb675b geometry with the s 19 hairpin and the s 36-40 corner blended back to
 the safe speeds (`finals_mesh_win_b_ay90h2_race.csv`) + `pub_gate_corr 0.05` +
 the weave notch: **display 32 / 0 / 109.34 s, Xvfb 32 / 0 / 116.35 s** (image
@@ -3347,3 +3347,5 @@ evidence above the higher-value target on this line is the hairpin-exit
 lateral tracking, not `s`.
 
     LOC_ARGS="-p max_step_mps:=9.0 -p publish_on_reloc:=false -p along_clamp_mps:=6.0"
+
+*Timestamp note (Sep 19 19:00 IST): earlier session labels were derived from the UTC log stamps and mislabelled as IST; corrected above (+5:30). Log filenames stay UTC.*
