@@ -215,6 +215,42 @@ class ParticleFilter(Node):
             # the filter silently stops updating. Inert on any monotone
             # stream, which is every recorded run.
             ('clock_reset_s', 1.0),
+            # ---- pose reference geometry (Sep 19), BOTH default-off --------
+            # The IPS truth topic is the REAR AXLE (measured: the published
+            # pose sits +0.08..+0.10 m ahead of it wherever `s` is observable,
+            # at both sensor periods, and the truth point's sideslip through
+            # both hairpins is ~0). The scan likelihood pins the LiDAR, which
+            # is `vehicle.LIDAR_FROM_REAR_AXLE` = 0.2733 m ahead of that axle,
+            # so a filter told the lever arm is 0.1933 m converges on a point
+            # 0.0800 m (= `vehicle.IPS_FROM_REAR_AXLE`) ahead of the rear
+            # axle. The controller therefore reads the line's curvature and
+            # its speed plan ~0.10 m early, everywhere.
+            #
+            # Two independent levers, because they are NOT the same fix:
+            #
+            # * `pose_along_offset_m` shifts the PUBLISHED pose backwards
+            #   along its own heading by that many metres, leaving the filter
+            #   untouched. 0.08 makes the published point the rear axle, which
+            #   is the point `mpc3`'s kinematic bicycle (kappa = tan(delta)/L)
+            #   is written about. It cannot touch the lateral bias, because a
+            #   shift along the heading is along-track by construction.
+            # * `lidar_offset_override` sets the lever arm the FILTER casts
+            #   from, which changes where the scans are matched and therefore
+            #   the whole posterior -- including the curvature-proportional
+            #   lateral bias toward the OUTSIDE of a corner (-0.09..-0.105 m
+            #   at the s 43 hairpin apex). 0.2733 makes the estimated point
+            #   the rear axle directly. It exists because the map YAML's
+            #   `lidar_offset` OVERRIDES the `-p lidar_offset` argument (see
+            #   `load_map`), so there is otherwise no way to change the lever
+            #   arm without rebuilding the map -- and a mesh map's grid does
+            #   not depend on it at all (`tools/map_from_mesh.py` uses the
+            #   constant only to STAMP the YAML).
+            #
+            # Both are 0 by default and the shipped path is byte-identical.
+            # 0.0 means "off" for the override, not "cast from the pose
+            # point": that is what an unstamped map already does.
+            ('pose_along_offset_m', 0.0),
+            ('lidar_offset_override', 0.0),
         ])
         (map_prefix, centerline_csv, self.n_p, self.n_beams, self.sigma_hit,
          self.beam_temp, self.noise_xy, self.noise_th, init_x, init_y,
@@ -229,7 +265,8 @@ class ParticleFilter(Node):
          self.lost_patience_min, self.scan_dt_max, self.enc_gap_max,
          self.along_clamp_mps, self.along_clamp_min_v, self.noise_along,
          self.tp_cp_radius, self.dr_accel_max,
-         self.clock_reset_s) = [x.value for x in p]
+         self.clock_reset_s, self.pose_along_offset,
+         self.lidar_offset_override) = [x.value for x in p]
         # A zero here is a divide-by-zero in `update` that takes the node down
         # on the first scan of the race; a mistyped `-p sigma_hit:=0` should
         # cost a warning, not the run. Identity for every positive value.
@@ -260,6 +297,18 @@ class ParticleFilter(Node):
             self.load_checkpoints(checkpoints_csv)
 
         self.load_map(map_prefix)
+        # ...and only now can the map's stamped lever arm be overridden: the
+        # YAML deliberately wins over the `lidar_offset` PARAMETER (the two
+        # must agree or the map is being matched against rays that did not
+        # come from where it says), so a deliberate change needs its own knob
+        # that runs after the map has spoken. Non-finite or 0 = leave the map
+        # alone, which is every shipped run.
+        if math.isfinite(self.lidar_offset_override) \
+                and self.lidar_offset_override != 0.0:
+            self.get_logger().warn(
+                f'lidar_offset overridden: {self.lidar_offset:.4f} -> '
+                f'{float(self.lidar_offset_override):.4f} m')
+            self.lidar_offset = float(self.lidar_offset_override)
         self.load_centerline(centerline_csv)
 
         self.imu_yaw = None
@@ -877,6 +926,17 @@ class ParticleFilter(Node):
 
     def publish(self, stamp):
         x, y, yaw = self.estimate()
+        # Move the published point back along the heading, so what the
+        # controller receives is the rear axle rather than the IPS point the
+        # lever arm implies. Output only: the cloud, the particle topic and
+        # everything the next scan sees are untouched, which is the whole
+        # point of having this separate from `lidar_offset_override`.
+        # getattr: the audit tests lift `publish` onto synthetic namespaces.
+        # Non-finite arithmetic falls through to the guard below.
+        d = float(getattr(self, 'pose_along_offset', 0.0) or 0.0)
+        if d != 0.0:
+            x -= d * math.cos(yaw)
+            y -= d * math.sin(yaw)
         # A NaN here is worse than a missing pose: the controller's stale gate
         # covers a gap, and nothing covers a pose that is not a number. The
         # weights are normalized on every update, so this cannot fire in a
