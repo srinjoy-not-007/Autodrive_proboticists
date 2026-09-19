@@ -55,7 +55,11 @@ elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == finals_mesh ]]; then
     # last hairpin (s 42-44.7 + 0-2).  100 Xvfb laps / 0 / 114.16 s and 100
     # display laps / 0 / 109.21 s, against hyb675b's 117.11 / 111.38, with a
     # larger minimum wall distance (0.35 m Xvfb) than hyb675b had.
-    LINE=/home/data/racelines/finals_mesh_exitm_m10t6_h3_race.csv
+    # Sep 19 (v6): the same line with the straight's speed cap raised 8.0 ->
+    # 8.6 m/s (the car sat at 7.95 of 8.00 at 0.33 of 0.60 throttle; 8.6 is the
+    # most the 9.0 m/s encoder guard allows).  100 display laps / 0 / median
+    # 10.76 s and 100 Xvfb laps / 0 (h3: 10.82 / 11.47).
+    LINE=/home/data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv
 elif [[ "$CONTROLLER" == mpc3 ]]; then
     LINE="/home/data/racelines/${SLUG}_race.csv"
 else
@@ -241,6 +245,14 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # Gated, on the exit-margin h3 line: 100 display laps / 0 / 108.37 s and
     # 100 Xvfb laps / 0 / 114.19 s (without: 109.21 / 114.16).
     CTRL_ARGS+=(-p servo_k_p:=0.5 -p servo_head_max:=0.3 -p servo_head_kappa:=0.4)
+    # Sep 19 (v6): the straight-line weave is the MPC's own limit cycle at the
+    # FAST sensor period (rack std on the straight 0.015 rad at 0.058 s, only
+    # 0.006-0.010 at 0.098 s).  On straights blend in a pure-pursuit steer with
+    # a long speed-scaled lookahead (rack std -54 %, cmd std -69 % live,
+    # time-neutral), faded out entirely above a measured period of 0.075 s
+    # where the MPC alone is calmer and this law wandered 0.35 m.  100 display
+    # laps / 0 and 100 Xvfb laps / 0 with it.
+    CTRL_ARGS+=(-p straight_pp_k:=0.5 -p straight_d:=3.0 -p straight_kappa:=0.10 -p straight_pp_period_max:=0.075)
     # PICK_BLOCK_BEGIN
     # PICK="${PIT_CREW_PICK:-/home/data/racelines/${SLUG}_pick.json}"
     # if [[ -f "$PICK" ]]; then

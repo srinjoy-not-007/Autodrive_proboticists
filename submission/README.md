@@ -128,7 +128,7 @@ Paste the block below into the DockerHub repository description for
 > | Variable | Default |
 > |---|---|
 > | `PIT_CREW_MAP` | `/home/data/maps/finals_mesh` |
-> | `PIT_CREW_LINE` | `/home/data/racelines/finals_mesh_exitm_m10t6_h3_race.csv` |
+> | `PIT_CREW_LINE` | `/home/data/racelines/finals_mesh_exitm_m10t6_h3v86_race.csv` |
 > | `PIT_CREW_CENTERLINE` | `/home/data/racelines/<map basename>_centerline.csv` |
 > | `PIT_CREW_LIDAR_OFFSET` | `0.1933` |
 > | `PIT_CREW_CONTROLLER` | `mpc3` (`mpc` = legacy tracker + safe line) |
