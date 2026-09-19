@@ -1121,6 +1121,17 @@ misses the rare wide excursions at the limit (6 false "clean"). Use: a
 surrogate collision is a veto, a clean sheet is nothing, its pace is real.
 Closing the blind spot needs the sysid staircase in the `-explore` image.
 
+**Surrogate screening of the open candidates (Sep 19 23:00, 200 laps/cell, both
+periods).** VETO: exitm `_h4` (3 collisions at s 24.7 — the live-failing corner
+family). Not worth a slot (slower at both periods): `lmpc_c` +0.24/+0.43,
+`lon_v8b55a65` +0.41, `apex_f42a` +0.45, `apex_f42i` +0.65-0.69, `steer_tau_k`
+arms +0.04-0.08 at 0.097. Washes confirmed: servo gain 1.0, headroom 0.6,
+`cornr_mhw50`. DISAGREEMENT: `apex_f42k` live -0.05 s/lap at 0.098 vs surrogate
++0.125 — outside its demonstrated +-0.06 accuracy; trust the live run there.
+Harness correction: `servo_head_kappa` and `servo_decel_look_m` were never
+ported to the harness's MPC3Sim until Sep 19 23:00 — every earlier HARNESS cell
+that set them measured the ungated servo (all LIVE results stand).
+
 **In flight at 22:30 IST:** v6 gates (v86 + period-gated PP); Opus agents on
 the unused-width corner speeds (`unused-width`), a MonacoF1-style closed-loop
 throttle (`cl-throttle`), and RL Phase 2 on a pessimistic plant (`rl-track`).
