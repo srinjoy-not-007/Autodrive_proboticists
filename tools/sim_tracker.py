@@ -515,6 +515,7 @@ class MPC3Sim:
                       v_meas_min=0.2, v_start=0.5, servo_k=18.0, servo_drag=0.273,
                       servo_a_auth=4.5, servo_a_accel=5.0, servo_k_p=0.0,
                       servo_head_max=0.5, servo_head_kappa=0.0,
+                      servo_decel_look_m=0.0,
                       servo_u_max=0.60, servo_v_floor=1.0,
                       servo_gain=24.6,
                       # --- OPT-IN real brake (see throttle2) ---------------
@@ -875,6 +876,16 @@ class MPC3Sim:
         self.v_plan0 = float(self.path.v_prof[i0])
         self.v_cmd = float(info['v_cmd'])
         v_cmd = self.gap_v_cmd(self.v_cmd, t)
+        # `servo_decel_look_m` -- mirrors mpc3.MPC3Tracker.control exactly.  It
+        # used to exist only in the node, so every `-r servo_decel_look_m=...`
+        # cell this harness ran was silently the default and measured nothing.
+        head_scale = 1.0
+        look_m = float(self.P['servo_decel_look_m'])
+        if look_m > 0.0:
+            nlook = max(1, int(round(look_m / max(self.path.spacing, 1e-3))))
+            jj = (int(i0) + np.arange(nlook + 1)) % self.path.n
+            if float(np.min(self.path.a_prof[jj])) < -0.5:
+                head_scale = 0.0
         if self.residual is not None:
             obs = residual_policy_mod.observation(
                 self.path, i0, e_lat, e_yaw,
@@ -888,7 +899,8 @@ class MPC3Sim:
             v_cmd = float(v_cmd) * v_scale
         th = float(self.thr.command(v_cmd, v_meas,
                                     0.0, now=t,
-                                    kappa=float(self.path.kappa[i0])))
+                                    kappa=float(self.path.kappa[i0]),
+                                    head_scale=head_scale))
         t_rec = t + float(self.P['pub_lag'])
         self.act.record(self.pickup_time(t_rec, ts)
                         if (self.control_mode == 'timer'

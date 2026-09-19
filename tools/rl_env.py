@@ -173,7 +173,12 @@ def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
     # `rec` columns: t,x,y,yaw,v,delta,s,e,clear,lap,thr_plant,thr_cmd,enc,log
     t_rec = rec[:, 0]
     s_rec = rec[:, 6]
-    clear = rec[:, 8] - wall_inflate
+    clear_raw = rec[:, 8]
+    # The wall is inflated for the CONTACT test only.  Inflating it for the
+    # proximity penalty as well would put the target at 0.40 m of real
+    # clearance, which this line does not have anywhere (0.377 m effective),
+    # so the penalty would be a constant and carry no gradient.
+    clear = clear_raw - wall_inflate
     # Controller calls happen one per delivered pose; their count and the
     # record's length differ, so bin the record by call index in time.
     dt_call = dom['frame']
@@ -181,20 +186,25 @@ def rollout(track, act_fn, dom, laps=3, wall_inflate=0.10,
     idx = np.clip(((t_rec - t0) / dt_call).astype(int), 0, n - 1)
     prog = np.zeros(n)
     minclear = np.full(n, 10.0)
+    minraw = np.full(n, 10.0)
     hit = np.zeros(n, bool)
     ds = np.diff(s_rec, prepend=s_rec[0])
     ds[ds < -0.5 * track.total] += track.total
     ds[ds > 0.5 * track.total] -= track.total
     np.add.at(prog, idx, ds)
     np.minimum.at(minclear, idx, clear)
+    np.minimum.at(minraw, idx, clear_raw)
     # A contact is a record sample whose (inflated) clearance went negative.
     np.logical_or.at(hit, idx, clear <= 0.0)
 
     r = w_progress * prog / dt_call                      # m/s of progress
-    seen = minclear < 10.0                               # calls with a record
-    r -= w_clear * np.where(seen, np.maximum(0.0, clear_target - minclear), 0.0)
+    seen = minraw < 10.0                                 # calls with a record
+    r -= w_clear * np.where(seen, np.maximum(0.0, clear_target - minraw), 0.0)
     r -= collision_penalty * hit.astype(float)
     res.update(obs=np.asarray(hook.obs), raw=np.asarray(hook.raw),
                extra=hook.extra, reward=r, hit=hit,
-               min_clear=float(np.min(clear)) if len(clear) else float('nan'))
+               min_clear=float(np.min(clear_raw)) if len(clear_raw)
+               else float('nan'),
+               min_clear_inflated=float(np.min(clear)) if len(clear)
+               else float('nan'))
     return res
