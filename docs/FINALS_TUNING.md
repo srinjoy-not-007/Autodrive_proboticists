@@ -1050,6 +1050,40 @@ period it arrives hot, runs wide, and the speed cut slows the apex. Opt-in fix:
 `servo_decel_look_m` — no over-command when the profile brakes (a_prof < −0.5)
 within the next N metres. In flight at 1.5 and 3.0 m.
 
+**Other teams' public stacks (Sep 19 18:40 IST, Opus agent; read, never run).**
+**MonacoF1 / Ekumen (ICRA 2026 finals winner, 110.27 s) ships its full source in
+a public image, `ealban/monaco_f1tenth:2026-iros-compete`** (pushed Sep 19 — their
+entry for this final). From their shipped config: Nav2 regulated pure pursuit at
+80 Hz (their MAP controller and Stanley are commented out); pose extrapolated by
+MEASURED message latency + one control step; speed looked up from a rasterised
+VELOCITY MAP by map cell, not by arc length; closed-loop throttle = PI (p 5, i 1)
+with a second-order prefilter and the integrator clamped to `max_traction_slip *
+|v|` (0.15) on top of the same 0.0408/(m/s) feedforward we measured — the
+ingredient our bang-bang `throttle_kp` attempts lacked; genetic raceline (100
+offset genes, pop 200 x 300 gen, seeded from min-curvature) with a wall
+`safety_margin` of **0.17 m** on this track (we hold ~0.30); encoder odometry
+that models wheel slip; an impact detector that hard-stops, reseeds AMCL and
+soft-starts; AMCL 250 beams / 1750-3000 particles + an EKF. VAUL's RACE stack is
+not public (only a wall-follower, their GPU particle filter, the TUM optimiser,
+`On-Track-SysID`); NTU DeepSpeed (49.83 s qualifier) has nothing public. Three
+teams independently use ~0.040 throttle per m/s and none reverse-brakes; Khalifa
+documents the exact-zero brake. **Our own `bongracers/roboracer:iros2026-qualification`
+is public with full source and racelines.** Policy: learn techniques, never copy
+code or lines. Source extract is in the session scratchpad, not in the repo.
+
+**Literature review (Sep 19, Opus agent).** Ranked for our limits: (1) velocity
+replanning from driven logs / a spatial grip map in Frenet cells (GripMap,
+arXiv 2504.12115: +5.2 % lap time) — the principled form of our hand-held slow
+zones; (2) exit-acceleration-limited (combined-slip) forward pass, matching the
+finding that running wide tracks exit acceleration; (3) empirical feedforward
+steering with a curvature preview sized to the 3.2 rad/s rate limit (learned
+versions lose closed loop: arXiv 2605.21111); (4) a buffered delay-compensating
+EKF rather than a fast open inner loop (explains why `control_mode timer` lost);
+(5) tuned pure pursuit as a comparison arm (AROLA: PP 10.10 s vs MPC 10.24 s on
+hardware); (6) residual RL inside the sim (3-6 %, ~33 h of wall clock, post-finals).
+Drifting: inapplicable to this tyre. To download: arXiv 2509.18506 "Spatial
+Envelope MPC"; Velenis & Tsiotras ISIE 2005.
+
 **Web research (Sep 19, Opus agent, ~35 min).** No RoboRacer sim winner has
 published a stack. Facts worth keeping: **ICRA 2026 finals gold was 110.27 s /
 11.00 s best lap** (silver 12.10, bronze 12.53 s laps) on an unseen track — the
