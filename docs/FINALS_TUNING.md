@@ -1631,6 +1631,18 @@ Harness correction: `servo_head_kappa` and `servo_decel_look_m` were never
 ported to the harness's MPC3Sim until Sep 19 23:00 — every earlier HARNESS cell
 that set them measured the ungated servo (all LIVE results stand).
 
+**THE GRIP MAP (Sep 20 04:10 IST, `sysid_run` in the `-explore` image, 61
+cells, `data/logs/sysid_20260919_131340.csv`).** Delivered/kinematic yaw-rate
+ratio 0.93-0.95 up to the peak, then a ONE-STEP collapse to 0.25-0.50; past
+breakaway the car holds only 3.2-5.3 m/s2 whatever the steering. Peak ay and
+the steering at which the ratio first drops below 0.85:
+2.0 m/s 4.60 @0.40 (break 0.45) | 2.5 5.57 @0.30 (0.35) | 3.0 6.62 @0.25 (0.30)
+| 3.5 7.21 @0.20 (0.25) | 4.0 9.34 @0.20 (0.25) | 4.5 8.96 @0.15 (0.20) | 5.0
+**10.28** @0.15 (0.15) | 5.5 8.94 @0.10 (0.15). So: at hairpin speed full lock
+is PAST breakaway (why the hairpins cannot be driven faster); the tyre delivers
+the winners' 9-10 m/s2 at 4-5 m/s but only inside 0.15-0.20 rad of steering.
+Handed to the surrogate for the limit refit.
+
 **Closed by agents, Sep 20 00:30 IST.** (a) Unused-width corners: three of four
 (s 22.2, s 40.9, s 27.6) cannot be given speed — longitudinal REACHABILITY between
 the capped zones, not wall width, binds them; only s 30-33 has room (−0.02 s/lap,
