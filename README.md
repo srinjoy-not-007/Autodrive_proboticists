@@ -58,22 +58,23 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-**Sep 20 morning — the finals entry is image v9:** mpc3 on
-`finals_mesh_apex_f42k_race.csv` (min-curvature line at a 0.42 m corridor floor
-with small one-sided wall margins, ay 9.0 profile with three slow zones held at
-safe speeds), `barrier_margin` 0.34, the publish gate, a curvature-gated exit
-servo that fades out above a measured sensor period of 0.100 s, a period-gated
-pure-pursuit blend on the straights, and — new in v9 — the 0.10 s steering
-command filter modelled inside the solver's rollout above a measured period of
-0.080 s, so the plan pre-steers for its own lag (the tracker was turning in
-half a metre late at both hairpins). **100 laps / 0 collisions at both sensor
-periods: 108.14 s on a real display (0.058 s, where the new term is inert) and
-111.19 s on Xvfb (0.095 s, ~ the organisers' period; v8 was 113.48 s)**, plus 64
-laps / 0 at the slow end of the period lottery (0.103 s, 112.46 s). Every other
-lever driven on Sep 19-20 — more throttle (the wheels spin above ~0.5), later
-braking, open hairpins, joint speed+steer MPC, wider margins, slower apexes —
-was slower or collided; `docs/FINALS_TUNING.md` has every run. The paragraph
-and table below are the Sep 18 state (114.04 / 119.51 s), kept for the record.
+**Sep 20, 14:00 IST — the finals entry is image v10:** mpc3 on
+`finals_mesh_apex_f42k_z36q_race.csv` (the apexing min-curvature line with the
+s 36-40 speed zone released a quarter of the way to the ay-9 profile),
+`barrier_margin` 0.34 with a 0.44 window at the hairpin-2 entry, the publish
+gate, the period-gated exit servo and straight-line pure-pursuit blend, and the
+0.10 s steering command filter modelled inside the solver's rollout above a
+measured period of 0.080 s. **100 laps / 0 collisions at both sensor periods:
+108.25 s on a real display (0.058 s) and 111.24 s on Xvfb (0.096 s, ~ the
+organisers' period)**; image tests 111.18 / 111.32 / 108.39 s, 12 / 0 each; 64
+laps at the slow end (0.103 s) with one collision at the s 25 exit. The
+display-optimised alternative (v11: 0.10 m more inside margin at hairpin 2 so
+the lag model can run at every period) is 107.62 s on the display but 112.74 s
+in band, both 100 / 0, and is not shipped. `docs/FINALS_TUNING.md` has every
+run of the last 20 hours: open hairpins, more throttle (wheelspin), later
+braking, apex caps, joint MPC, all driven and rejected with their mechanisms.
+The paragraph and table below are the Sep 18 state (114.04 / 119.51 s), kept
+for the record.
 
 Shipping config (Sep 18, finals) = **mpc3** on `finals_mesh_race.csv`, the SRL
 2026 IROS finals track (`2026-iros-compete`), with `rate_adaptive` (timing terms
