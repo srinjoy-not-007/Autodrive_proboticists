@@ -434,7 +434,7 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         'thr_brake_lead_s': '0.05', 'brake_mode': 'zero',
         'brake_a_min': '1.5', 'brake_dv': '0.3', 'brake_a_full': '4.6',
         'pub_gate_corr': '0.05', 'servo_period_max': '0.100',
-        'model_cmd_tau': '1.0', 'model_cmd_tau_period_min': '0.0',
+        'model_cmd_tau': '1.0', 'model_cmd_tau_period_min': '0.080',
         'param_schedule': '/home/data/racelines/finals_mesh_apex_f42k_hp2.json',
         'max_step_mps': '9.0', 'publish_on_reloc': 'false',
     }

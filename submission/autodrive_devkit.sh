@@ -282,10 +282,13 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # Sep 20 (v10): the display cut was a 0.10-0.14 m inside bias at ONE corner
     # (hairpin-2 entry, s 41.2-43.4) at the fast period, not localization
     # (docs/research/display_hairpin2_cut_sep20.md).  A barrier window of
-    # 0.44 there (s-indexed `param_schedule`, blend 0.8 m) lets the lag model
-    # run UNGATED at every period: display 32 / 0 / 106.96 s with it, and the
-    # window costs nothing in band (100 / 0 / 111.24 s).
-    CTRL_ARGS+=(-p model_cmd_tau_period_min:=0.0 -p param_schedule:=/home/data/racelines/finals_mesh_apex_f42k_hp2.json)
+    # 0.44 there (s-indexed `param_schedule`, blend 0.8 m) took the ungated
+    # model's display cut from 10/41 to 4/100 -- not to zero (image v10's
+    # first display test: 3 hits in 12 laps ungated).  So the model stays
+    # GATED (full at >= 0.080 s, inert below 0.076 s) and the window rides
+    # along: gated + window = 100 / 0 / 108.25 s on the display and 100 / 0 /
+    # 111.24 s in band.
+    CTRL_ARGS+=(-p model_cmd_tau_period_min:=0.080 -p param_schedule:=/home/data/racelines/finals_mesh_apex_f42k_hp2.json)
     # Sep 19 (v6): the straight-line weave is the MPC's own limit cycle at the
     # FAST sensor period (rack std on the straight 0.015 rad at 0.058 s, only
     # 0.006-0.010 at 0.098 s).  On straights blend in a pure-pursuit steer with
