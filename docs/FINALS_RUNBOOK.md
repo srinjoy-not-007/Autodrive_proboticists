@@ -11,8 +11,9 @@ model_cmd_tau_period_min 0.080`, `param_schedule
 Xvfb 100 / 0 / 111.24 s (0.096 s), display 100 / 0 / 108.25 s, slow band 64 / 1
 (s 25 exit, 0.103 s); image tests 111.18 / 111.32 / 108.39 s, 12 / 0 each.
 Fallbacks: `-v9` (111.23 / 111.52 / 108.67, slow band 64 / 0), `-v8`, `-v7`.
-**To submit: `docker login`, then `docker push bongracers/roboracer:iros2026-finals`**,
-then the Phase 2 form; due 17:30 IST today. If rebuilding from main, use the
+**PUSHED 15:00 IST as `bongracers/roboracer:iros2026-finals` (= `latest`, digest sha256:b158ef68…),
+pulled back and raced clean (110.80 Xvfb / 108.70 display). Remaining: the Phase 2 form with the
+exact `bongracers/roboracer:iros2026-finals`; due 17:30 IST today.** If rebuilding from main, use the
 command in `docs/FINALS_TUNING.md` section 6 and re-run
 `scripts/test_submission_image.sh` three ways. HOST RULES learned Sep 19-20:
 offline tools pin BLAS themselves; never start a scored run with host load
