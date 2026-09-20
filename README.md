@@ -58,7 +58,7 @@ CONTROLLER=mpc ./scripts/run_stanley.sh 1.0 track_v2 safe   # the shipping confi
 ./scripts/stop_run.sh                               # stop everything, zero the actuators
 ```
 
-**Sep 20, 14:00 IST — the finals entry is image v10:** mpc3 on
+**Sep 20, 13:00 IST — the finals entry is image v10:** mpc3 on
 `finals_mesh_apex_f42k_z36q_race.csv` (the apexing min-curvature line with the
 s 36-40 speed zone released a quarter of the way to the ay-9 profile),
 `barrier_margin` 0.34 with a 0.44 window at the hairpin-2 entry, the publish
