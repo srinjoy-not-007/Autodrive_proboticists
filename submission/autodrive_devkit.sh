@@ -65,7 +65,11 @@ elif [[ "$CONTROLLER" == mpc3 && "$SLUG" == finals_mesh ]]; then
     # by cutting).  Same profile chain (ay 9.0, vmax 8.6, three slow zones at
     # the safe speeds).  100 Xvfb laps / 0 / 113.48 s (v6 in-band median 11.47
     # -> 11.34) and 100 display laps / 0 / 107.82 s (10.76 -> 10.81).
-    LINE=/home/data/racelines/finals_mesh_apex_f42k_race.csv
+    # Sep 20 (v10): the same geometry with the s 36-40 held zone released a
+    # QUARTER of the way to the ay-9 profile (`z36q`, ideal 10.216 vs 10.282):
+    # in band 100 / 0 / 111.24 s, display see below, slow band 64 / 1 (the s 25
+    # exit residual v8 also had).
+    LINE=/home/data/racelines/finals_mesh_apex_f42k_z36q_race.csv
 elif [[ "$CONTROLLER" == mpc3 ]]; then
     LINE="/home/data/racelines/${SLUG}_race.csv"
 else
@@ -240,7 +244,7 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # it runs at 0.34 -- the LAST -p wins in ROS, so this line overrides the
     # 0.40 above.  Gates: 100 Xvfb laps / 0 / 113.48 s (median 11.34, v6 in-band
     # 11.47) and 100 display laps / 0 / 107.82 s (median 10.81, v6 10.76).
-    case "$LINE" in *apex_f42k_race.csv) CTRL_ARGS+=(-p barrier_margin:=0.34) ;; esac
+    case "$LINE" in *apex_f42k_race.csv|*apex_f42k_z36q_race.csv) CTRL_ARGS+=(-p barrier_margin:=0.34) ;; esac
     CTRL_ARGS+=(-p brake_mode:=zero -p brake_a_min:=1.5 -p brake_dv:=0.3 -p brake_a_full:=4.6)
     # Sep 19: no-anticipation publish gate on straights (the "swivel"): clips
     # the published angle to line-matching + 0.05 rad while no corner is within
@@ -275,6 +279,13 @@ if [[ "$CONTROLLER" == mpc3 ]]; then
     # measured period: full above 0.080 s, off (byte-identical to v8) below
     # 0.076 s.
     CTRL_ARGS+=(-p model_cmd_tau:=1.0 -p model_cmd_tau_period_min:=0.080)
+    # Sep 20 (v10): the display cut was a 0.10-0.14 m inside bias at ONE corner
+    # (hairpin-2 entry, s 41.2-43.4) at the fast period, not localization
+    # (docs/research/display_hairpin2_cut_sep20.md).  A barrier window of
+    # 0.44 there (s-indexed `param_schedule`, blend 0.8 m) lets the lag model
+    # run UNGATED at every period: display 32 / 0 / 106.96 s with it, and the
+    # window costs nothing in band (100 / 0 / 111.24 s).
+    CTRL_ARGS+=(-p model_cmd_tau_period_min:=0.0 -p param_schedule:=/home/data/racelines/finals_mesh_apex_f42k_hp2.json)
     # Sep 19 (v6): the straight-line weave is the MPC's own limit cycle at the
     # FAST sensor period (rack std on the straight 0.015 rad at 0.058 s, only
     # 0.006-0.010 at 0.098 s).  On straights blend in a pure-pursuit steer with

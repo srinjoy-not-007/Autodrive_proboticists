@@ -281,7 +281,7 @@ class TestTheLineDefaultFollowsTheMap:
     @pytest.mark.parametrize('slug,controller,want', [
         ('porto_mesh', 'mpc3', '/home/data/racelines/porto_mesh_cr_dk0.8.csv'),
         ('porto_mesh', 'mpc', '/home/data/racelines/porto_mesh_safe.csv'),
-        ('finals_mesh', 'mpc3', '/home/data/racelines/finals_mesh_apex_f42k_race.csv'),
+        ('finals_mesh', 'mpc3', '/home/data/racelines/finals_mesh_apex_f42k_z36q_race.csv'),
         ('finals_mesh', 'mpc', '/home/data/racelines/finals_mesh_safe.csv'),
     ])
     def test_the_default_is_derived_from_the_slug(self, slug, controller, want):
@@ -434,7 +434,8 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         'thr_brake_lead_s': '0.05', 'brake_mode': 'zero',
         'brake_a_min': '1.5', 'brake_dv': '0.3', 'brake_a_full': '4.6',
         'pub_gate_corr': '0.05', 'servo_period_max': '0.100',
-        'model_cmd_tau': '1.0', 'model_cmd_tau_period_min': '0.080',
+        'model_cmd_tau': '1.0', 'model_cmd_tau_period_min': '0.0',
+        'param_schedule': '/home/data/racelines/finals_mesh_apex_f42k_hp2.json',
         'max_step_mps': '9.0', 'publish_on_reloc': 'false',
     }
 
@@ -446,7 +447,7 @@ class TestTheEffectiveArgsAreTheFrozenFinalsSet:
         race after the gate.
         """
         line, eff = self.effective('finals_mesh', 'mpc3')
-        assert line == '/home/data/racelines/finals_mesh_apex_f42k_race.csv', line
+        assert line == '/home/data/racelines/finals_mesh_apex_f42k_z36q_race.csv', line
         assert eff['map_prefix'] == '/home/data/maps/finals_mesh'
         for param, value in self.FROZEN.items():
             assert eff.get(param) == value, (param, eff.get(param), value)
